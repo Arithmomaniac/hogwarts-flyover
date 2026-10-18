@@ -1,0 +1,5 @@
+* text=auto eol=lf
+
+# Generated files: review changes in src/ instead
+build/data.js -diff
+hogwarts-flyover.html -diff

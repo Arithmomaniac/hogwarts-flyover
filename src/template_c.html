@@ -1,0 +1,277 @@
+  // ---------------------------------------------------------------- sun on 1 September 1991 at the castle site
+  const LAT = X.castle_ll[0], LON = X.castle_ll[1], RAD = Math.PI / 180;
+  function sunAt(hBST) {
+    const d = (Date.UTC(1991, 8, 1) + (hBST - 1) * 3600e3 - Date.UTC(2000, 0, 1, 12)) / 864e5;
+    const g = (357.529 + 0.98560028 * d) * RAD, q = 280.459 + 0.98564736 * d;
+    const L = (q + 1.915 * Math.sin(g) + 0.02 * Math.sin(2 * g)) * RAD, e = (23.439 - 3.6e-7 * d) * RAD;
+    const ra = Math.atan2(Math.cos(e) * Math.sin(L), Math.cos(L)), dec = Math.asin(Math.sin(e) * Math.sin(L));
+    const gmst = ((18.697374558 + 24.06570982441908 * d) % 24 + 24) % 24;
+    const ha = (gmst * 15 + LON) * RAD - ra, la = LAT * RAD;
+    const el = Math.asin(Math.sin(la) * Math.sin(dec) + Math.cos(la) * Math.cos(dec) * Math.cos(ha));
+    const az = Math.atan2(-Math.sin(ha), Math.tan(dec) * Math.cos(la) - Math.sin(la) * Math.cos(ha));
+    return { el, az };
+  }
+  function lighting(hBST) {
+    const { el, az } = sunAt(hBST), s = Math.sin(el), deg = el / RAD;
+    const dir = [Math.sin(az) * Math.cos(el), s, Math.cos(az) * Math.cos(el)];
+    const am = 1 / (Math.max(s, 0) + 0.50572 * Math.pow(Math.max(deg, -2) + 6.07995, -1.6364));   // Kasten-Young air mass
+    const vis = sstep(-0.03, 0.025, s);
+    const sunCol = [0.12, 0.17, 0.3].map((b, i) => 3.6 * [1, 0.97, 0.92][i] * Math.exp(-b * am) * vis);
+    const day = sstep(-0.1, 0.35, s), gold = sstep(-0.08, 0.02, s) * (1 - sstep(0.1, 0.38, s));
+    const skyCol = [mixf(0.006, 0.2, day), mixf(0.009, 0.37, day), mixf(0.02, 0.8, day)];
+    const horCol = [mixf(0.012, 0.52, day), mixf(0.016, 0.62, day), mixf(0.03, 0.78, day)]
+      .map((c, i) => mixf(c, [0.98, 0.66, 0.42][i] * mixf(0.4, 1, day), gold * 0.55));
+    const glow = [1, 0.42, 0.12].map((c) => c * 0.9 * sstep(-0.18, -0.02, s) * (1 - sstep(0.04, 0.2, s)));
+    return { dir, sunCol, skyCol, horCol, glow, dusk: 1 - sstep(-0.05, 0.06, s), exposure: mixf(6, 1.35, sstep(-0.12, 0.2, s)), el: deg, az: (az / RAD + 360) % 360 };
+  }
+
+  // ---------------------------------------------------------------- flight path (castle-relative metres: E, N)
+  const gtop = (x, z) => ground(x, z)[1];
+  // [camE, camN, cam height above ground, lookE, lookN, look height above ground, caption]
+  const WP = [
+    [1100, -1500, 300, 0, 0, 40, "Hogwarts Castle"],
+    [550, -880, 110, 0, -40, 45, "The Lake"],
+    [230, -520, 26, -59, -262, 28, "Durmstrang ship"],
+    [70, -320, 24, -2, -166, 30, "Gryffindor Tower"],
+    [230, -70, 70, 10, 30, 45, null],
+    [470, 190, 45, 330, 150, 6, "Hogsmeade station"],
+    [320, 430, 75, 64, 181, 55, "North Tower"],
+    [60, 340, 45, 42, 237, 3, "Greenhouses"],
+    [-170, 340, 38, -254, 184, 10, "Whomping Willow"],
+    [-420, 760, 110, -900, 1500, 0, "Forbidden Forest"],
+    [-620, 1480, 80, -695, 1822, -8, "Aragog's hollow"],
+    [-1450, 1480, 200, -2245, 930, 0, "Grawp's clearing"],
+    [-1900, 350, 250, -5018, 888, 0, "Sirius's cave"],
+    [-1050, -60, 140, -18, -72, 40, "Entrance Hall & Great Hall"],
+    [-430, 30, 55, -107, -9, 35, "West Tower (Owlery)"],
+    [-470, -170, 34, -291, -192, 3, "Hagrid's hut"],
+    [-330, -330, 50, -26, -91, 55, "Astronomy Tower"],
+    [-190, -630, 32, -244, -486, 12, "Quidditch pitch"],
+    [-560, -640, 28, -444, -505, 4, "Winged-boar gates"],
+    [-700, -1330, 70, -867, -1096, 4, "Hogsmeade"],
+    [-1120, -960, 60, -877, -884, 6, "Shrieking Shack"],
+    [-450, -1250, 200, 117, -654, 0, "Dumbledore's tomb"],
+    [450, -1300, 280, 0, 0, 60, null],
+  ];
+  const K = WP.map((w) => [w[0], gtop(w[0], w[1]) + w[2], w[1], w[3], gtop(w[3], w[4]) + w[5], w[4]]);
+  function ccr(P0, P1, P2, P3, t) {           // centripetal Catmull-Rom on 6-vectors, knots from camera xz
+    const d = (a, b) => Math.sqrt(Math.hypot(b[0] - a[0], b[2] - a[2]) + 1e-3);
+    const t0 = 0, t1 = d(P0, P1), t2 = t1 + d(P1, P2), t3 = t2 + d(P2, P3), tt = t1 + (t2 - t1) * t;
+    const lp = (a, b, ta, tb) => a.map((v, i) => ((tb - tt) * v + (tt - ta) * b[i]) / (tb - ta));
+    const A1 = lp(P0, P1, t0, t1), A2 = lp(P1, P2, t1, t2), A3 = lp(P2, P3, t2, t3);
+    return lp(lp(A1, A2, t0, t2), lp(A2, A3, t1, t3), t1, t2);
+  }
+  const SUB = 220, NW = K.length, NP = NW * SUB;
+  const cam = [], seg = [], cap = [];
+  for (let k = 0; k < NW; k++) for (let j = 0; j < SUB; j++) {
+    const v = ccr(K[(k + NW - 1) % NW], K[k], K[(k + 1) % NW], K[(k + 2) % NW], j / SUB);
+    cam.push(v.slice(0, 3)); seg.push([k, j / SUB]);
+    cap.push(WP[j / SUB < 0.55 ? k : (k + 1) % NW][6]);
+  }
+  function treeDens(x, z) {                   // CPU mirror of the shader's essay-forest + local tree layers
+    let d = 0;
+    const [fu, fv] = locUV(M.forest.aff, x, z), fs = affLen(M.forest.aff);
+    const fe = Math.min(Math.min(fu, 1 - fu) * fs[0], Math.min(fv, 1 - fv) * fs[1]);
+    if (fe > 0) d = bil(dec.forest.a, dec.forest.w, dec.forest.h, fu, fv, 2, 0) / 255 * sstep(0, 300, fe);
+    const [u, v] = locUV(M.local.aff, x, z), ls = affLen(M.local.aff);
+    const ed = Math.min(Math.min(u, 1 - u) * ls[0], Math.min(v, 1 - v) * ls[1]);
+    if (ed > 0) d = mixf(d, bil(dec.locA.a, dec.locA.w, dec.locA.h, u, v, 4, 1) / 255, sstep(0, 80, ed));
+    return d;
+  }
+  const floorY = cam.map((c) => {
+    const [b, t] = ground(c[0], c[2]), td = treeDens(c[0], c[2]);
+    return t + Math.max(t > b + 0.5 ? 9 : 26, td > 0.03 ? 12 + 23 * sstep(0.03, 0.4, td) : 0);
+  });
+  for (let pass = 0; pass < 2; pass++) {        // clearance: running max over a window, then smoothing
+    const need = floorY.map((_, i) => { let m = -1e9; for (let o = -25; o <= 25; o++) m = Math.max(m, floorY[(i + o + NP) % NP]); return m; });
+    const y = cam.map((c, i) => Math.max(c[1], need[i]));
+    for (let i = 0; i < NP; i++) { let s = 0; for (let o = -30; o <= 30; o++) s += y[(i + o + NP) % NP]; cam[i][1] = Math.max(s / 61, floorY[i]); }
+  }
+  const norm = (a) => { const l = Math.hypot(a[0], a[1], a[2]) || 1; return [a[0] / l, a[1] / l, a[2] / l]; };
+  // aim from the current position toward the two neighbouring waypoint targets, easing yaw/pitch between them
+  // (interpolating target points instead can sweep the target through the camera and point it at the ground)
+  const look = cam.map((c, i) => { const [k, f] = seg[i]; return f < 0.5 ? K[k].slice(3, 6) : K[(k + 1) % NW].slice(3, 6); });
+  const aim = (c, T) => [Math.atan2(T[3] - c[0], T[5] - c[2]), Math.atan2(T[4] - c[1], Math.hypot(T[3] - c[0], T[5] - c[2]))];
+  const fwd0 = cam.map((c, i) => {
+    const [k, f] = seg[i], [ya, pa] = aim(c, K[k]), [yb, pb] = aim(c, K[(k + 1) % NW]);
+    let dyaw = yb - ya; dyaw -= 2 * Math.PI * Math.round(dyaw / (2 * Math.PI));
+    const s = sstep(0.12, 0.88, f), yaw = ya + dyaw * s, pit = Math.max(-1.0, mixf(pa, pb, s));
+    return [Math.sin(yaw) * Math.cos(pit), Math.sin(pit), Math.cos(yaw) * Math.cos(pit)];
+  });
+  const fwd = fwd0.map((_, i) => { const s = [0, 0, 0]; for (let o = -70; o <= 70; o++) { const f = fwd0[(i + o + NP) % NP], w = Math.exp(-(o * o) / 1800); s[0] += f[0] * w; s[1] += f[1] * w; s[2] += f[2] * w; } return norm(s); });
+  const tAt = new Float64Array(NP + 1);
+  for (let i = 0; i < NP; i++) {
+    const a = cam[i], b = cam[(i + 1) % NP], ds = Math.hypot(b[0] - a[0], b[1] - a[1], b[2] - a[2]);
+    const agl = a[1] - gtop(a[0], a[2]), dl = Math.hypot(look[i][0] - a[0], look[i][1] - a[1], look[i][2] - a[2]);
+    const v = Math.min(Math.max(12 + 0.2 * agl, 15), 68) * Math.min(Math.max(dl / 180, 0.6), 1);
+    tAt[i + 1] = tAt[i] + ds / v;
+  }
+  const TOTAL = tAt[NP];
+  function pathAt(t) {
+    t = ((t % TOTAL) + TOTAL) % TOTAL;
+    let lo = 0, hi = NP;
+    while (hi - lo > 1) { const m = (lo + hi) >> 1; if (tAt[m] <= t) lo = m; else hi = m; }
+    const f = (t - tAt[lo]) / (tAt[lo + 1] - tAt[lo]), j = (lo + 1) % NP;
+    const lerp3 = (a, b) => [a[0] + (b[0] - a[0]) * f, a[1] + (b[1] - a[1]) * f, a[2] + (b[2] - a[2]) * f];
+    return { pos: lerp3(cam[lo], cam[j]), fwd: norm(lerp3(fwd[lo], fwd[j])), cap: cap[lo] };
+  }
+
+  // ---------------------------------------------------------------- HUD text
+  const latlon = (e, n) => [LAT + n / 111369, LON + e / 59955];
+  const fmtLL = (ll) => `${ll[0].toFixed(4)}°N ${Math.abs(ll[1]).toFixed(4)}°W`;
+  const ref = [-560, -2480], refD = Math.hypot(ref[0], ref[1]);
+  $("sub").innerHTML = `Glen of the River Meig at Scardroy, Strathconon, Ross-shire · castle ${fmtLL(X.castle_ll)}<br>`
+    + `The essay's reference point (57°30′N 5°00′W) lies ${(refD / 1000).toFixed(1)} km SSW; the castle is set on the nearest ground that fits the essay's horizons.`;
+  let capName = null;
+  function setCaption(name) {
+    if (name === capName) return;
+    capName = name; const el = $("cap"), p = name && poi(name);
+    if (!p) { el.style.opacity = 0; return; }
+    el.querySelector(".n").textContent = p.name;
+    el.querySelector(".d").textContent = p.note;
+    el.querySelector(".w").textContent = fmtLL(latlon(p.p[0], p.p[1]));
+    el.style.opacity = 1;
+  }
+
+  // ---------------------------------------------------------------- state, controls
+  const FOV = 50 * RAD, QN = ["low", "medium", "high"];
+  let simT = +(Q.get("t") || 0), paused = Q.get("pause") === "1", tod = +(Q.get("tod") || 18.5);
+  let qual = Q.has("q") ? Math.min(2, Math.max(0, +Q.get("q"))) : 1, dbg = +(Q.get("dbg") || 0), detail = Q.get("detail") === "0" ? 0 : 1;
+  let scale = +(Q.get("scale") || 0.5); const adaptive = !Q.has("scale");
+  let free = false, fp = [0, 0, 0], fyaw = 0, fpitch = 0, yawOff = 0, pitchOff = 0, drag = null, hud = Q.get("hud") !== "0";
+  const keys = new Set();
+  const todIn = $("tod"); todIn.value = tod;
+  const showTod = () => { const h = Math.floor(tod), m = Math.round((tod - h) * 60); $("todTxt").textContent = `${String(h).padStart(2, "0")}:${String(m % 60).padStart(2, "0")}`; };
+  todIn.addEventListener("input", () => { tod = +todIn.value; showTod(); }); showTod();
+  const setHud = () => { for (const id of ["topshade", "title", "cap", "status", "panel", "credits"]) $(id).classList.toggle("hide", !hud); };
+  setHud();
+  cv.addEventListener("pointerdown", (e) => { drag = [e.clientX, e.clientY]; cv.setPointerCapture(e.pointerId); });
+  cv.addEventListener("pointerup", () => { drag = null; });
+  cv.addEventListener("pointermove", (e) => {
+    if (!drag) return;
+    const dx = e.clientX - drag[0], dy = e.clientY - drag[1]; drag = [e.clientX, e.clientY];
+    if (free) { fyaw += dx * 0.004; fpitch = Math.max(-1.4, Math.min(1.4, fpitch - dy * 0.004)); }
+    else { yawOff += dx * 0.004; pitchOff = Math.max(-1.2, Math.min(1.2, pitchOff - dy * 0.004)); }
+  });
+  addEventListener("keydown", (e) => {
+    if (e.target === todIn) return;
+    keys.add(e.code);
+    if (e.code === "Space") { paused = !paused; e.preventDefault(); }
+    else if (e.code === "ArrowLeft" && !free) simT -= 10;
+    else if (e.code === "ArrowRight" && !free) simT += 10;
+    else if (e.code === "ArrowUp") { tod = Math.min(23.5, tod + 0.25); todIn.value = tod; showTod(); }
+    else if (e.code === "ArrowDown") { tod = Math.max(4, tod - 0.25); todIn.value = tod; showTod(); }
+    else if (e.code === "KeyQ") qual = (qual + 1) % 3;
+    else if (e.code === "KeyL") detail = 1 - detail;
+    else if (e.code === "KeyH") { hud = !hud; setHud(); }
+    else if (e.code === "KeyF") {
+      free = !free;
+      if (free) { const p = pathAt(simT); fp = p.pos.slice(); const f = rotOff(p.fwd); fyaw = Math.atan2(f[0], f[2]); fpitch = Math.asin(f[1]); }
+      yawOff = pitchOff = 0;
+    }
+  });
+  addEventListener("keyup", (e) => keys.delete(e.code));
+  function rotOff(f) {
+    let yaw = Math.atan2(f[0], f[2]) + yawOff, pit = Math.asin(Math.max(-1, Math.min(1, f[1]))) + pitchOff;
+    pit = Math.max(-1.45, Math.min(1.45, pit));
+    return [Math.sin(yaw) * Math.cos(pit), Math.sin(pit), Math.cos(yaw) * Math.cos(pit)];
+  }
+  function basis(f) {
+    const r = norm([f[2], 0, -f[0]]), u = [f[1] * r[2] - f[2] * r[1], f[2] * r[0] - f[0] * r[2], f[0] * r[1] - f[1] * r[0]];
+    return new Float32Array([...r, ...u, ...f]);
+  }
+  function resize() {
+    const dpr = Math.min(devicePixelRatio || 1, 1);
+    cv.width = Math.max(2, Math.round(innerWidth * dpr)); cv.height = Math.max(2, Math.round(innerHeight * dpr));
+  }
+  addEventListener("resize", resize); resize();
+
+  // ---------------------------------------------------------------- render loop
+  const halton = (i, b) => { let f = 1, r = 0; while (i > 0) { f /= b; r += f * (i % b); i = Math.floor(i / b); } return r; };
+  let jIdx = 0, prevPos = null, prevRot = null, prevSig = "", accN = 0, hn = 0;
+  function render(pos, f) {
+    const L = lighting(tod), w = cv.width, h = cv.height;
+    const sw = Math.max(64, Math.round(w * scale)), sh = Math.max(36, Math.round(h * scale));
+    ensureTargets(sw, sh, w, h);
+    const rot = basis(f), tanH = Math.tan(FOV / 2);
+    const jit = cbf ? [halton(jIdx % 8 + 1, 2) - 0.5, halton(jIdx % 8 + 1, 3) - 0.5] : [0, 0]; jIdx++;
+    gl.bindFramebuffer(gl.FRAMEBUFFER, fbo); gl.viewport(0, 0, sw, sh);
+    gl.useProgram(prog);
+    gl.uniform2f(U.uRes, sw, sh); gl.uniform2fv(U.uJitter, jit); gl.uniform1f(U.uTime, simT); gl.uniform3fv(U.uCamPos, pos);
+    gl.uniformMatrix3fv(U.uCamRot, false, rot); gl.uniform1f(U.uTanHalf, tanH);
+    gl.uniform3fv(U.uSunDir, L.dir); gl.uniform3fv(U.uSunCol, L.sunCol); gl.uniform3fv(U.uSkyCol, L.skyCol); gl.uniform3fv(U.uHorCol, L.horCol); gl.uniform3fv(U.uGlow, L.glow);
+    gl.uniform1f(U.uDusk, L.dusk); gl.uniform1f(U.uExposure, L.exposure); gl.uniform1i(U.uQual, qual); gl.uniform1i(U.uDbg, dbg); gl.uniform1i(U.uDetail, detail);
+    gl.drawArrays(gl.TRIANGLES, 0, 3);
+    gl.activeTexture(gl.TEXTURE15); gl.bindTexture(gl.TEXTURE_2D, fTex);
+    let outUnit = 15;
+    if (cbf) {
+      const sig = `${tod}|${qual}|${detail}|${dbg}|${simT}`;
+      const dp = prevPos ? Math.hypot(pos[0] - prevPos[0], pos[1] - prevPos[1], pos[2] - prevPos[2]) : 1e9;
+      const moved = dp > 1e-4 || sig !== prevSig || rot.some((v, i) => Math.abs(v - prevRot[i]) > 1e-6);
+      let alpha;
+      if (!histOk || dp > 60) { alpha = 1; accN = 1; }                 // fresh start or a jump (scrub, free-fly toggle)
+      else if (moved) { alpha = 0.15; accN = 7; }
+      else { accN++; alpha = Math.max(1 / accN, 0.03); }               // static view: converge to a supersampled still
+      gl.bindFramebuffer(gl.FRAMEBUFFER, hFbo[hn]); gl.viewport(0, 0, w, h);
+      gl.useProgram(taa);
+      gl.activeTexture(gl.TEXTURE16); gl.bindTexture(gl.TEXTURE_2D, hist[1 - hn]);
+      gl.uniform2f(UT.uOut, w, h); gl.uniform2f(UT.uCur, sw, sh); gl.uniform2fv(UT.uJit, jit);
+      gl.uniform3fv(UT.uPos, pos); gl.uniform3fv(UT.uPPos, prevPos || pos);
+      gl.uniformMatrix3fv(UT.uRot, false, rot); gl.uniformMatrix3fv(UT.uPRot, false, prevRot || rot);
+      gl.uniform1f(UT.uTan, tanH); gl.uniform1f(UT.uAlpha, alpha);
+      gl.drawArrays(gl.TRIANGLES, 0, 3);
+      gl.activeTexture(gl.TEXTURE17); gl.bindTexture(gl.TEXTURE_2D, hist[hn]);
+      outUnit = 17; histOk = true; hn = 1 - hn; prevSig = sig;
+    }
+    prevPos = pos.slice(); prevRot = rot;
+    gl.bindFramebuffer(gl.FRAMEBUFFER, null); gl.viewport(0, 0, w, h);
+    gl.useProgram(up); gl.uniform1i(uUpSrc, outUnit); gl.uniform2f(uUpOut, w, h);
+    gl.drawArrays(gl.TRIANGLES, 0, 3);
+    return L;
+  }
+  let last = performance.now(), ema = 33, frames = 0, fpsT = 0, fpsN = 0, fps = 0;
+  function loop(now) {
+    const dt = Math.min((now - last) / 1000, 0.1); last = now;
+    if (!paused) simT += dt;
+    let pos, f, capn = null;
+    if (free) {
+      const sp = (keys.has("ShiftLeft") || keys.has("ShiftRight") ? 220 : 45) * dt;
+      const fw = [Math.sin(fyaw) * Math.cos(fpitch), Math.sin(fpitch), Math.cos(fyaw) * Math.cos(fpitch)], rt = [Math.cos(fyaw), 0, -Math.sin(fyaw)];
+      const mv = (v, s) => { fp[0] += v[0] * s; fp[1] += v[1] * s; fp[2] += v[2] * s; };
+      if (keys.has("KeyW")) mv(fw, sp); if (keys.has("KeyS")) mv(fw, -sp);
+      if (keys.has("KeyD")) mv(rt, sp); if (keys.has("KeyA")) mv(rt, -sp);
+      if (keys.has("KeyE")) fp[1] += sp; if (keys.has("KeyC")) fp[1] -= sp;
+      fp[1] = Math.max(fp[1], gtop(fp[0], fp[2]) + 1.5);
+      pos = fp; f = fw;
+    } else {
+      const p = pathAt(simT); pos = p.pos; f = rotOff(p.fwd); capn = p.cap;
+      if (!drag) { const k = Math.exp(-dt * 0.8); yawOff *= k; pitchOff *= k; }
+    }
+    const L = render(pos, f);
+    setCaption(capn);
+    frames++; fpsN++; fpsT += dt;
+    if (fpsT > 0.5) { fps = fpsN / fpsT; fpsN = 0; fpsT = 0; }
+    ema = ema * 0.9 + dt * 1000 * 0.1;
+    if (adaptive && frames > 20 && frames % 15 === 0) {
+      if (ema > 45) scale = Math.max(0.25, Math.round((scale - 0.05) * 20) / 20);
+      else if (ema < 28) scale = Math.min(1, Math.round((scale + 0.05) * 20) / 20);
+    }
+    if (frames % 10 === 1) {
+      const agl = pos[1] - gtop(pos[0], pos[2]);
+      $("status").innerHTML = `${free ? "free flight" : `flyover ${Math.floor(simT % TOTAL)} / ${Math.floor(TOTAL)} s`}${paused ? " · paused" : ""}<br>`
+        + `sun ${L.el.toFixed(1)}° above horizon, azimuth ${L.az.toFixed(0)}°<br>`
+        + `${fmtLL(latlon(pos[0], pos[2]))} · ${pos[1].toFixed(0)} m (${agl.toFixed(0)} m above ground)<br>`
+        + `quality ${QN[qual]}, ${detail ? "full" : "lite"} detail · ${fps.toFixed(0)} fps at ${Math.round(scale * 100)}% resolution`;
+    }
+    if (frames === 2) { $("load").classList.add("hide"); window.__hog.ready = true; }
+    window.__hog.frames = frames;
+    requestAnimationFrame(loop);
+  }
+  window.__hog = {
+    ready: false, frames: 0, total: TOTAL, defs, fLin, compileMs, pcomp: !!pcomp,
+    set(t) { simT = t; }, tod(h) { tod = h; todIn.value = h; showTod(); }, q(n) { qual = n; }, scale(s) { scale = s; },
+    pause(p) { paused = p; }, dbg(n) { dbg = n; }, path: pathAt, ground,
+  };
+  requestAnimationFrame(loop);
+})();
+</script>

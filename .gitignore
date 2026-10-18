@@ -1,0 +1,17 @@
+__pycache__/
+
+# Data pipeline inputs and intermediates are not tracked (see README); build/data.js is the only one the page needs.
+/build/*
+!/build/data.js
+/raw/
+/txt/
+/img/
+/legend/
+/dem/
+/s2tiles/
+/*.npy
+/*.npz
+/osm*.json
+
+# Screenshots and debug previews
+/view/

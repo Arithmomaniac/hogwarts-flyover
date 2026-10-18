@@ -1,0 +1,188 @@
+<script>
+"use strict";
+(async function main() {
+  const cv = $("c");
+  const gl = cv.getContext("webgl2", { antialias: false, alpha: false, depth: false, stencil: false, preserveDrawingBuffer: true, powerPreference: "high-performance" });
+  if (!gl) return fail("WebGL2 is not available in this browser.");
+  const fLin = !!gl.getExtension("OES_texture_float_linear");
+  const aniso = gl.getExtension("EXT_texture_filter_anisotropic");
+  const pcomp = gl.getExtension("KHR_parallel_shader_compile");
+  gl.pixelStorei(gl.UNPACK_ALIGNMENT, 1);
+
+  // ---------------------------------------------------------------- data -> textures
+  const dec = {};
+  try { await Promise.all(Object.keys(DATA.tex).map(async (n) => { dec[n] = await decode(n); })); }
+  catch (e) { return fail("Could not decode the embedded data: " + e); }
+  H.loc = { w: dec.locBed.w, h: dec.locBed.h, bed: dec.locBed.a, wd: dec.locW.a };
+  for (const r of ["M", "A", "B"]) H[r] = { w: dec[r + "Bed"].w, h: dec[r + "Bed"].h, bed: dec[r + "Bed"].a, wd: dec[r + "W"].a };
+
+  function mkTex(w, h, ifmt, fmt, type, data, filt) {
+    gl.activeTexture(gl.TEXTURE15);
+    const t = gl.createTexture(); gl.bindTexture(gl.TEXTURE_2D, t);
+    gl.texImage2D(gl.TEXTURE_2D, 0, ifmt, w, h, 0, fmt, type, data);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, filt);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, filt);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
+    return t;
+  }
+  function texRG(L) {
+    const n = L.w * L.h, a = new Float32Array(n * 2);
+    for (let i = 0; i < n; i++) { a[2 * i] = L.bed[i]; a[2 * i + 1] = L.wd[i]; }
+    return mkTex(L.w, L.h, gl.RG32F, gl.RG, gl.FLOAT, a, fLin ? gl.LINEAR : gl.NEAREST);
+  }
+  function texU8(d, filt) {
+    const f = { 1: [gl.R8, gl.RED], 2: [gl.RG8, gl.RG], 3: [gl.RGB8, gl.RGB], 4: [gl.RGBA8, gl.RGBA] }[d.ch];
+    return mkTex(d.w, d.h, f[0], f[1], gl.UNSIGNED_BYTE, d.a, filt);
+  }
+  function texJpg(d) {
+    const t = mkTex(1, 1, gl.SRGB8_ALPHA8, gl.RGBA, gl.UNSIGNED_BYTE, null, gl.LINEAR);
+    gl.texImage2D(gl.TEXTURE_2D, 0, gl.SRGB8_ALPHA8, gl.RGBA, gl.UNSIGNED_BYTE, d.img);
+    gl.generateMipmap(gl.TEXTURE_2D);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR_MIPMAP_LINEAR);
+    if (aniso) gl.texParameterf(gl.TEXTURE_2D, aniso.TEXTURE_MAX_ANISOTROPY_EXT, 8);
+    return t;
+  }
+  const T = {
+    tLocH: texRG(H.loc), tLocA: texU8(dec.locA, gl.LINEAR), tLocB: texU8(dec.locB, gl.LINEAR), tLocN: texU8(dec.locN, gl.NEAREST),
+    tMH: texRG(H.M), tMS: texJpg(dec.MSat), tMF: texU8(dec.MFor, gl.LINEAR),
+    tAH: texRG(H.A), tAS: texJpg(dec.ASat), tAF: texU8(dec.AFor, gl.LINEAR),
+    tBH: texRG(H.B), tBS: texJpg(dec.BSat),
+    tCSd: texU8(dec.cSd, gl.LINEAR), tCN: texU8(dec.cN, gl.NEAREST), tFor: texU8(dec.forest, gl.LINEAR),
+  };
+  Object.values(T).forEach((t, i) => { gl.activeTexture(gl.TEXTURE0 + i); gl.bindTexture(gl.TEXTURE_2D, t); });
+
+  // ---------------------------------------------------------------- shader defines from the georeferenced essay layout
+  const poi = (n) => X.poi.find((p) => p.name === n);
+  const gY = (p) => ground(p[0], p[1])[0];
+  const fl = (x) => { const s = (+x).toFixed(4); return s; };
+  const v2 = (a) => `vec2(${fl(a[0])},${fl(a[1])})`;
+  const brg = M.pitch.brg * Math.PI / 180, tw = M.towers;
+  const defs = {
+    LAKE: fl(M.lake), PITCH_C: v2(M.pitch.c), PITCH_DIR: v2([Math.sin(brg), Math.cos(brg)]), PITCH_LEVEL: fl(M.pitch.level),
+    TA: v2(M.train.carriages[0]), TB: v2(M.train.carriages[1]), EA: v2(M.train.engine[0]), EB: v2(M.train.engine[1]), TRAIN_Y: fl(M.train.level),
+    SA: v2(X.ship.a), SB: v2(X.ship.b), SHIP_W: fl(X.ship.w),
+    GATE_A: v2(X.gates[0]), GATE_B: v2(X.gates[1]), GATE_Y: fl(Math.min(gY(X.gates[0]), gY(X.gates[1])) - 0.2),
+    TOMB: v2(X.tomb), TOMB_Y: fl(gY(X.tomb) - 0.1), WIL: v2(X.willow), WIL_Y: fl(gY(X.willow) - 0.3),
+    STATION: v2(poi("Hogsmeade station").p), GRAWP: v2(poi("Grawp's clearing").p),
+    CAS_M: v2(affLen(M.castle.aff)), CAS_TOP: fl(Math.max(...tw.map((t) => t[3] + 6 * t[2] + 2), 262)), NTW: String(tw.length),
+    WALL_IN: "1.05", SATGAIN: "1.3", FOG_DENS: "(1.0/24000.0)",
+  };
+  if (!fLin) defs.MANUAL_BILERP = "1";
+  const fragSrc = $("fragSrc").textContent.replace("//__DEFINES__", Object.entries(defs).map(([k, v]) => `#define ${k} ${v}`).join("\n"));
+  const vsSrc = "#version 300 es\nvoid main(){ vec2 p = vec2(float((gl_VertexID << 1) & 2), float(gl_VertexID & 2)); gl_Position = vec4(p * 2.0 - 1.0, 0.0, 1.0); }";
+  const upSrc = `#version 300 es
+precision highp float; uniform sampler2D tSrc; uniform vec2 uOut; out vec4 o;
+float h(vec2 p) { vec3 q = fract(vec3(p.xyx) * 0.1031); q += dot(q, q.yzx + 33.33); return fract((q.x + q.y) * q.z); }
+void main() { o = vec4(texture(tSrc, gl_FragCoord.xy / uOut).rgb + (h(gl_FragCoord.xy) - 0.5) / 255., 1.); }`;
+  // temporal upsampling: jittered low-res samples + depth-reprojected, neighbourhood-clamped full-res history
+  const taaSrc = `#version 300 es
+precision highp float;
+uniform sampler2D tCur, tHist; uniform vec2 uOut, uCur, uJit; uniform vec3 uPos, uPPos; uniform mat3 uRot, uPRot;
+uniform float uTan, uAlpha; out vec4 o;
+vec3 histCR(vec2 uv) {
+  vec2 sp = uv * uOut, tc = floor(sp - 0.5) + 0.5, f = sp - tc;
+  vec2 w0 = f * (-0.5 + f * (1. - 0.5 * f)), w1 = 1. + f * f * (-2.5 + 1.5 * f), w2 = f * (0.5 + f * (2. - 1.5 * f)), w3 = f * f * (-0.5 + 0.5 * f);
+  vec2 w12 = w1 + w2, t0 = (tc - 1.) / uOut, t3 = (tc + 2.) / uOut, t12 = (tc + w2 / w12) / uOut;
+  vec3 c = texture(tHist, vec2(t12.x, t0.y)).rgb * (w12.x * w0.y) + texture(tHist, vec2(t0.x, t12.y)).rgb * (w0.x * w12.y)
+         + texture(tHist, t12).rgb * (w12.x * w12.y) + texture(tHist, vec2(t3.x, t12.y)).rgb * (w3.x * w12.y)
+         + texture(tHist, vec2(t12.x, t3.y)).rgb * (w12.x * w3.y);
+  return max(c / (w12.x * w0.y + w0.x * w12.y + w12.x * w12.y + w3.x * w12.y + w12.x * w3.y), 0.);
+}
+void main() {
+  vec2 P = gl_FragCoord.xy, k = uOut / uCur, sp = P / k - uJit;
+  ivec2 lim = ivec2(uCur) - 1, ip = clamp(ivec2(floor(sp)), ivec2(0), lim);
+  vec2 d = (sp - vec2(ip) - 0.5) * k;
+  vec4 c0 = texelFetch(tCur, ip, 0);
+  vec3 mn = c0.rgb, mx = c0.rgb;
+  for (int y = -1; y <= 1; y++) for (int x = -1; x <= 1; x++) {
+    vec3 c = texelFetch(tCur, clamp(ip + ivec2(x, y), ivec2(0), lim), 0).rgb; mn = min(mn, c); mx = max(mx, c);
+  }
+  float w = exp(-1.5 * dot(d, d));
+  vec3 cur = mix(texture(tCur, sp / uCur).rgb, c0.rgb, w), col = cur;
+  if (uAlpha < 1.) {
+    vec3 rd = normalize(uRot * vec3((2. * P - uOut) / uOut.y * uTan, 1.));
+    vec3 cp = transpose(uPRot) * (c0.a < 0. ? rd : uPos + rd * c0.a - uPPos);
+    if (cp.z > 1e-4) {
+      vec2 hp = (cp.xy / (cp.z * uTan) * uOut.y + uOut) * 0.5 / uOut;
+      if (hp.x > 0. && hp.y > 0. && hp.x < 1. && hp.y < 1.) col = mix(clamp(histCR(hp), mn, mx), cur, uAlpha * (0.4 + 0.6 * w));
+    }
+  }
+  o = vec4(col, 1.);
+}`;
+
+  function program(fs) {
+    const p = gl.createProgram();
+    for (const [type, src] of [[gl.VERTEX_SHADER, vsSrc], [gl.FRAGMENT_SHADER, fs]]) {
+      const s = gl.createShader(type); gl.shaderSource(s, src); gl.compileShader(s); gl.attachShader(p, s);
+    }
+    gl.linkProgram(p);
+    return p;
+  }
+  async function linked(p) {
+    const t0 = performance.now();
+    if (pcomp) while (!gl.getProgramParameter(p, pcomp.COMPLETION_STATUS_KHR)) {
+      await new Promise((r) => setTimeout(r, 100));
+    }
+    if (!gl.getProgramParameter(p, gl.LINK_STATUS)) {
+      let log = gl.getProgramInfoLog(p) || "";
+      for (const s of gl.getAttachedShaders(p)) log += "\n" + (gl.getShaderInfoLog(s) || "");
+      throw new Error(log.trim());
+    }
+    return p;
+  }
+  loadMsg("Compiling the raymarching shader (about 10–20 s the first time)…");
+  await new Promise((r) => setTimeout(r, 30));
+  const tc0 = performance.now();
+  let prog, up, taa;
+  try { prog = await linked(program(fragSrc)); up = await linked(program(upSrc)); taa = await linked(program(taaSrc)); }
+  catch (e) { window.__hog = { error: String(e.message || e) }; return fail("Shader failed to compile:\n" + (e.message || e)); }
+  const compileMs = performance.now() - tc0;
+
+  gl.useProgram(prog);
+  const U = {};
+  for (let i = 0, n = gl.getProgramParameter(prog, gl.ACTIVE_UNIFORMS); i < n; i++) {
+    const nm = gl.getActiveUniform(prog, i).name.replace(/\[0\]$/, "");
+    U[nm] = gl.getUniformLocation(prog, nm);
+  }
+  Object.keys(T).forEach((k, i) => { if (U[k]) gl.uniform1i(U[k], i); });
+  const set3 = (n, v) => U[n] && gl.uniform3fv(U[n], v);
+  set3("uLocU", M.local.aff[0]); set3("uLocV", M.local.aff[1]); U.uLocM && gl.uniform2fv(U.uLocM, affLen(M.local.aff));
+  set3("uCasU", M.castle.aff[0]); set3("uCasV", M.castle.aff[1]);
+  set3("uForU", M.forest.aff[0]); set3("uForV", M.forest.aff[1]); U.uForM && gl.uniform2fv(U.uForM, affLen(M.forest.aff));
+  const tw4 = new Float32Array(tw.length * 4), tx4 = new Float32Array(tw.length * 4);
+  tw.forEach((t, i) => { tw4.set(t.slice(0, 4), i * 4); tx4[i * 4] = t[4]; });
+  U.uTw && gl.uniform4fv(U.uTw, tw4); U.uTx && gl.uniform4fv(U.uTx, tx4);
+  gl.useProgram(up);
+  const uUpSrc = gl.getUniformLocation(up, "tSrc"), uUpOut = gl.getUniformLocation(up, "uOut");
+  gl.useProgram(taa);
+  const UT = {};
+  for (const n of ["tCur", "tHist", "uOut", "uCur", "uJit", "uPos", "uPPos", "uRot", "uPRot", "uTan", "uAlpha"]) UT[n] = gl.getUniformLocation(taa, n);
+  gl.uniform1i(UT.tCur, 15); gl.uniform1i(UT.tHist, 16);
+
+  // render targets: scene buffer (alpha = hit distance), full-res history ping-pong when float targets are renderable
+  const cbf = !!gl.getExtension("EXT_color_buffer_float");
+  const fbo = gl.createFramebuffer(), hFbo = [gl.createFramebuffer(), gl.createFramebuffer()], hist = [null, null];
+  let fTex = null, fw = 0, fh = 0, hw = 0, hh = 0, histOk = false;
+  function attach(fb, tex) {
+    gl.bindFramebuffer(gl.FRAMEBUFFER, fb);
+    gl.framebufferTexture2D(gl.FRAMEBUFFER, gl.COLOR_ATTACHMENT0, gl.TEXTURE_2D, tex, 0);
+    gl.bindFramebuffer(gl.FRAMEBUFFER, null);
+  }
+  function ensureTargets(sw, sh, w, h) {
+    if (sw !== fw || sh !== fh) {
+      fw = sw; fh = sh;
+      if (fTex) gl.deleteTexture(fTex);
+      fTex = mkTex(sw, sh, cbf ? gl.RGBA16F : gl.RGBA8, gl.RGBA, cbf ? gl.HALF_FLOAT : gl.UNSIGNED_BYTE, null, gl.LINEAR);
+      attach(fbo, fTex);
+    }
+    if (cbf && (w !== hw || h !== hh)) {
+      hw = w; hh = h;
+      for (let i = 0; i < 2; i++) {
+        if (hist[i]) gl.deleteTexture(hist[i]);
+        hist[i] = mkTex(w, h, gl.RGBA16F, gl.RGBA, gl.HALF_FLOAT, null, gl.LINEAR);
+        attach(hFbo[i], hist[i]);
+      }
+      histOk = false;
+    }
+  }

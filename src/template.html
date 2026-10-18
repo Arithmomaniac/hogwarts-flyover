@@ -1,0 +1,146 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Hogwarts — raymarched flyover of the grounds (Strathconon, Ross-shire)</title>
+<style>
+  html, body { margin: 0; height: 100%; background: #0b0d10; overflow: hidden; font: 13px/1.35 "Segoe UI", system-ui, sans-serif; color: #eef0f2; }
+  canvas { position: fixed; inset: 0; width: 100vw; height: 100vh; display: block; cursor: grab; }
+  canvas:active { cursor: grabbing; }
+  .hud { position: fixed; pointer-events: none; text-shadow: 0 1px 3px #000, 0 0 8px rgba(0,0,0,.6); }
+  #title { top: 14px; left: 18px; max-width: 46vw; }
+  #topshade { left: 0; right: 0; top: 0; height: 130px; background: linear-gradient(rgba(0,0,0,.5), rgba(0,0,0,0)); }
+  #title h1 { margin: 0; font: 600 21px/1.2 Georgia, "Times New Roman", serif; letter-spacing: .02em; }
+  #title .sub { opacity: .85; margin-top: 3px; }
+  #cap { left: 18px; bottom: 58px; max-width: 52vw; transition: opacity .6s; }
+  #cap .n { font: 600 18px/1.2 Georgia, serif; }
+  #cap .d { opacity: .9; }
+  #cap .w { opacity: .7; font-size: 12px; }
+  #status { right: 18px; bottom: 58px; text-align: right; opacity: .85; font-variant-numeric: tabular-nums; }
+  #credits { left: 0; right: 0; bottom: 0; padding: 6px 18px 8px; font-size: 10.5px; opacity: .72; background: linear-gradient(transparent, rgba(0,0,0,.55)); }
+  #panel { position: fixed; top: 14px; right: 18px; text-align: right; text-shadow: 0 1px 3px #000; }
+  #panel label { display: block; margin-bottom: 4px; }
+  #panel input[type=range] { width: 220px; vertical-align: middle; }
+  #help { opacity: .8; font-size: 12px; margin-top: 6px; }
+  #load { position: fixed; inset: 0; display: flex; align-items: center; justify-content: center; flex-direction: column; background: #0b0d10; z-index: 5; transition: opacity .8s; }
+  #load .t { font: 600 20px Georgia, serif; margin-bottom: 10px; }
+  #load .m { opacity: .75; }
+  #load.err .m { color: #ff9b8a; white-space: pre-wrap; max-width: 80vw; font: 12px monospace; }
+  .hide { opacity: 0 !important; pointer-events: none !important; }
+</style>
+</head>
+<body>
+<canvas id="c"></canvas>
+<div id="load"><div class="t">Hogwarts, Strathconon</div><div class="m" id="loadMsg">Decoding terrain…</div></div>
+<div class="hud" id="topshade"></div>
+<div class="hud" id="title">
+  <h1>Hogwarts — a flyover of the grounds</h1>
+  <div class="sub" id="sub"></div>
+</div>
+<div class="hud" id="cap"><div class="n"></div><div class="d"></div><div class="w"></div></div>
+<div class="hud" id="status"></div>
+<div id="panel">
+  <label>1 Sept 1991 · <span id="todTxt"></span> BST <input id="tod" type="range" min="4" max="23.5" step="0.05"></label>
+  <div id="help">drag look · F free-fly (WASD/E/C, Shift) · Space pause · ←/→ scrub · ↑/↓ time · Q quality · L detail · H hide</div>
+</div>
+<div class="hud" id="credits">
+  Layout: White Hound, <i>The Map of Hogwarts</i> (essay and maps), georeferenced onto real terrain. Terrain: Copernicus GLO-30 DEM © DLR e.V. 2010–2014 and © Airbus Defence and Space GmbH 2014–2018, provided under COPERNICUS by the European Union and ESA.
+  Imagery: Sentinel-2 cloudless 2023 by EOX IT Services GmbH (contains modified Copernicus Sentinel data 2023), CC BY-NC-SA 4.0. Lochs and rivers: © OpenStreetMap contributors (ODbL).
+  Unofficial, non-commercial fan visualisation; Harry Potter © J.K. Rowling / Warner Bros.
+</div>
+
+<script id="fragSrc" type="x-shader/x-fragment">/*__FRAG__*/</script>
+<script>/*__DATA__*/</script>
+<script>
+"use strict";
+const $ = (id) => document.getElementById(id);
+const M = DATA.meta, X = M.extras;
+const Q = new URLSearchParams(location.search);
+const loadMsg = (s) => { $("loadMsg").textContent = s; };
+const fail = (s) => { $("load").classList.add("err"); loadMsg(s); console.error(s); };
+
+// ---------------------------------------------------------------- decoding the packed layers
+function b64bytes(s) { const b = atob(s), n = b.length, u = new Uint8Array(n); for (let i = 0; i < n; i++) u[i] = b.charCodeAt(i); return u; }
+async function inflate(b64) {
+  const st = new Blob([b64bytes(b64)]).stream().pipeThrough(new DecompressionStream("deflate"));
+  return new Uint8Array(await new Response(st).arrayBuffer());
+}
+// planar predictor + zigzag, lo/hi byte planes
+function decH16(e, raw) {
+  const w = e.w, h = e.h, n = w * h, q = e.q, v = new Int32Array(n), out = new Float32Array(n);
+  for (let i = 0; i < h; i++) for (let j = 0; j < w; j++) {
+    const k = i * w + j, z = raw[k] | (raw[n + k] << 8);
+    const r = (z & 1) ? -((z + 1) >> 1) : (z >> 1);
+    const p = i > 0 ? (j > 0 ? v[k - w] + v[k - 1] - v[k - w - 1] : v[k - w]) : (j > 0 ? v[k - 1] : 0);
+    v[k] = p + r; out[k] = v[k] * q;
+  }
+  return out;
+}
+function decU8(e, raw) {
+  const w = e.w, h = e.h, ch = e.ch, n = w * h, out = new Uint8Array(n * ch);
+  for (let c = 0; c < ch; c++) {
+    const off = c * n, dl = e.delta[c];
+    for (let i = 0; i < h; i++) {
+      let acc = 0;
+      for (let j = 0; j < w; j++) {
+        const k = i * w + j; let b = raw[off + k];
+        if (dl) { acc = (acc + b) & 255; b = acc; }
+        out[k * ch + c] = b;
+      }
+    }
+  }
+  return out;
+}
+async function decode(name) {
+  const e = DATA.tex[name];
+  if (e.enc === "jpg") {
+    const img = new Image(); img.src = "data:image/jpeg;base64," + e.data; await img.decode();
+    return { w: e.w, h: e.h, img };
+  }
+  const raw = await inflate(e.data);
+  return { w: e.w, h: e.h, ch: e.ch || 1, a: e.enc === "h16" ? decH16(e, raw) : decU8(e, raw) };
+}
+
+// ---------------------------------------------------------------- CPU terrain sampler (mirrors the shader; for camera clearance)
+const H = {};
+function bil(a, w, h, u, v, stride = 1, off = 0) {
+  let x = Math.min(Math.max(u * w - 0.5, 0), w - 1), y = Math.min(Math.max(v * h - 0.5, 0), h - 1);
+  const x0 = Math.floor(x), y0 = Math.floor(y), x1 = Math.min(x0 + 1, w - 1), y1 = Math.min(y0 + 1, h - 1), fx = x - x0, fy = y - y0;
+  const g = (xx, yy) => a[(yy * w + xx) * stride + off];
+  return (g(x0, y0) * (1 - fx) + g(x1, y0) * fx) * (1 - fy) + (g(x0, y1) * (1 - fx) + g(x1, y1) * fx) * fy;
+}
+const sstep = (a, b, x) => { const t = Math.min(Math.max((x - a) / (b - a), 0), 1); return t * t * (3 - 2 * t); };
+const mixf = (a, b, t) => a + (b - a) * t;
+function regRG(name, half, x, z) {
+  const L = H[name], u = (x + half) / (2 * half), v = (z + half) / (2 * half);
+  return [bil(L.bed, L.w, L.h, u, v), bil(L.wd, L.w, L.h, u, v)];
+}
+function regional(x, z) {
+  const m = Math.max(Math.abs(x), Math.abs(z));
+  if (m < 4700) return regRG("M", 5005, x, z);
+  if (m < 11600) {
+    const a = regRG("A", 12015, x, z);
+    if (m < 4990) { const b = regRG("M", 5005, x, z), t = sstep(4700, 4990, m); return [mixf(b[0], a[0], t), mixf(b[1], a[1], t)]; }
+    return a;
+  }
+  const b = regRG("B", 36060, x, z);
+  if (m < 11990) { const a = regRG("A", 12015, x, z), t = sstep(11600, 11990, m); return [mixf(a[0], b[0], t), mixf(a[1], b[1], t)]; }
+  return b;
+}
+function locUV(aff, x, z) { return [aff[0][0] * x + aff[0][1] * z + aff[0][2], aff[1][0] * x + aff[1][1] * z + aff[1][2]]; }
+const affLen = (aff) => [1 / Math.hypot(aff[0][0], aff[0][1]), 1 / Math.hypot(aff[1][0], aff[1][1])];
+function ground(x, z) {           // returns [bed, top incl. water]
+  let r = regional(x, z);
+  const [u, v] = locUV(M.local.aff, x, z), sz = affLen(M.local.aff);
+  const ed = Math.min(Math.min(u, 1 - u) * sz[0], Math.min(v, 1 - v) * sz[1]);
+  if (ed > 0) {
+    const L = H.loc, t = sstep(0, 80, ed);
+    r = [mixf(r[0], bil(L.bed, L.w, L.h, u, v), t), mixf(r[1], bil(L.wd, L.w, L.h, u, v), t)];
+  }
+  return [r[0], Math.max(r[0], r[0] + r[1])];
+}
+</script>
+<!--__PART_B__-->
+</body>
+</html>
