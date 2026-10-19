@@ -12,6 +12,8 @@ LAKE = 153.0
 CX0, CY0, CW, CH = 1030, 560, 500, 620                     # castle window (grounds px)
 CRES = 0.5
 FRES = 8.0                                                 # forest layer resolution (m)
+# castle mass classes (relative top in m, roof type): low wall, wall, range, block, Great Hall, keep
+CAS_CLS = [(2.2, 4), (13.0, 0), (24.0, 1), (32.0, 1), (21.0, 3), (27.0, 0)]
 
 DECOR_G = [(990, 2170, 1900, 2300), (1580, 1840, 1960, 2180), (740, 2270, 900, 2330)]
 DECOR_H = [(1260, 2150, 1660, 2240), (1290, 1070, 1650, 1430), (1430, 1460, 1590, 1520)]
@@ -381,14 +383,10 @@ def main():
     kx, ky = w2c(*named["KEEP"]); gx_, gy_ = w2c(*named["GH"])
     rel = np.zeros(cm.shape, np.float32); rtype = np.zeros(cm.shape, np.uint8)
     low = cm & (th_c < 1.6); wallm = cm & (th_c >= 1.6) & (th_c < 3.3); rngm = cm & (th_c >= 3.3) & (th_c < 7.0); blkm = cm & (th_c >= 7.0)
-    rel[low] = 2.2; rtype[low] = 4
-    rel[wallm] = 13.0; rtype[wallm] = 0
-    rel[rngm] = 24.0; rtype[rngm] = 1
-    rel[blkm] = 32.0; rtype[blkm] = 1
     hall = cm & (th_c >= 3.3) & (xx > gx_ - 34) & (xx < gx_ + 62) & (yy > gy_ - 32) & (yy < gy_ + 12)
-    rel[hall] = 21.0; rtype[hall] = 3
     keep = cm & (((xx - kx) ** 2 + (yy - ky) ** 2) < (22 / PG) ** 2)
-    rel[keep] = 27.0; rtype[keep] = 0
+    for k, m_ in enumerate((low, wallm, rngm, blkm, hall, keep)):   # later classes override earlier ones
+        rel[m_], rtype[m_] = CAS_CLS[k]
     # castle base height (absolute) from the platform field
     cu_n = xx + CX0; cv_n = yy + CY0
     U, V = g_to_ff(cu_n, cv_n)
@@ -430,26 +428,24 @@ def main():
     idx_r = ndi.distance_transform_edt(~rest, return_distances=False, return_indices=True)
     rel = np.where(discs, rel0[idx_r[0], idx_r[1]], rel0)
     rtype = np.where(discs, rtype0[idx_r[0], idx_r[1]], rtype0).astype(np.uint8)
-    # absolute tops
+    # absolute tops (the shader rebuilds them from the base height and CAS_CLS)
     top_abs = base_c + rel
     sd_c = np.where(cm, -ndi.distance_transform_edt(cm), ndi.distance_transform_edt(~cm)) * PG
-    idx = ndi.distance_transform_edt(~cm, return_distances=False, return_indices=True)
-    top_s = top_abs[idx[0], idx[1]]; rtype_s = rtype[idx[0], idx[1]]
-    # nearest tower index map
-    tp = np.array([[t_[0], t_[1]] for t_ in tower_list])
-    d2 = (xx[..., None] - tp[:, 0]) ** 2 + (yy[..., None] - tp[:, 1]) ** 2
-    near_t = np.argmin(d2, axis=-1).astype(np.uint8)
     nxc = int(round(CW * PG / CRES)); nyc = int(round(CH * PG / CRES))
     cu = (np.arange(nxc) + 0.5) * CRES / PG - 0.5; cv = (np.arange(nyc) + 0.5) * CRES / PG - 0.5
     CU, CV = np.meshgrid(cu, cv)
-    ri = np.clip(np.round(CV).astype(int), 0, CH - 1); ci = np.clip(np.round(CU).astype(int), 0, CW - 1)
     c_sd = map_coordinates(sd_c.astype(np.float32), [CV, CU], order=1, mode='nearest')
-    c_top = top_s[ri, ci]; c_type = rtype_s[ri, ci]; c_tw = near_t[ri, ci]
+    # footprint signed distance per mass class: the shader extrudes each class separately and takes the union.
+    # Each class is clipped by the one shared outline, so there's no notch where two classes meet on an outer wall.
+    ccls = np.argmin(np.abs(rel[..., None] - np.array([c[0] for c in CAS_CLS], np.float32)), -1)
+    sd_out = sdf(cm, PG)
+    c_cls = np.stack([map_coordinates(np.maximum(sd_out, sdf((ccls == k) | ~cm, PG)), [CV, CU], order=1, mode='nearest')
+                      for k in range(len(CAS_CLS))], -1)
     towers_world = []
     for (px, py, r, topz, roof) in tower_list:
         e, nn = ff_to_world(*g_to_ff(px + CX0, py + CY0))
         towers_world.append([round(float(e), 2), round(float(nn), 2), round(float(r), 2), round(float(topz), 2), int(roof)])
-    print("towers", len(towers_world), "castle tex", nxc, nyc, "top range", c_top.min(), c_top.max())
+    print("towers", len(towers_world), "castle tex", nxc, nyc, "top range", top_abs[cm].min(), top_abs[cm].max())
     print("train", train)
 
     # ---------------- forest layer over the whole Forest map (map-aligned, 8 m) ----------------
@@ -479,7 +475,8 @@ def main():
     np.save(P("build", "final_L2.npy"), np.stack([q8sdf(wall_sd), q8sdf(stream)], -1))                        # LINEAR
     np.save(P("build", "final_LN.npy"), np.stack([sc, bcode], -1).astype(np.uint8))                           # NEAREST
     np.save(P("build", "final_Csd.npy"), q8sdf(c_sd))                                                         # LINEAR
-    np.save(P("build", "final_CN.npy"), np.stack([np.clip(np.round((c_top - 150.0) / 0.5), 0, 255), c_type, c_tw], -1).astype(np.uint8))  # NEAREST
+    np.save(P("build", "final_Ccls.npy"), q8sdf(c_cls))                                                       # LINEAR, one channel per CAS_CLS
+    np.save(P("build", "final_cbase.npy"), Bc.astype(np.float32))                                             # castle base height, local grid
     np.save(P("build", "final_F2.npy"), np.stack([u8(f_den), u8(f_field)], -1))                               # LINEAR
 
     def affine_from(fn_world, nx, ny):
@@ -493,7 +490,8 @@ def main():
     meta = {
         "lake": LAKE, "pitch": {"c": [pc_e, pc_n], "a": pa, "b": pb, "brg": pbrg, "level": level},
         "local": {"nx": NX, "ny": NY, "aff": affine_from(lambda i, j: ff_to_world(*local_texel_ff(i, j)), NX, NY)},
-        "castle": {"nx": nxc, "ny": nyc, "aff": affine_from(lambda i, j: g2w(CX0 + (j + 0.5) * CRES / PG - 0.5, CY0 + (i + 0.5) * CRES / PG - 0.5), nxc, nyc)},
+        "castle": {"nx": nxc, "ny": nyc, "aff": affine_from(lambda i, j: g2w(CX0 + (j + 0.5) * CRES / PG - 0.5, CY0 + (i + 0.5) * CRES / PG - 0.5), nxc, nyc),
+                   "cls": [list(c) for c in CAS_CLS]},
         "forest": {"nx": nfx, "ny": nfy, "aff": affine_from(lambda i, j: ff_to_world((j + 0.5) * FRES / MFF, (i + 0.5) * FRES / MFF), nfx, nfy)},
         "towers": towers_world, "train": train, "hills": hills,
         "named": named,

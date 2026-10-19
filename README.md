@@ -24,7 +24,7 @@ python src/assemble.py
 |---|---|
 | `src/frag1.glsl` – `src/frag5.glsl` | The fragment shader in five parts: (1) uniforms, noise, terrain, water and trees; (2) castle, buildings, walls, hedges and set-pieces; (3) the single loop that runs every ray query; (4) surface colours, sky and fog; (5) shading and `main` |
 | `src/template.html` | Page markup, CSS, HUD, data decoders and a CPU copy of the terrain sampler |
-| `src/template_b.html` | WebGL setup: textures, shader `#define`s from the layout metadata, shader compilation, temporal upsampling and render targets |
+| `src/template_b.html` | WebGL setup: textures, shader `#define`s from the layout metadata, shader compilation, a one-off pass at load that tabulates tree density for the 3D trees, temporal upsampling and render targets |
 | `src/template_c.html` | Sun position on 1 September 1991, lighting, camera path, captions, controls and render loop |
 | `src/assemble.py` | Inlines the shader and `build/data.js` into the templates |
 | `build/data.js` | Packed data layers (terrain and water at several resolutions, Sentinel-2 imagery, layers traced from the essay's maps, castle and forest) plus layout metadata |

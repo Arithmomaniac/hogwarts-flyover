@@ -39,27 +39,38 @@ float towerD(vec3 p, int i) {
   return d;
 }
 
-// part: 0 = extruded mass, >0 = tower index + 1 ; rt = roof type of the mass texel
-float castleD(vec3 p, out float top, out float rt, out int part) {
+// one extruded mass class: footprint signed distance s, absolute top y0, roof type rt (m: battlement checker).
+// Divisors are Lipschitz bounds for the roof slope plus the base-height slope (<= 0.45).
+float massD(vec3 p, float s, float y0, float rt, float m) {
+  float y = y0, sl = 1.1;
+  if (rt == 1.) { y += clamp(0.3 - s, 0., 5.5) * 0.95; sl = 1.72; }
+  else if (rt == 3.) { y += clamp(0.3 - s, 0., 8.5) * 1.35; sl = 2.06; }
+  else if (rt == 0.) y += s > -0.8 ? 1.0 + 0.8 * m : 0.;
+  return max(s, (p.y - y) / sl);
+}
+
+// union of the extruded mass classes (each with its own footprint, so steps between ranges are real walls)
+// and the two nearest analytic towers. cb: castle base height. part: 0 = mass, >0 = tower index + 1
+float castleD(vec3 p, float cb, out float top, out float rt, out int part) {
   vec2 uv = casUV(p.xz);
   top = 0.; rt = -1.; part = 0;
   vec2 e = max(max(-uv, uv - 1.), 0.) * CAS_M;
   float dBox = max(length(e), p.y - CAS_TOP);
   if (dBox > 0.) return dBox + 1.;                    // content sits >= 1 m inside the box; keeps bound > hit epsilon
-  float sd = textureLod(tCSd, uv, 0.).r * 25.5 - 12.8;
-  vec4 cn = textureLod(tCN, uv, 0.);
-  top = 150. + cn.r * 127.5;
-  rt = floor(cn.g * 255. + 0.5);
-  float y = top, sl = 1.;
-  if (rt == 1.) { y = top + clamp(0.3 - sd, 0., 5.5) * 0.95; sl = 1.38; }
-  else if (rt == 3.) { y = top + clamp(0.3 - sd, 0., 8.5) * 1.35; sl = 1.68; }
-  else if (rt == 0.) { float m = float((fract(p.x * 0.4) < 0.5) != (fract(p.z * 0.4) < 0.5)); y = top + (sd > -0.8 ? 1.0 + 0.8 * m : 0.); }
-  float d = max(sd, (p.y - y) / sl);
-  int i1 = int(cn.b * 255. + 0.5), i2 = int(cn.a * 255. + 0.5);
+  const vec2 CLS[6] = CAS_CLS;                        // per class: top above the base, roof type
+  vec4 sa = textureLod(tCasA, uv, 0.) * 25.5 - 12.9;   // q8 sd, grown 10 cm so neighbouring classes overlap
+  vec2 sb = textureLod(tCasB, uv, 0.).rg * 25.5 - 12.9;
+  float m = float((fract(p.x * 0.4) < 0.5) != (fract(p.z * 0.4) < 0.5));
+  float d = 1e5, dk;
+#define CAS_K(k, s) dk = massD(p, s, cb + CLS[k].x, CLS[k].y, m); if (dk < d) { d = dk; top = cb + CLS[k].x; rt = CLS[k].y; }
+  CAS_K(0, sa.x) CAS_K(1, sa.y) CAS_K(2, sa.z) CAS_K(3, sa.w) CAS_K(4, sb.x) CAS_K(5, sb.y)
+#undef CAS_K
+  ivec2 ts = textureSize(tCasB, 0);
+  vec2 ti = texelFetch(tCasB, clamp(ivec2(uv * vec2(ts)), ivec2(0), ts - 1), 0).ba * 255. + 0.5;
   for (int k = ZERO; k < 2; k++) {
-    int ti = k == 0 ? i1 : i2;
-    float dt = towerD(p, ti);
-    if (dt < d) { d = dt; part = ti + 1; }
+    int i = int(k == 0 ? ti.x : ti.y);
+    float dt = towerD(p, i);
+    if (dt < d) { d = dt; part = i + 1; }
   }
   return d;
 }
@@ -195,7 +206,7 @@ float objD(vec3 p, GS g, float gy, bool full, out int mat, out float aux, out fl
     if (far > 14.) return far - 3.;
   }
   float rt; int part;
-  float d = castleD(p, ctop, rt, part);
+  float d = castleD(p, g.cb, ctop, rt, part);
   aux = part > 0 ? 100. + float(part) : rt;
   if (!full) return d;
   if (g.lw > 0.01) {

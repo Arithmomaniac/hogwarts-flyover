@@ -54,7 +54,7 @@ vec3 shade(vec3 ro, vec3 rd, Res r) {
     vec3 dec = mix(vec3(0.034, 0.058, 0.016), vec3(0.06, 0.074, 0.02), hue);
     dec = mix(dec, vec3(0.1, 0.075, 0.02), step(0.94, hue) * 0.7);   // a few trees already turning
     vec3 con = vec3(0.021, 0.037, 0.025) * (0.85 + 0.3 * hue);
-    alb = s.tp.w < 0. ? mix(vec3(0.045, 0.064, 0.018), con, s.conF) : (s.tp.x > 0.5 ? con : dec);
+    alb = s.tp.w < 0. ? mix(vec3(0.045, 0.064, 0.018), con, s.conF) : (s.tp.w > 1.5 ? vec3(0.05, 0.04, 0.03) : (s.tp.x > 0.5 ? con : dec));
     ao = s.tp.w < 0. ? 0.7 : 0.3 + 0.7 * clamp((p.y - s.gy) / max(s.tc.w, 1.), 0., 1.);
     wrap = 0.3;
   } else if (r.mat == 4) {                            // castle
@@ -135,6 +135,21 @@ vec3 shade(vec3 ro, vec3 rd, Res r) {
   return col + emi;
 }
 
+#ifdef TREE_PASS
+void main() {                                         // one texel per tree cell: the table treeSD reads
+  vec2 cc = floor(gl_FragCoord.xy) - TREE_G0;
+  float d = 0., cf = 0., mh = 0., r;
+  for (int k = ZERO; k < 25; k++) {                  // own cell (k == 12) and the tallest tree within two cells
+    vec2 c = cc + vec2(float(k % 5), float(k / 5)) - 2.;
+    vec4 h = hash42(c);
+    float conF, dn = floor(treeDens((c + 0.25 + 0.5 * h.yz) * 7., conF) * 255. + 0.5) / 255.;   // as stored
+    conF = floor(conF * 255. + 0.5) / 255.;
+    if (k == 12) { d = dn; cf = conF; }
+    if (h.x < dn) mh = max(mh, treeH(h, dn, h.w < conF, r));
+  }
+  outColor = vec4(d, cf, (mh + 0.1) / 25.5, 1.);
+}
+#else
 void main() {
   vec2 uv = (2. * (gl_FragCoord.xy + uJitter) - uRes) / uRes.y;
   vec3 rd = normalize(uCamRot * vec3(uv * uTanHalf, 1.));
@@ -147,3 +162,4 @@ void main() {
   col = pow(aces(col * uExposure), vec3(1. / 2.2));
   outColor = vec4(col, r.mat == 0 ? -1. : r.t);      // alpha: hit distance for reprojection (-1 = sky)
 }
+#endif

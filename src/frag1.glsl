@@ -22,7 +22,7 @@ uniform int uQual;
 uniform int uDetail;       // 1 full detail, 0 lite (canopy sheet instead of trees, no lake reflections)
 uniform int uDbg;
 
-uniform sampler2D tLocH;   // RG32F  bed, water delta (2 m, map-aligned)
+uniform sampler2D tLocH;   // RGB32F bed, water delta, castle base height (2 m, map-aligned)
 uniform sampler2D tLocA;   // RGBA8  road, trees, hedge sd, building sd
 uniform sampler2D tLocB;   // RG8    boundary-wall sd, stream sd
 uniform sampler2D tLocN;   // RG8    surface class, building code (nearest)
@@ -34,9 +34,10 @@ uniform sampler2D tAS;
 uniform sampler2D tAF;
 uniform sampler2D tBH;     // 120 m (+-36 km)
 uniform sampler2D tBS;
-uniform sampler2D tCSd;    // R8     castle 2D signed distance (0.5 m)
-uniform sampler2D tCN;     // RGBA8  castle top, roof type, tower idx 1, tower idx 2 (nearest)
+uniform sampler2D tCasA;   // RGBA8  castle footprint sd of mass classes 0-3 (0.5 m)
+uniform sampler2D tCasB;   // RGBA8  castle footprint sd of mass classes 4-5; nearest two tower indices (texelFetch)
 uniform sampler2D tFor;    // RG8    essay Forest-map density, field fraction (8 m)
+uniform sampler2D tTree;   // RGBA8  per 7 m tree cell (cells -TREE_G0..): 3D-tree density, conifer fraction, tallest tree within two cells / 25.5 m (rendered at load)
 
 uniform vec3 uLocU; uniform vec3 uLocV; uniform vec2 uLocM;
 uniform vec3 uCasU; uniform vec3 uCasV;
@@ -83,16 +84,16 @@ float sdEll(vec3 p, vec3 r) { float k0 = length(p / r); float k1 = length(p / (r
 float sdCone(vec2 w, float R, float h) { return max(dot(w - vec2(R, 0.), normalize(vec2(h, R))), -w.y); }   // w = (radial, height above base)
 
 // ------------------------------------------------------------------ height textures
-vec2 texRG(sampler2D s, vec2 uv) {
+vec3 texRG(sampler2D s, vec2 uv) {
 #ifdef MANUAL_BILERP
   ivec2 sz = textureSize(s, 0);
   vec2 x = uv * vec2(sz) - 0.5; vec2 i = floor(x); vec2 f = x - i;
   ivec2 a = clamp(ivec2(i), ivec2(0), sz - 1), b = clamp(ivec2(i) + 1, ivec2(0), sz - 1);
-  vec2 v00 = texelFetch(s, a, 0).rg, v10 = texelFetch(s, ivec2(b.x, a.y), 0).rg;
-  vec2 v01 = texelFetch(s, ivec2(a.x, b.y), 0).rg, v11 = texelFetch(s, b, 0).rg;
+  vec3 v00 = texelFetch(s, a, 0).rgb, v10 = texelFetch(s, ivec2(b.x, a.y), 0).rgb;
+  vec3 v01 = texelFetch(s, ivec2(a.x, b.y), 0).rgb, v11 = texelFetch(s, b, 0).rgb;
   return mix(mix(v00, v10, f.x), mix(v01, v11, f.x), f.y);
 #else
-  return textureLod(s, uv, 0.).rg;
+  return textureLod(s, uv, 0.).rgb;
 #endif
 }
 vec2 uvM(vec2 xz) { return (xz + 5005.) / 10010.; }
@@ -101,30 +102,31 @@ vec2 uvB(vec2 xz) { return (xz + 36060.) / 72120.; }
 
 vec2 regionalH(vec2 xz) {
   float m = max(abs(xz.x), abs(xz.y));
-  if (m < 4700.) return texRG(tMH, uvM(xz));
+  if (m < 4700.) return texRG(tMH, uvM(xz)).xy;
   if (m < 11600.) {
-    vec2 a = texRG(tAH, uvA(xz));
-    if (m < 4990.) return mix(texRG(tMH, uvM(xz)), a, smoothstep(4700., 4990., m));
+    vec2 a = texRG(tAH, uvA(xz)).xy;
+    if (m < 4990.) return mix(texRG(tMH, uvM(xz)).xy, a, smoothstep(4700., 4990., m));
     return a;
   }
-  vec2 b = texRG(tBH, uvB(xz));
-  if (m < 11990.) return mix(texRG(tAH, uvA(xz)), b, smoothstep(11600., 11990., m));
+  vec2 b = texRG(tBH, uvB(xz)).xy;
+  if (m < 11990.) return mix(texRG(tAH, uvA(xz)).xy, b, smoothstep(11600., 11990., m));
   return b;
 }
 
-struct GS { float bed; float wd; float lw; float ed; vec2 luv; vec4 la; };
+struct GS { float bed; float wd; float lw; float ed; vec2 luv; vec4 la; float cb; };
 
 GS sampleGround(vec2 xz) {
   GS g;
   vec2 r = regionalH(xz);
   g.luv = vec2(dot(uLocU, vec3(xz, 1.)), dot(uLocV, vec3(xz, 1.)));
-  g.lw = 0.; g.la = vec4(0., 0., 1., 1.);
+  g.lw = 0.; g.la = vec4(0., 0., 1., 1.); g.cb = 0.;
   vec2 e = min(g.luv, 1. - g.luv) * uLocM;
   float ed = min(e.x, e.y);
   g.ed = ed;
   if (ed > 0.) {
     g.lw = smoothstep(0., 80., ed);
-    r = mix(r, texRG(tLocH, g.luv), g.lw);
+    vec3 l = texRG(tLocH, g.luv);
+    r = mix(r, l.xy, g.lw); g.cb = l.z;
     g.la = textureLod(tLocA, g.luv, 0.);
   }
   g.bed = r.x; g.wd = r.y;
@@ -151,7 +153,7 @@ float vegDensity(vec2 xz, GS g, out float conF) {
   vec2 fuv = vec2(dot(uForU, vec3(xz, 1.)), dot(uForV, vec3(xz, 1.)));
   vec2 fe = min(fuv, 1. - fuv) * uForM;
   float fw = smoothstep(0., 300., min(fe.x, fe.y));
-  if (fw > 0.) d = textureLod(tFor, fuv, 0.).r * fw;
+  if (fw > 0. && g.lw < 1.) d = textureLod(tFor, fuv, 0.).r * fw;
   if (g.lw > 0.) d = mix(d, g.la.g, g.lw);
   float rr = length(xz);
   float sw = smoothstep(2500., 3500., rr);
@@ -166,34 +168,65 @@ float vegDensity(vec2 xz, GS g, out float conF) {
   return d;
 }
 
-// per-tree canopy heightfield: 7 m jittered cells, 2x2 neighbourhood
-float treeTop(vec2 xz, float gy, float dens, float conF, out vec4 tc, out vec4 tp) {
-  vec2 q = xz / 7.; vec2 c0 = floor(q); vec2 f = q - c0;
-  vec2 o = vec2(f.x < 0.5 ? -1. : 1., f.y < 0.5 ? -1. : 1.);
-  float best = -1e9; tc = vec4(0.); tp = vec4(0.);
-  for (int k = ZERO; k < 4; k++) {
-    vec2 cc = c0 + vec2(float(k & 1), float(k >> 1)) * o;
+float vegMask(GS g) { return step(g.wd, -0.9) * (1. - g.la.r * g.lw) * smoothstep(0.5, 2.5, bldSd(g)); }
+
+// density and conifer fraction at a tree's own position, so each tree is the same whichever ray finds it
+float treeDens(vec2 xz, out float conF) {
+  GS g;
+  g.luv = vec2(dot(uLocU, vec3(xz, 1.)), dot(uLocV, vec3(xz, 1.)));
+  vec2 e = min(g.luv, 1. - g.luv) * uLocM;
+  g.ed = min(e.x, e.y);
+  if (g.ed > 80.) {                                  // well inside the local layer only its textures matter
+    g.lw = 1.; g.la = textureLod(tLocA, g.luv, 0.); g.wd = texRG(tLocH, g.luv).y; g.bed = 0.; g.cb = 0.;
+  } else g = sampleGround(xz);
+  return vegDensity(xz, g, conF) * vegMask(g);
+}
+
+// height of the tree in a cell with hash h (r: crown radius)
+float treeH(vec4 h, float dens, bool con, out float r) {
+  float hh = fract(h.w * 13.7);
+  float H = (con ? mix(13., 21., hh) : mix(10., 19., hh)) * (0.72 + 0.28 * smoothstep(0.1, 0.8, dens));
+  r = con ? H * 0.23 : mix(3.0, 4.9, fract(hh * 7.3));
+  return H;
+}
+
+// per-tree 3D shapes (crown on a trunk) within TREE_FAR: 7 m jittered cells, 3x3 neighbourhood.
+// Returns a distance bound that also covers trees in cells not visited (TREE_SAFE away) and, when a crown or trunk
+// is the nearest thing (tp.w > 0), that tree: tc = (centre, crown radius, height), tp = (conifer, crown half-height,
+// hue, 1 crown / 2 trunk). mh: tallest tree within two cells (tab: from tTree); trees beyond are >= 10.85 m away.
+#define TREE_SAFE 3.85
+float treeSD(vec3 p, float gy, float mh, bool tab, out vec4 tc, out vec4 tp) {
+  vec2 c0 = floor(p.xz / 7.);
+  float best = TREE_SAFE, hy = p.y - gy;
+  tc = vec4(0.); tp = vec4(0.);
+  if (hy - mh > 1.) return min(hy - mh, 10.85);     // clear above every crown nearby (> 1 m: never a hit)
+  for (int k = ZERO; k < 9; k++) {
+    int j = (k + 4) % 9;                             // own cell first: tightens the bound sooner
+    vec2 cc = c0 + vec2(float(j % 3), float(j / 3)) - 1.;
     vec4 h = hash42(cc);
+    vec2 ctr = (cc + 0.25 + 0.5 * h.yz) * 7., q = p.xz - ctr;
+    float rq = length(q);
+    if (rq - 4.9 > best) continue;                   // no crown from this cell can be nearer
+    float conF, dens;
+    if (tab) { vec2 v = texelFetch(tTree, ivec2(cc + TREE_G0), 0).rg; dens = v.x; conF = v.y; }
+    else dens = treeDens(ctr, conF);
     if (h.x >= dens) continue;
-    vec2 ctr = (cc + 0.25 + 0.5 * h.yz) * 7.;
-    float hh = fract(h.w * 13.7);
     bool con = h.w < conF;
-    float H = (con ? mix(13., 21., hh) : mix(10., 19., hh)) * (0.72 + 0.28 * smoothstep(0.1, 0.8, dens));
-    float r = con ? H * 0.23 : mix(3.0, 4.9, fract(hh * 7.3));
-    float dd = length(xz - ctr);
-    if (dd >= r) continue;
-    float x = dd / r, a = 0., top;
-    if (con) top = gy + H * (1. - x);
-    else { a = 0.42 * H; top = gy + H - a * (1. - sqrt(1. - x * x)); }
-    if (top > best) { best = top; tc = vec4(ctr, r, H); tp = vec4(con ? 1. : 0., a, h.w, 1.); }
+    float r, H = treeH(h, dens, con, r);
+    if (rq - r > best) continue;
+    float a = con ? 0. : 0.36 * H, dc;
+    if (con) dc = sdCone(vec2(rq, hy - 0.12 * H), r, 0.88 * H);
+    else dc = sdEll(vec3(q.x, hy - (H - a), q.y), vec3(r, a, r));
+    float dt = max(rq - 0.25 - 0.012 * H, max(hy - (con ? 0.5 * H : H - a), -hy - 0.5));
+    float dd = min(dc, dt);
+    if (dd < best) { best = dd; tc = vec4(ctr, r, H); tp = vec4(con ? 1. : 0., a, h.w, dc <= dt ? 1. : 2.); }
   }
   return best;
 }
 
-float vegTop(vec2 xz, float gy, float dens, float conF, float t, out vec4 tc, out vec4 tp) {
-  tc = vec4(0.); tp = vec4(0.);
-  if (dens < 0.03) return -1e9;
-  if (t < TREE_FAR) return treeTop(xz, gy, dens, conF, tc, tp);
-  tp = vec4(conF > 0.5 ? 1. : 0., 0., 0.5, -1.);     // far canopy as a smooth sheet
+// far canopy as a smooth sheet (beyond TREE_FAR, lite detail and lake reflections)
+float canopyTop(vec2 xz, float gy, float dens, float conF, out vec4 tc, out vec4 tp) {
+  tc = vec4(0.);
+  tp = vec4(conF > 0.5 ? 1. : 0., 0., 0.5, -1.);
   return gy + 14. * smoothstep(0.05, 0.55, dens) * (0.8 + 0.4 * vnoise(xz * 0.08));
 }

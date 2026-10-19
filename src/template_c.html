@@ -202,8 +202,8 @@
     gl.uniform3fv(U.uSunDir, L.dir); gl.uniform3fv(U.uSunCol, L.sunCol); gl.uniform3fv(U.uSkyCol, L.skyCol); gl.uniform3fv(U.uHorCol, L.horCol); gl.uniform3fv(U.uGlow, L.glow);
     gl.uniform1f(U.uDusk, L.dusk); gl.uniform1f(U.uExposure, L.exposure); gl.uniform1i(U.uQual, qual); gl.uniform1i(U.uDbg, dbg); gl.uniform1i(U.uDetail, detail);
     gl.drawArrays(gl.TRIANGLES, 0, 3);
-    gl.activeTexture(gl.TEXTURE15); gl.bindTexture(gl.TEXTURE_2D, fTex);
-    let outUnit = 15;
+    gl.activeTexture(gl.TEXTURE16); gl.bindTexture(gl.TEXTURE_2D, fTex);
+    let outUnit = 16;
     if (cbf) {
       const sig = `${tod}|${qual}|${detail}|${dbg}|${simT}`;
       const dp = prevPos ? Math.hypot(pos[0] - prevPos[0], pos[1] - prevPos[1], pos[2] - prevPos[2]) : 1e9;
@@ -214,14 +214,14 @@
       else { accN++; alpha = Math.max(1 / accN, 0.03); }               // static view: converge to a supersampled still
       gl.bindFramebuffer(gl.FRAMEBUFFER, hFbo[hn]); gl.viewport(0, 0, w, h);
       gl.useProgram(taa);
-      gl.activeTexture(gl.TEXTURE16); gl.bindTexture(gl.TEXTURE_2D, hist[1 - hn]);
+      gl.activeTexture(gl.TEXTURE17); gl.bindTexture(gl.TEXTURE_2D, hist[1 - hn]);
       gl.uniform2f(UT.uOut, w, h); gl.uniform2f(UT.uCur, sw, sh); gl.uniform2fv(UT.uJit, jit);
       gl.uniform3fv(UT.uPos, pos); gl.uniform3fv(UT.uPPos, prevPos || pos);
       gl.uniformMatrix3fv(UT.uRot, false, rot); gl.uniformMatrix3fv(UT.uPRot, false, prevRot || rot);
       gl.uniform1f(UT.uTan, tanH); gl.uniform1f(UT.uAlpha, alpha);
       gl.drawArrays(gl.TRIANGLES, 0, 3);
-      gl.activeTexture(gl.TEXTURE17); gl.bindTexture(gl.TEXTURE_2D, hist[hn]);
-      outUnit = 17; histOk = true; hn = 1 - hn; prevSig = sig;
+      gl.activeTexture(gl.TEXTURE18); gl.bindTexture(gl.TEXTURE_2D, hist[hn]);
+      outUnit = 18; histOk = true; hn = 1 - hn; prevSig = sig;
     }
     prevPos = pos.slice(); prevRot = rot;
     gl.bindFramebuffer(gl.FRAMEBUFFER, null); gl.viewport(0, 0, w, h);

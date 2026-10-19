@@ -8,16 +8,17 @@
   const aniso = gl.getExtension("EXT_texture_filter_anisotropic");
   const pcomp = gl.getExtension("KHR_parallel_shader_compile");
   gl.pixelStorei(gl.UNPACK_ALIGNMENT, 1);
+  const TREE_N = 1440;               // 3D-tree table: one texel per 7 m tree cell, cells -720..719 (+-5 km round the castle)
 
   // ---------------------------------------------------------------- data -> textures
   const dec = {};
   try { await Promise.all(Object.keys(DATA.tex).map(async (n) => { dec[n] = await decode(n); })); }
   catch (e) { return fail("Could not decode the embedded data: " + e); }
-  H.loc = { w: dec.locBed.w, h: dec.locBed.h, bed: dec.locBed.a, wd: dec.locW.a };
+  H.loc = { w: dec.locBed.w, h: dec.locBed.h, bed: dec.locBed.a, wd: dec.locW.a, cb: dec.locCB.a };
   for (const r of ["M", "A", "B"]) H[r] = { w: dec[r + "Bed"].w, h: dec[r + "Bed"].h, bed: dec[r + "Bed"].a, wd: dec[r + "W"].a };
 
   function mkTex(w, h, ifmt, fmt, type, data, filt) {
-    gl.activeTexture(gl.TEXTURE15);
+    gl.activeTexture(gl.TEXTURE20);                  // scratch unit; the main program samples units 0-15
     const t = gl.createTexture(); gl.bindTexture(gl.TEXTURE_2D, t);
     gl.texImage2D(gl.TEXTURE_2D, 0, ifmt, w, h, 0, fmt, type, data);
     gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, filt);
@@ -26,10 +27,10 @@
     gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
     return t;
   }
-  function texRG(L) {
-    const n = L.w * L.h, a = new Float32Array(n * 2);
-    for (let i = 0; i < n; i++) { a[2 * i] = L.bed[i]; a[2 * i + 1] = L.wd[i]; }
-    return mkTex(L.w, L.h, gl.RG32F, gl.RG, gl.FLOAT, a, fLin ? gl.LINEAR : gl.NEAREST);
+  function texRG(L) {              // bed, water delta (+ castle base height for the local layer)
+    const c = L.cb ? 3 : 2, n = L.w * L.h, a = new Float32Array(n * c);
+    for (let i = 0; i < n; i++) { a[c * i] = L.bed[i]; a[c * i + 1] = L.wd[i]; if (c === 3) a[c * i + 2] = L.cb[i]; }
+    return mkTex(L.w, L.h, c === 3 ? gl.RGB32F : gl.RG32F, c === 3 ? gl.RGB : gl.RG, gl.FLOAT, a, fLin ? gl.LINEAR : gl.NEAREST);
   }
   function texU8(d, filt) {
     const f = { 1: [gl.R8, gl.RED], 2: [gl.RG8, gl.RG], 3: [gl.RGB8, gl.RGB], 4: [gl.RGBA8, gl.RGBA] }[d.ch];
@@ -48,7 +49,8 @@
     tMH: texRG(H.M), tMS: texJpg(dec.MSat), tMF: texU8(dec.MFor, gl.LINEAR),
     tAH: texRG(H.A), tAS: texJpg(dec.ASat), tAF: texU8(dec.AFor, gl.LINEAR),
     tBH: texRG(H.B), tBS: texJpg(dec.BSat),
-    tCSd: texU8(dec.cSd, gl.LINEAR), tCN: texU8(dec.cN, gl.NEAREST), tFor: texU8(dec.forest, gl.LINEAR),
+    tCasA: texU8(dec.casA, gl.LINEAR), tCasB: texU8(dec.casB, gl.LINEAR), tFor: texU8(dec.forest, gl.LINEAR),
+    tTree: mkTex(TREE_N, TREE_N, gl.RGBA8, gl.RGBA, gl.UNSIGNED_BYTE, null, gl.NEAREST),   // filled by the tree pass below
   };
   Object.values(T).forEach((t, i) => { gl.activeTexture(gl.TEXTURE0 + i); gl.bindTexture(gl.TEXTURE_2D, t); });
 
@@ -66,6 +68,7 @@
     TOMB: v2(X.tomb), TOMB_Y: fl(gY(X.tomb) - 0.1), WIL: v2(X.willow), WIL_Y: fl(gY(X.willow) - 0.3),
     STATION: v2(poi("Hogsmeade station").p), GRAWP: v2(poi("Grawp's clearing").p),
     CAS_M: v2(affLen(M.castle.aff)), CAS_TOP: fl(Math.max(...tw.map((t) => t[3] + 6 * t[2] + 2), 262)), NTW: String(tw.length),
+    CAS_CLS: `vec2[6](${M.castle.cls.map((c) => v2(c)).join(",")})`, TREE_N: String(TREE_N), TREE_G0: fl(TREE_N / 2),
     WALL_IN: "1.05", SATGAIN: "1.3", FOG_DENS: "(1.0/24000.0)",
   };
   if (!fLin) defs.MANUAL_BILERP = "1";
@@ -134,22 +137,39 @@ void main() {
   loadMsg("Compiling the raymarching shader (about 10–20 s the first time)…");
   await new Promise((r) => setTimeout(r, 30));
   const tc0 = performance.now();
-  let prog, up, taa;
-  try { prog = await linked(program(fragSrc)); up = await linked(program(upSrc)); taa = await linked(program(taaSrc)); }
+  let prog, up, taa, treeP;
+  try {
+    const ps = [fragSrc, upSrc, taaSrc, fragSrc.replace("#version 300 es", "#version 300 es\n#define TREE_PASS 1")].map(program);
+    [prog, up, taa, treeP] = [await linked(ps[0]), await linked(ps[1]), await linked(ps[2]), await linked(ps[3])];
+  }
   catch (e) { window.__hog = { error: String(e.message || e) }; return fail("Shader failed to compile:\n" + (e.message || e)); }
   const compileMs = performance.now() - tc0;
 
-  gl.useProgram(prog);
+  // static uniforms shared by the main program and the tree pass
+  function setStatic(p) {
+    gl.useProgram(p);
+    const loc = (n) => gl.getUniformLocation(p, n);
+    Object.keys(T).forEach((k, i) => { const l = loc(k); if (l) gl.uniform1i(l, p === treeP && k === "tTree" ? 21 : i); });
+    for (const [n, v] of [["uLocU", M.local.aff[0]], ["uLocV", M.local.aff[1]], ["uCasU", M.castle.aff[0]], ["uCasV", M.castle.aff[1]],
+                          ["uForU", M.forest.aff[0]], ["uForV", M.forest.aff[1]]]) { const l = loc(n); if (l) gl.uniform3fv(l, v); }
+    for (const [n, v] of [["uLocM", affLen(M.local.aff)], ["uForM", affLen(M.forest.aff)]]) { const l = loc(n); if (l) gl.uniform2fv(l, v); }
+  }
+  // density of every tree cell, rendered once so the 3D trees cost one texel fetch per tree
+  setStatic(treeP);
+  const tFb = gl.createFramebuffer();
+  gl.bindFramebuffer(gl.FRAMEBUFFER, tFb);
+  gl.framebufferTexture2D(gl.FRAMEBUFFER, gl.COLOR_ATTACHMENT0, gl.TEXTURE_2D, T.tTree, 0);
+  gl.viewport(0, 0, TREE_N, TREE_N);
+  gl.drawArrays(gl.TRIANGLES, 0, 3);
+  gl.bindFramebuffer(gl.FRAMEBUFFER, null);
+  gl.deleteFramebuffer(tFb); gl.deleteProgram(treeP);
+
+  setStatic(prog);
   const U = {};
   for (let i = 0, n = gl.getProgramParameter(prog, gl.ACTIVE_UNIFORMS); i < n; i++) {
     const nm = gl.getActiveUniform(prog, i).name.replace(/\[0\]$/, "");
     U[nm] = gl.getUniformLocation(prog, nm);
   }
-  Object.keys(T).forEach((k, i) => { if (U[k]) gl.uniform1i(U[k], i); });
-  const set3 = (n, v) => U[n] && gl.uniform3fv(U[n], v);
-  set3("uLocU", M.local.aff[0]); set3("uLocV", M.local.aff[1]); U.uLocM && gl.uniform2fv(U.uLocM, affLen(M.local.aff));
-  set3("uCasU", M.castle.aff[0]); set3("uCasV", M.castle.aff[1]);
-  set3("uForU", M.forest.aff[0]); set3("uForV", M.forest.aff[1]); U.uForM && gl.uniform2fv(U.uForM, affLen(M.forest.aff));
   const tw4 = new Float32Array(tw.length * 4), tx4 = new Float32Array(tw.length * 4);
   tw.forEach((t, i) => { tw4.set(t.slice(0, 4), i * 4); tx4[i * 4] = t[4]; });
   U.uTw && gl.uniform4fv(U.uTw, tw4); U.uTx && gl.uniform4fv(U.uTx, tx4);
@@ -158,7 +178,7 @@ void main() {
   gl.useProgram(taa);
   const UT = {};
   for (const n of ["tCur", "tHist", "uOut", "uCur", "uJit", "uPos", "uPPos", "uRot", "uPRot", "uTan", "uAlpha"]) UT[n] = gl.getUniformLocation(taa, n);
-  gl.uniform1i(UT.tCur, 15); gl.uniform1i(UT.tHist, 16);
+  gl.uniform1i(UT.tCur, 16); gl.uniform1i(UT.tHist, 17);
 
   // render targets: scene buffer (alpha = hit distance), full-res history ping-pong when float targets are renderable
   const cbf = !!gl.getExtension("EXT_color_buffer_float");

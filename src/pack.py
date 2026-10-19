@@ -142,6 +142,7 @@ def main():
     wd = np.where(wd < -1.0, -8.0, wd)
     add("locBed", enc_height(bed, 0.02, "locBed"))
     add("locW", enc_height(wd, 0.02, "locW"))
+    add("locCB", enc_height(np.load(P("build", "final_cbase.npy")), 0.02, "locCB"))
     q16 = lambda a: (np.round(np.asarray(a, np.float32) / 17.0) * 17).astype(np.uint8)
     la = np.load(P("build", "final_L4.npy")).copy(); la[..., 0] = q16(la[..., 0]); la[..., 1] = q16(la[..., 1])
     add("locA", enc_u8(la, "locA"))
@@ -164,8 +165,9 @@ def main():
         if name in ("M", "A"):
             add(f"{name}For", enc_u8(q16(np.load(P("build", f"SF_{name}.npy"))), name + "For"))
 
-    # ---- castle (0.5 m) ----
-    csd = np.load(P("build", "final_Csd.npy")); cn = np.load(P("build", "final_CN.npy"))
+    # ---- castle (0.5 m): footprint sd per mass class (meta castle.cls) + the two nearest analytic towers ----
+    ccls = np.load(P("build", "final_Ccls.npy"))
+    assert ccls.shape[2] == len(meta["castle"]["cls"]) == 6
     ca = meta["castle"]; au, av = np.array(ca["aff"][0]), np.array(ca["aff"][1])
     nxc, nyc = ca["nx"], ca["ny"]
     # invert the affine: (u, v) -> (e, n)
@@ -177,8 +179,8 @@ def main():
     d = np.hypot(E[..., None] - tw[:, 0], N[..., None] - tw[:, 1]) - tw[:, 2]
     o = np.argsort(d, axis=-1)
     t1 = o[..., 0].astype(np.uint8); t2 = o[..., 1].astype(np.uint8)
-    add("cSd", enc_u8(csd, "cSd"))
-    add("cN", enc_u8(np.stack([cn[..., 0], cn[..., 1], t1, t2], -1), "cN", delta=[0, 0, 0, 0]))
+    add("casA", enc_u8(ccls[..., :4], "casA"))
+    add("casB", enc_u8(np.dstack([ccls[..., 4:], t1, t2]), "casB"))
 
     # ---- essay Forest map layer (8 m) ----
     fo = np.load(P("build", "final_F2.npy")).copy()
