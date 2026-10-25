@@ -55,7 +55,7 @@ The essay uses **57 degrees 30 minutes north, 5 degrees west** as a standard ref
 
 The implemented offset from the reference point is 560 m east and 2,480 m north in the projection below, about 2.54 km away. It was a placement choice intended to fit the fictional grounds into nearby mountain scenery. There is no preserved exhaustive location search establishing it as the nearest, only or best fit. A rewrite should treat the anchor as adjustable.
 
-The unchanged legacy page HUD calls this the "nearest ground" fitting the horizons. That stronger wording is not a validated geographic conclusion; the distinction above is the intended interpretation.
+The original page HUD called this the "nearest ground" fitting the horizons. That stronger wording was not a validated geographic conclusion; the current About dialog describes the anchor as a modeling choice instead.
 
 ### Geographic and world frames
 

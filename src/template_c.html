@@ -120,8 +120,7 @@
   const latlon = (e, n) => [LAT + n / 111369, LON + e / 59955];
   const fmtLL = (ll) => `${ll[0].toFixed(4)}°N ${Math.abs(ll[1]).toFixed(4)}°W`;
   const ref = [-560, -2480], refD = Math.hypot(ref[0], ref[1]);
-  $("sub").innerHTML = `Glen of the River Meig at Scardroy, Strathconon, Ross-shire · castle ${fmtLL(X.castle_ll)}<br>`
-    + `The essay's reference point (57°30′N 5°00′W) lies ${(refD / 1000).toFixed(1)} km SSW; the castle is set on the nearest ground that fits the essay's horizons.`;
+  $("location-note").textContent = `The chosen castle anchor is ${fmtLL(X.castle_ll)}, near Scardroy in the River Meig glen. The essay's reference point (57°30′N 5°00′W) lies ${(refD / 1000).toFixed(1)} km SSW and was used for calculations such as sunset times. This nearby anchor is a modeling choice, not a uniquely established location.`;
   let capName = null;
   function setCaption(name) {
     if (name === capName) return;
@@ -129,7 +128,6 @@
     if (!p) { el.style.opacity = 0; return; }
     el.querySelector(".n").textContent = p.name;
     el.querySelector(".d").textContent = p.note;
-    el.querySelector(".w").textContent = fmtLL(latlon(p.p[0], p.p[1]));
     el.style.opacity = 1;
   }
 
@@ -143,9 +141,51 @@
   const todIn = $("tod"); todIn.value = tod;
   const showTod = () => { const h = Math.floor(tod), m = Math.round((tod - h) * 60); $("todTxt").textContent = `${String(h).padStart(2, "0")}:${String(m % 60).padStart(2, "0")}`; };
   todIn.addEventListener("input", () => { tod = +todIn.value; showTod(); }); showTod();
-  const setHud = () => { for (const id of ["topshade", "title", "cap", "status", "panel", "credits"]) $(id).classList.toggle("hide", !hud); };
+  const setHud = () => {
+    for (const id of ["topshade", "topbar", "cap", "status", "playback", "stats-panel", "credits"]) {
+      $(id).hidden = !hud;
+    }
+  };
   setHud();
-  cv.addEventListener("pointerdown", (e) => { drag = [e.clientX, e.clientY]; cv.setPointerCapture(e.pointerId); });
+  function showPlayback() {
+    $("play").textContent = paused ? "Resume tour" : "Pause tour";
+    $("back").disabled = $("forward").disabled = free;
+  }
+  showPlayback();
+  $("play").addEventListener("click", () => { paused = !paused; showPlayback(); });
+  $("back").addEventListener("click", () => { simT -= 10; });
+  $("forward").addEventListener("click", () => { simT += 10; });
+  for (const button of document.querySelectorAll("[data-dialog]")) {
+    const dialog = $(button.dataset.dialog);
+    let wasPaused = true;
+    button.addEventListener("click", () => {
+      wasPaused = paused;
+      paused = true;
+      keys.clear();
+      drag = null;
+      showPlayback();
+      dialog.showModal();
+    });
+    dialog.querySelector("[data-close]").addEventListener("click", () => dialog.close());
+    dialog.addEventListener("keydown", (e) => {
+      if (e.key !== "Tab") return;
+      const stops = dialog.querySelectorAll("button, a[href]");
+      const first = stops[0], last = stops[stops.length - 1];
+      if (e.shiftKey && (document.activeElement === first || document.activeElement === dialog)) {
+        e.preventDefault();
+        last.focus();
+      } else if (!e.shiftKey && document.activeElement === last) {
+        e.preventDefault();
+        first.focus();
+      }
+    });
+    dialog.addEventListener("close", () => {
+      paused = wasPaused;
+      showPlayback();
+    });
+  }
+  addEventListener("blur", () => { keys.clear(); drag = null; });
+  cv.addEventListener("pointerdown", (e) => { cv.focus({ preventScroll: true }); drag = [e.clientX, e.clientY]; cv.setPointerCapture(e.pointerId); });
   cv.addEventListener("pointerup", () => { drag = null; });
   cv.addEventListener("pointermove", (e) => {
     if (!drag) return;
@@ -154,7 +194,7 @@
     else { yawOff += dx * 0.004; pitchOff = Math.max(-1.2, Math.min(1.2, pitchOff - dy * 0.004)); }
   });
   addEventListener("keydown", (e) => {
-    if (e.target === todIn) return;
+    if (document.querySelector("dialog[open]") || e.target.closest("button, a, input, select, textarea, summary")) return;
     keys.add(e.code);
     if (e.code === "Space") { paused = !paused; e.preventDefault(); }
     else if (e.code === "ArrowLeft" && !free) simT -= 10;
@@ -169,6 +209,7 @@
       if (free) { const p = pathAt(simT); fp = p.pos.slice(); const f = rotOff(p.fwd); fyaw = Math.atan2(f[0], f[2]); fpitch = Math.asin(f[1]); }
       yawOff = pitchOff = 0;
     }
+    showPlayback();
   });
   addEventListener("keyup", (e) => keys.delete(e.code));
   function rotOff(f) {
@@ -230,12 +271,15 @@
     return L;
   }
   let last = performance.now(), ema = 33, frames = 0, fpsT = 0, fpsN = 0, fps = 0;
+  const frameTimes = [];
   function loop(now) {
-    const dt = Math.min((now - last) / 1000, 0.1); last = now;
+    const frameMs = now - last; last = now;
+    const dt = Math.min(frameMs / 1000, 0.1);
+    const dialogOpen = !!document.querySelector("dialog[open]");
     if (!paused) simT += dt;
     let pos, f, capn = null;
     if (free) {
-      const sp = (keys.has("ShiftLeft") || keys.has("ShiftRight") ? 220 : 45) * dt;
+      const sp = dialogOpen ? 0 : (keys.has("ShiftLeft") || keys.has("ShiftRight") ? 220 : 45) * dt;
       const fw = [Math.sin(fyaw) * Math.cos(fpitch), Math.sin(fpitch), Math.cos(fyaw) * Math.cos(fpitch)], rt = [Math.cos(fyaw), 0, -Math.sin(fyaw)];
       const mv = (v, s) => { fp[0] += v[0] * s; fp[1] += v[1] * s; fp[2] += v[2] * s; };
       if (keys.has("KeyW")) mv(fw, sp); if (keys.has("KeyS")) mv(fw, -sp);
@@ -245,11 +289,13 @@
       pos = fp; f = fw;
     } else {
       const p = pathAt(simT); pos = p.pos; f = rotOff(p.fwd); capn = p.cap;
-      if (!drag) { const k = Math.exp(-dt * 0.8); yawOff *= k; pitchOff *= k; }
+      if (!drag && !dialogOpen) { const k = Math.exp(-dt * 0.8); yawOff *= k; pitchOff *= k; }
     }
     const L = render(pos, f);
     setCaption(capn);
-    frames++; fpsN++; fpsT += dt;
+    frames++; fpsN++; fpsT += frameMs / 1000;
+    frameTimes.push(frameMs);
+    if (frameTimes.length > 120) frameTimes.shift();
     if (fpsT > 0.5) { fps = fpsN / fpsT; fpsN = 0; fpsT = 0; }
     ema = ema * 0.9 + dt * 1000 * 0.1;
     if (adaptive && frames > 20 && frames % 15 === 0) {
@@ -258,10 +304,13 @@
     }
     if (frames % 10 === 1) {
       const agl = pos[1] - gtop(pos[0], pos[2]);
-      $("status").innerHTML = `${free ? "free flight" : `flyover ${Math.floor(simT % TOTAL)} / ${Math.floor(TOTAL)} s`}${paused ? " · paused" : ""}<br>`
-        + `sun ${L.el.toFixed(1)}° above horizon, azimuth ${L.az.toFixed(0)}°<br>`
+      const times = frameTimes.slice().sort((a, b) => a - b), n = times.length, mid = Math.floor(n / 2);
+      const median = n % 2 ? times[mid] : (times[mid - 1] + times[mid]) / 2;
+      $("status").textContent = `${free ? "free flight" : `flyover ${Math.floor(((simT % TOTAL) + TOTAL) % TOTAL)} / ${Math.floor(TOTAL)} s`}${paused ? " · paused" : ""}`;
+      $("frame-stats").innerHTML = `sun ${L.el.toFixed(1)}° above horizon, azimuth ${L.az.toFixed(0)}°<br>`
         + `${fmtLL(latlon(pos[0], pos[2]))} · ${pos[1].toFixed(0)} m (${agl.toFixed(0)} m above ground)<br>`
-        + `quality ${QN[qual]}, ${detail ? "full" : "lite"} detail · ${fps.toFixed(0)} fps at ${Math.round(scale * 100)}% resolution`;
+        + `quality ${QN[qual]}, ${detail ? "full" : "lite"} detail · ${fps.toFixed(0)} loop fps at ${Math.round(scale * 100)}% resolution<br>`
+        + `frame gaps (last ${n}): median ${median.toFixed(1)} ms · p95 ${times[Math.ceil(n * 0.95) - 1].toFixed(1)} ms · max ${times[n - 1].toFixed(1)} ms`;
     }
     if (frames === 2) { $("load").classList.add("hide"); window.__hog.ready = true; }
     window.__hog.frames = frames;
@@ -270,7 +319,7 @@
   window.__hog = {
     ready: false, frames: 0, total: TOTAL, defs, fLin, compileMs, pcomp: !!pcomp,
     set(t) { simT = t; }, tod(h) { tod = h; todIn.value = h; showTod(); }, q(n) { qual = n; }, scale(s) { scale = s; },
-    pause(p) { paused = p; }, dbg(n) { dbg = n; }, path: pathAt, ground,
+    pause(p) { paused = p; showPlayback(); }, dbg(n) { dbg = n; }, path: pathAt, ground,
   };
   requestAnimationFrame(loop);
 })();

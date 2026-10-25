@@ -9,46 +9,138 @@
   canvas { position: fixed; inset: 0; width: 100vw; height: 100vh; display: block; cursor: grab; }
   canvas:active { cursor: grabbing; }
   .hud { position: fixed; pointer-events: none; text-shadow: 0 1px 3px #000, 0 0 8px rgba(0,0,0,.6); }
-  #title { top: 14px; left: 18px; max-width: 46vw; }
-  #topshade { left: 0; right: 0; top: 0; height: 130px; background: linear-gradient(rgba(0,0,0,.5), rgba(0,0,0,0)); }
-  #title h1 { margin: 0; font: 600 21px/1.2 Georgia, "Times New Roman", serif; letter-spacing: .02em; }
-  #title .sub { opacity: .85; margin-top: 3px; }
-  #cap { left: 18px; bottom: 58px; max-width: 52vw; transition: opacity .6s; }
+  #topbar { position: fixed; inset: 18px 22px auto; display: flex; justify-content: space-between; gap: 20px; pointer-events: none; }
+  #title { position: static; max-width: 42vw; }
+  #topshade { left: 0; right: 0; top: 0; height: 145px; background: linear-gradient(rgba(0,0,0,.55), rgba(0,0,0,0)); }
+  #title h1 { margin: 0; font: 600 26px/1.2 Georgia, "Times New Roman", serif; letter-spacing: .02em; }
+  #title .sub { opacity: .8; margin-top: 4px; font-size: 12px; }
+  #cap { left: 22px; bottom: 104px; max-width: 52vw; transition: opacity .6s; }
   #cap .n { font: 600 18px/1.2 Georgia, serif; }
   #cap .d { opacity: .9; }
-  #cap .w { opacity: .7; font-size: 12px; }
-  #status { right: 18px; bottom: 58px; text-align: right; opacity: .85; font-variant-numeric: tabular-nums; }
-  #credits { left: 0; right: 0; bottom: 0; padding: 6px 18px 8px; font-size: 10.5px; opacity: .72; background: linear-gradient(transparent, rgba(0,0,0,.55)); }
-  #panel { position: fixed; top: 14px; right: 18px; text-align: right; text-shadow: 0 1px 3px #000; }
-  #panel label { display: block; margin-bottom: 4px; }
-  #panel input[type=range] { width: 220px; vertical-align: middle; }
-  #help { opacity: .8; font-size: 12px; margin-top: 6px; }
+  #status { right: 22px; bottom: 104px; text-align: right; opacity: .85; font-variant-numeric: tabular-nums; }
+  button, a, summary, input { -webkit-tap-highlight-color: transparent; }
+  button, .button, summary { color: inherit; font: inherit; border: 1px solid rgba(255,255,255,.23); border-radius: 7px; background: rgba(14,23,29,.65); padding: 9px 13px; cursor: pointer; text-decoration: none; }
+  button:hover, .button:hover, summary:hover { background: rgba(46,61,70,.92); border-color: rgba(255,255,255,.5); }
+  :focus-visible { outline: 2px solid #f0d79a; outline-offset: 3px; }
+  button:disabled { opacity: .45; cursor: default; }
+  #panel { display: flex; flex-direction: column; align-items: flex-end; gap: 12px; pointer-events: auto; text-shadow: 0 1px 3px #000; }
+  .toolbar { display: flex; gap: 6px; }
+  #time-control { display: flex; align-items: center; gap: 10px; font-size: 12px; }
+  #time-control input { width: 160px; accent-color: #e1c78d; }
+  #playback { position: fixed; bottom: 43px; left: 50%; transform: translateX(-50%); display: flex; gap: 6px; white-space: nowrap; }
+  #play { min-width: 112px; }
+  #stats-panel { top: 125px; right: 22px; pointer-events: auto; text-align: right; }
+  #stats-panel summary { display: inline-block; font-size: 12px; list-style: none; }
+  #stats-panel summary::-webkit-details-marker { display: none; }
+  #stats { margin-top: 8px; padding: 12px; border-radius: 7px; background: rgba(14,23,29,.88); font-size: 12px; line-height: 1.7; font-variant-numeric: tabular-nums; }
+  #credits { position: fixed; left: 0; right: 0; bottom: 0; padding: 9px 18px; text-align: center; font-size: 10px; color: #cbd1d5; background: linear-gradient(transparent, rgba(0,0,0,.7)); }
+  #credits a { color: inherit; text-underline-offset: 2px; }
+  #credits button { border: 0; padding: 5px 8px; background: none; text-decoration: underline; font-size: inherit; }
+  dialog { box-sizing: border-box; width: min(580px, calc(100vw - 32px)); max-height: calc(100dvh - 32px); padding: 26px; overflow: auto; border: 1px solid #4a5962; border-radius: 14px; background: #15212a; color: #eef0f2; box-shadow: 0 20px 90px #0008; font-size: 14px; line-height: 1.6; }
+  dialog::backdrop { background: rgba(3,9,14,.65); }
+  .dialog-head { display: flex; justify-content: space-between; align-items: center; gap: 16px; margin-bottom: 18px; }
+  dialog h2 { margin: 0; font: 600 24px/1.2 Georgia, serif; }
+  dialog p { margin: 0 0 16px; }
+  dialog a { color: #efd59c; text-underline-offset: 3px; }
+  .dialog-links { display: flex; flex-wrap: wrap; gap: 10px; }
+  dialog dl { display: grid; grid-template-columns: auto 1fr; gap: 12px 20px; margin: 0 0 20px; }
+  dialog dt { color: #efd59c; font-weight: 600; }
+  dialog dd { margin: 0; }
   #load { position: fixed; inset: 0; display: flex; align-items: center; justify-content: center; flex-direction: column; background: #0b0d10; z-index: 5; transition: opacity .8s; }
   #load .t { font: 600 20px Georgia, serif; margin-bottom: 10px; }
   #load .m { opacity: .75; }
   #load.err .m { color: #ff9b8a; white-space: pre-wrap; max-width: 80vw; font: 12px monospace; }
   .hide { opacity: 0 !important; pointer-events: none !important; }
+  [hidden] { display: none !important; }
+  @media (max-width: 700px) {
+    #topbar { inset: 14px 14px auto; flex-direction: column; gap: 14px; }
+    #title { max-width: none; }
+    #title h1 { font-size: 23px; }
+    #panel { align-items: stretch; gap: 10px; }
+    .toolbar { justify-content: flex-start; }
+    #time-control { justify-content: space-between; }
+    #time-control input { width: min(45vw, 220px); }
+    #topshade { height: 210px; }
+    #stats-panel { top: 185px; right: 14px; }
+    #cap { left: 14px; bottom: 120px; max-width: calc(100vw - 28px); }
+    #cap .n { font-size: 17px; }
+    #cap .d { font-size: 12px; }
+    #status { left: 14px; right: auto; bottom: 91px; text-align: left; font-size: 12px; }
+    #playback { bottom: 46px; }
+    #credits { padding: 6px 10px; font-size: 9px; }
+    dialog { padding: 20px; }
+    dialog dl { gap: 10px 14px; font-size: 13px; }
+  }
 </style>
 </head>
 <body>
-<canvas id="c"></canvas>
+<canvas id="c" tabindex="0" aria-label="Hogwarts flyover scene; open Controls for keyboard shortcuts"></canvas>
 <div id="load"><div class="t">Hogwarts, Strathconon</div><div class="m" id="loadMsg">Decoding terrain…</div></div>
 <div class="hud" id="topshade"></div>
-<div class="hud" id="title">
-  <h1>Hogwarts — a flyover of the grounds</h1>
-  <div class="sub" id="sub"></div>
-</div>
-<div class="hud" id="cap"><div class="n"></div><div class="d"></div><div class="w"></div></div>
+<header id="topbar">
+  <div class="hud" id="title">
+    <h1>Hogwarts</h1>
+    <div class="sub">Strathconon, Scotland</div>
+  </div>
+  <div id="panel">
+    <nav class="toolbar" aria-label="Site information">
+      <button type="button" data-dialog="about">About</button>
+      <button type="button" data-dialog="controls">Controls</button>
+      <a class="button" href="https://github.com/Arithmomaniac/hogwarts-flyover" target="_blank" rel="noopener" aria-label="GitHub repository (opens a new tab)">GitHub</a>
+    </nav>
+    <label id="time-control"><span>1 Sept 1991 · <span id="todTxt"></span> BST</span><input id="tod" aria-label="Time of day" type="range" min="4" max="23.5" step="0.05"></label>
+  </div>
+</header>
+<div class="hud" id="cap"><div class="n"></div><div class="d"></div></div>
 <div class="hud" id="status"></div>
-<div id="panel">
-  <label>1 Sept 1991 · <span id="todTxt"></span> BST <input id="tod" type="range" min="4" max="23.5" step="0.05"></label>
-  <div id="help">drag look · F free-fly (WASD/E/C, Shift) · Space pause · ←/→ scrub · ↑/↓ time · Q quality · L detail · H hide</div>
+<div id="playback" aria-label="Tour playback">
+  <button id="back" type="button" aria-label="Back 10 seconds">−10s</button>
+  <button id="play" type="button">Pause tour</button>
+  <button id="forward" type="button" aria-label="Forward 10 seconds">+10s</button>
 </div>
-<div class="hud" id="credits">
+<details class="hud" id="stats-panel">
+  <summary>Stats</summary>
+  <div id="stats"><div id="frame-stats"></div><div id="gpu-info"></div></div>
+</details>
+<footer id="credits">
+  White Hound · Copernicus DEM · <a href="https://s2maps.eu/" target="_blank" rel="noopener">© EOX / Sentinel-2</a> · <a href="https://www.openstreetmap.org/copyright" target="_blank" rel="noopener">© OpenStreetMap contributors</a> · <button type="button" data-dialog="credits-dialog">Credits</button>
+</footer>
+
+<dialog id="about" aria-labelledby="about-title">
+  <div class="dialog-head"><h2 id="about-title">About this flyover</h2><button type="button" data-close autofocus>Close</button></div>
+  <p>A seven-minute journey through Hogwarts, its grounds, Hogsmeade and the Forbidden Forest, imagined within real Scottish mountain scenery.</p>
+  <p>The layout follows <a href="https://web.archive.org/web/20261008141630/http://members.madasafish.com/~cj_whitehound/Fanfic/map_of_Hogwarts.htm" target="_blank" rel="noopener">White Hound's <i>The Map of Hogwarts</i></a>, not the films' castle. This is one interpretation, not a definitive architectural plan or a discovered castle location.</p>
+  <p id="location-note"></p>
+  <p>The landscape combines real elevation and satellite data with modeled grounds, buildings and vegetation. The date controls the sunlight; the scene includes features from different books.</p>
+  <div class="dialog-links">
+    <a href="https://github.com/Arithmomaniac/hogwarts-flyover" target="_blank" rel="noopener">Source repository</a>
+    <a href="https://github.com/Arithmomaniac/hogwarts-flyover#readme" target="_blank" rel="noopener">Rebuild and reconstruction guide</a>
+  </div>
+</dialog>
+<dialog id="controls" aria-labelledby="controls-title">
+  <div class="dialog-head"><h2 id="controls-title">Controls</h2><button type="button" data-close autofocus>Close</button></div>
+  <dl>
+    <dt>Drag</dt><dd>Look around the scene.</dd>
+    <dt>Space</dt><dd>Pause or resume the tour.</dd>
+    <dt>← / →</dt><dd>Go back or forward 10 seconds.</dd>
+    <dt>↑ / ↓</dt><dd>Change the time of day.</dd>
+    <dt>F</dt><dd>Toggle free flight. Use WASD to move, E/C to rise or descend, and Shift to move faster.</dd>
+    <dt>Q</dt><dd>Cycle rendering quality.</dd>
+    <dt>L</dt><dd>Toggle full or lighter detail.</dd>
+    <dt>H</dt><dd>Hide or show the overlay.</dd>
+  </dl>
+  <p>Click the scene to use its keyboard shortcuts. The time slider and playback buttons also work with touch. Stats shows camera coordinates and rendering diagnostics.</p>
+  <p>Dialogs pause the tour while open. Close them or press Escape to return to the scene.</p>
+</dialog>
+<dialog id="credits-dialog" aria-labelledby="credits-title">
+  <div class="dialog-head"><h2 id="credits-title">Sources and credits</h2><button type="button" data-close autofocus>Close</button></div>
+  <p>
   Layout: White Hound, <i>The Map of Hogwarts</i> (essay and maps), georeferenced onto real terrain. Terrain: Copernicus GLO-30 DEM © DLR e.V. 2010–2014 and © Airbus Defence and Space GmbH 2014–2018, provided under COPERNICUS by the European Union and ESA.
-  Imagery: Sentinel-2 cloudless 2023 by EOX IT Services GmbH (contains modified Copernicus Sentinel data 2023), CC BY-NC-SA 4.0. Lochs and rivers: © OpenStreetMap contributors (ODbL).
-  Unofficial, non-commercial fan visualisation; Harry Potter © J.K. Rowling / Warner Bros.
-</div>
+  </p>
+  <p>Imagery: Sentinel-2 cloudless 2023 by <a href="https://s2maps.eu/" target="_blank" rel="noopener">EOX IT Services GmbH</a> (contains modified Copernicus Sentinel data 2023), <a href="https://creativecommons.org/licenses/by-nc-sa/4.0/" target="_blank" rel="noopener">CC BY-NC-SA 4.0</a>. Embedded imagery was resampled, approximately de-shaded and JPEG-encoded.</p>
+  <p>Lochs and rivers: <a href="https://www.openstreetmap.org/copyright" target="_blank" rel="noopener">© OpenStreetMap contributors</a> (<a href="https://opendatacommons.org/licenses/odbl/1-0/" target="_blank" rel="noopener">ODbL</a>).</p>
+  <p>Unofficial, non-commercial fan visualisation; Harry Potter © J.K. Rowling / Warner Bros. No affiliation or endorsement is claimed.</p>
+</dialog>
 
 <script id="fragSrc" type="x-shader/x-fragment">/*__FRAG__*/</script>
 <script>/*__DATA__*/</script>

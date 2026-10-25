@@ -14,17 +14,38 @@ The published renderer is the accepted WebGL version based on commit [`9153cc9`]
 
 Use the [live site](https://arithmomaniac.github.io/hogwarts-flyover/), or download [`hogwarts-flyover.html`](hogwarts-flyover.html) and open it locally in a browser with hardware WebGL2. It has no runtime asset downloads or server dependency. Microsoft Edge on Windows was the development browser. Initial shader compilation can take noticeable time; performance depends on your GPU and resolution.
 
+The overlay keeps the current landmark, tour progress, playback buttons and time-of-day slider visible. **About** explains the location and links to the repository/rebuild guide; **Controls** lists shortcuts; **Stats** reveals camera coordinates and rendering diagnostics; **Credits** expands the compact source attribution. Dialogs pause the tour and restore its previous playback state when closed with Close or Escape.
+
 | Control | Action |
 | --- | --- |
 | Drag | Look around |
 | **F** | Toggle free flight |
 | **WASD**, **E/C**, **Shift** | Move, rise/descend, move faster in free flight |
-| **Space** | Pause/resume |
+| Playback buttons / **Space** | Pause/resume |
 | **Left/Right arrows** | Scrub the tour |
 | **Up/Down arrows** | Change time of day |
 | **Q**, **L**, **H** | Cycle quality, toggle detail, hide/show HUD |
 
 URL parameters are `t` (tour seconds), `tod` (hour, BST; default `18.5`), `q` (quality `0` to `2`), `scale` (fixed render scale instead of adaptive resolution), `pause=1`, `detail=0` and `hud=0`. For example, [pause near the castle/tree sequence](https://arithmomaniac.github.io/hogwarts-flyover/?t=60&pause=1).
+
+Click the scene to use keyboard shortcuts; inputs, buttons and dialogs keep their normal keyboard behavior. To run the overlay's browser checks with Python, Playwright and installed Microsoft Edge: `python -m unittest discover -s src -p test_ui.py`.
+
+### Frame pacing and GPU selection
+
+**Stats** shows animation-loop FPS and the median, 95th-percentile (p95), and maximum frame gaps over the last 120 intervals. These use uncapped elapsed time, not the capped movement step. They measure animation-loop cadence, not GPU execution time or confirmed display presentation. The GPU line identifies the selected adapter when the browser exposes it; otherwise it reports that adapter details are unavailable.
+
+For jerky panning, check the longer frame gaps and the selected GPU, not just average FPS. The page already requests WebGL's `high-performance` power preference, but [that is only a hint](https://registry.khronos.org/webgl/specs/latest/1.0/#5.2) and the browser may still select integrated graphics.
+
+On Windows with multiple GPUs, the following launches a local copy in a separate Edge profile using Chromium's [`--force-high-performance-gpu` switch](https://chromium.googlesource.com/chromium/src/+/refs/heads/main/gpu/config/gpu_switches.cc). Run it from the repository root:
+
+```powershell
+$edge = Join-Path ${env:ProgramFiles(x86)} 'Microsoft\Edge\Application\msedge.exe'
+$profile = Join-Path $env:TEMP ("hogwarts-flyover-gpu-" + [guid]::NewGuid())
+$page = (Resolve-Path .\hogwarts-flyover.html).Path
+& $edge "--user-data-dir=$profile" --force-high-performance-gpu $page
+```
+
+The separate profile starts a new browser instance rather than reusing one launched without the switch. It leaves the normal Edge profile and Windows settings unchanged; its profile files remain in the temporary directory after closing. Verify the intended adapter in **Stats**. In local tests this selected the NVIDIA RTX adapter without changing resolution, shader quality, or scene detail; selection and performance still depend on the machine and browser.
 
 ## Rebuild or rewrite
 
