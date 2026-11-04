@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Hogwarts — raymarched flyover of the grounds (Strathconon, Ross-shire)</title>
+<title>Hogwarts — raymarched flyover of the grounds</title>
 <style>
   html, body { margin: 0; height: 100%; background: #0b0d10; overflow: hidden; font: 13px/1.35 "Segoe UI", system-ui, sans-serif; color: #eef0f2; }
   canvas { position: fixed; inset: 0; width: 100vw; height: 100vh; display: block; cursor: grab; }
@@ -75,12 +75,12 @@
 </head>
 <body>
 <canvas id="c" tabindex="0" aria-label="Hogwarts flyover scene; open Controls for keyboard shortcuts"></canvas>
-<div id="load"><div class="t">Hogwarts, Strathconon</div><div class="m" id="loadMsg">Decoding terrain…</div></div>
+<div id="load"><div class="t" id="load-title">Hogwarts</div><div class="m" id="loadMsg">Decoding terrain…</div></div>
 <div class="hud" id="topshade"></div>
 <header id="topbar">
   <div class="hud" id="title">
     <h1>Hogwarts</h1>
-    <div class="sub">Strathconon, Scotland</div>
+    <div class="sub" id="glen">Scotland</div>
   </div>
   <div id="panel">
     <nav class="toolbar" aria-label="Site information">
@@ -103,12 +103,12 @@
   <div id="stats"><div id="frame-stats"></div><div id="gpu-info"></div></div>
 </details>
 <footer id="credits">
-  White Hound · Copernicus DEM · <a href="https://s2maps.eu/" target="_blank" rel="noopener">© EOX / Sentinel-2</a> · <a href="https://www.openstreetmap.org/copyright" target="_blank" rel="noopener">© OpenStreetMap contributors</a> · <button type="button" data-dialog="credits-dialog">Credits</button>
+  White Hound · <span id="dem-short"></span> · <a href="https://s2maps.eu/" target="_blank" rel="noopener">© EOX / Sentinel-2</a> · <a href="https://www.openstreetmap.org/copyright" target="_blank" rel="noopener">© OpenStreetMap contributors</a> · <button type="button" data-dialog="credits-dialog">Credits</button>
 </footer>
 
 <dialog id="about" aria-labelledby="about-title">
   <div class="dialog-head"><h2 id="about-title">About this flyover</h2><button type="button" data-close autofocus>Close</button></div>
-  <p>A seven-minute journey through Hogwarts, its grounds, Hogsmeade and the Forbidden Forest, imagined within real Scottish mountain scenery.</p>
+  <p>A journey of about nine and a half minutes through Hogwarts, its grounds, Hogsmeade and the Forbidden Forest, imagined within real Scottish mountain scenery.</p>
   <p>The layout follows <a href="https://web.archive.org/web/20261008141630/http://members.madasafish.com/~cj_whitehound/Fanfic/map_of_Hogwarts.htm" target="_blank" rel="noopener">White Hound's <i>The Map of Hogwarts</i></a>, not the films' castle. This is one interpretation, not a definitive architectural plan or a discovered castle location.</p>
   <p id="location-note"></p>
   <p>The landscape combines real elevation and satellite data with modeled grounds, buildings and vegetation. The date controls the sunlight; the scene includes features from different books.</p>
@@ -135,7 +135,7 @@
 <dialog id="credits-dialog" aria-labelledby="credits-title">
   <div class="dialog-head"><h2 id="credits-title">Sources and credits</h2><button type="button" data-close autofocus>Close</button></div>
   <p>
-  Layout: White Hound, <i>The Map of Hogwarts</i> (essay and maps), georeferenced onto real terrain. Terrain: Copernicus GLO-30 DEM © DLR e.V. 2010–2014 and © Airbus Defence and Space GmbH 2014–2018, provided under COPERNICUS by the European Union and ESA.
+  Layout: White Hound, <i>The Map of Hogwarts</i> (essay and maps), georeferenced onto real terrain. Terrain: <span id="dem-credit"></span>
   </p>
   <p>Imagery: Sentinel-2 cloudless 2023 by <a href="https://s2maps.eu/" target="_blank" rel="noopener">EOX IT Services GmbH</a> (contains modified Copernicus Sentinel data 2023), <a href="https://creativecommons.org/licenses/by-nc-sa/4.0/" target="_blank" rel="noopener">CC BY-NC-SA 4.0</a>. Embedded imagery was resampled, approximately de-shaded and JPEG-encoded.</p>
   <p>Lochs and rivers: <a href="https://www.openstreetmap.org/copyright" target="_blank" rel="noopener">© OpenStreetMap contributors</a> (<a href="https://opendatacommons.org/licenses/odbl/1-0/" target="_blank" rel="noopener">ODbL</a>).</p>
@@ -144,10 +144,15 @@
 
 <script id="fragSrc" type="x-shader/x-fragment">/*__FRAG__*/</script>
 <script>/*__DATA__*/</script>
+<script>/*__MESHOPT__*/</script>
+<script>/*__MESHES__*/</script>
 <script>
 "use strict";
 const $ = (id) => document.getElementById(id);
 const M = DATA.meta, X = M.extras;
+document.title = `Hogwarts — raymarched flyover of the grounds (${X.glen}, Ross-shire)`;
+$("load-title").textContent = `Hogwarts, ${X.glen}`;
+$("glen").textContent = `${X.glen}, Scotland`;
 const Q = new URLSearchParams(location.search);
 const loadMsg = (s) => { $("loadMsg").textContent = s; };
 const fail = (s) => { $("load").classList.add("err"); loadMsg(s); console.error(s); };
@@ -157,6 +162,26 @@ function b64bytes(s) { const b = atob(s), n = b.length, u = new Uint8Array(n); f
 async function inflate(b64) {
   const st = new Blob([b64bytes(b64)]).stream().pipeThrough(new DecompressionStream("deflate"));
   return new Uint8Array(await new Response(st).arrayBuffer());
+}
+// the mesh payload's raw streams for `nv` vertices and `nt` triangles (build_meshes.decode_streams does the same):
+// positions come through meshoptimizer's vertex codec as 8-byte vertices whose fourth u16 is the vertex's thin radius
+// (mesh_thin.py), indices through its index-sequence codec, normals and (material, aux) pairs raw. The vertex codec
+// cannot vouch for its count, so the raw streams pin it first.
+async function meshStreams(payload, nv, nt) {
+  const [wide, nrm, attr, packedIdx] = await Promise.all(["pos", "nrm", "attr", "idx"].map((k) => inflate(payload.streams[k])));
+  if (nrm.length !== 2 * nv || attr.length !== 2 * nv) throw new Error("mesh streams do not match their chunks");
+  if (!MeshoptDecoder.supported) throw new Error("this browser has no WebAssembly to decode the meshes");
+  await MeshoptDecoder.ready;
+  const pos8 = new Uint8Array(8 * nv), idx = new Uint8Array(6 * nt);
+  try {
+    MeshoptDecoder.decodeVertexBuffer(pos8, nv, 8, wide);
+    MeshoptDecoder.decodeIndexSequence(idx, 3 * nt, 2, packedIdx);
+  } catch (e) { throw new Error(`mesh streams do not match their chunks (${e.message})`); }
+  const w = new Uint16Array(pos8.buffer), p = new Uint16Array(3 * nv), thin = new Uint16Array(nv);
+  for (let v = 0; v < nv; v++) {
+    p[3 * v] = w[4 * v]; p[3 * v + 1] = w[4 * v + 1]; p[3 * v + 2] = w[4 * v + 2]; thin[v] = w[4 * v + 3];
+  }
+  return { pos: new Uint8Array(p.buffer), nrm, attr, idx, thin: new Uint8Array(thin.buffer) };
 }
 // planar predictor + zigzag, lo/hi byte planes
 function decH16(e, raw) {

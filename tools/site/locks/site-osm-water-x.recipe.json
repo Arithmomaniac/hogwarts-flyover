@@ -1,0 +1,6 @@
+{
+ "body": "way[\"natural\"=\"water\"](57.1806,-5.7513,57.9012,-4.4021);relation[\"natural\"=\"water\"](57.1806,-5.7513,57.9012,-4.4021);way[\"waterway\"=\"riverbank\"](57.1806,-5.7513,57.9012,-4.4021);way[\"natural\"=\"coastline\"](57.1806,-5.7513,57.9012,-4.4021);way[\"waterway\"~\"^(river|stream)$\"](57.4249,-5.2940,57.6588,-4.8584);",
+ "date": "2026-10-31T00:00:00Z",
+ "file": "osm_water_wide.json",
+ "kind": "Overpass"
+}

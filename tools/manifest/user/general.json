@@ -1,0 +1,23 @@
+{
+  "quotes": [
+    "Please don't pverride white hound conclutions without running by me, btw",
+    "if the loop is plausibly tight, there's nothing that says the train can't go slow, right? I'll leave that up to you.",
+    "You can change the water layers, that's fine.",
+    "what's the realistic color for Windows at Dusk? Is there anything more you could do about it?"
+  ],
+  "choices": [
+    "scope: All buildings and named exterior objects: castle, greenhouses, village/station, hut, train, ship, Quidditch structures, walls/gates, tomb and a distinctive Willow; ordinary trees/terrain stay as-is",
+    "detail: Detailed exteriors, static train/ship/Willow; no explorable interiors or new animations",
+    "performance: Allow up to 10% higher frame time for clearly better detail at the default half-resolution setting; check both GPUs",
+    "visual_choices: Use these conservative, documented defaults; ask only about source conflicts or major departures",
+    "greenhouse_glass: See-through tinted panes, with visible framing, benches and plants; no elaborate refraction",
+    "gof: exclude",
+    "boats: exclude",
+    "court: glasshouse",
+    "guards_vans: two-vans",
+    "masonry_colour: warm",
+    "astronomy_doors: keep",
+    "railway_profile: regrade"
+  ],
+  "visual_defaults_offered": "Proposed defaults: warm brown-grey castle; battlements on Ravenclaw; small projecting Scottish-style turrets; a broad timber-clad hut matching White Hound’s drawing and dimensions; a generic scarlet tender locomotive, not the film engine. Document inferred details and show them together in the asset previews."
+}

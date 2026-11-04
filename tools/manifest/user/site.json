@@ -1,0 +1,16 @@
+{
+  "quotes": [
+    "not all of the things mentioned by Whitehound are actually necessary for compliance with the book",
+    "clear as much as you need in order to actually match the reasoning he provides",
+    "preferably you should just say the forest doesn't go there but if that doesn't match the reasoning then yeah you should clear",
+    "The problem here is that the train is supposed to only show a hogwarts coming into view at a specific point.",
+    "the clearings, wherever they are, are large enough to be plausible and not look suspiciously like cutouts created just for line of sight purposes"
+  ],
+  "choices": [
+    "site: Move the scene to site X: TM (-4550, 4675), 57.5420°N 5.0760°W, NH 1599 5437, with the lake at 284 m and the castle on a crag or mound",
+    "gates_cabin: (c) Raise Hagrid's cabin's hollow, about 2.66 Mm³, to a terrace 3.8 m above the gates, with the drive rising gently to it",
+    "willow_site: (a) The Willow on its own knoll, about 0.51 Mm³, standing 13.5 m above the lake, plus a tree-free sight corridor about 20 m wide from the northern greenhouses through the woods",
+    "book_evidence_rule: Departures from White Hound's conclusions or drawings, and landscape deviations, are fine; nothing may directly contradict the quoted book evidence, and only such contradictions go to the user",
+    "drive_dip: (4) No change: the drive keeps its dip by the lake; 'the bottom of the drive' is its far end, and the gates came into view as you top the cabin's terrace"
+  ]
+}

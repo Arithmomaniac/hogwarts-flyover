@@ -1,0 +1,20 @@
+{
+ "kind": "Tiles",
+ "ranges": [
+  [
+   14,
+   7951,
+   7970,
+   4964,
+   4983
+  ],
+  [
+   11,
+   991,
+   998,
+   618,
+   625
+  ]
+ ],
+ "url": "https://tiles.maps.eox.at/wmts/1.0.0/s2cloudless-2023_3857/default/g/{z}/{y}/{x}.jpg"
+}

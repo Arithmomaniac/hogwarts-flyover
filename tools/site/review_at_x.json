@@ -1,0 +1,18 @@
+{
+ "about": "The location review's results at site X: files/location-review/results/named_sites.json in Copilot session 66bca34b-296f-4bbc-a31f-5f89354e4d00, 'Broad search site #1, best within 500 m', measured on GLO-30 at 10 m spacing with the lake at its best level. Real-world measurements at a fixed place, so they do not move with the scene's datum.",
+ "results": {
+  "L": 283.6065,
+  "Ls": 293.6065,
+  "set_0606": 23.2667,
+  "set_0621": 24.0333,
+  "rise_0331": 44.4667,
+  "rise_0504": 45.95,
+  "rise_0622": 8.5667,
+  "north_max": 4.3245,
+  "south_max": 6.4248,
+  "o_hagrid": 26.2933,
+  "village_slope": 2.0931,
+  "V_total": 4521296.6,
+  "max_fill": 82.7302
+ }
+}

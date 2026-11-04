@@ -1,0 +1,764 @@
+{
+ "files": {
+  "raw/Location_Location.htm": {
+   "size": 9557,
+   "sha256": "20d7b96ca280cc599aca9a876513cdf9e9578d463940fdf621801cb914f44b47",
+   "url": "Fanfic/Location_Location.htm"
+  },
+  "raw/map_of_Hogwarts.htm": {
+   "size": 9897,
+   "sha256": "3be90d5aa00f505343cc5dd9853e0781b1af01ac2f76af2c2d48db6b6b631789",
+   "url": "Fanfic/map_of_Hogwarts.htm"
+  },
+  "raw/map_of_Hogwarts__castle.htm": {
+   "size": 229320,
+   "sha256": "650ab1d83ea5d74a6c0d3690f4644ae4d61a94157cfd99f70b9b4449a0a7ebe8",
+   "url": "Fanfic/map_of_Hogwarts/castle.htm"
+  },
+  "raw/map_of_Hogwarts__castle_routes.htm": {
+   "size": 8430,
+   "sha256": "d0c4b4d851fc20c863b64382d9b78215c460c2b9fe38d4fb93f55177912c3921",
+   "url": "Fanfic/map_of_Hogwarts/castle_routes.htm"
+  },
+  "raw/map_of_Hogwarts__FF_frame.htm": {
+   "size": 2886,
+   "sha256": "4ff7b2300068fbf460750d74ca4736c9f06de026c4ebd242000e7d0a0b62d6bd",
+   "url": "Fanfic/map_of_Hogwarts/FF_frame.htm"
+  },
+  "raw/map_of_Hogwarts__forest.htm": {
+   "size": 158132,
+   "sha256": "828f4e0e71f0cca60f67345d9bec456d2ba4ad392dd31a235dfa3e090841432e",
+   "url": "Fanfic/map_of_Hogwarts/forest.htm"
+  },
+  "raw/map_of_Hogwarts__forest_map.htm": {
+   "size": 15740,
+   "sha256": "b959d3d6c78da4e71d13292382bce43c25f2ffdefdfeff477e74052097726592",
+   "url": "Fanfic/map_of_Hogwarts/forest_map.htm"
+  },
+  "raw/map_of_Hogwarts__grounds.htm": {
+   "size": 631971,
+   "sha256": "8323521f9677b4fc95f10c55931b1ea6c1fc577b9275386f1d0f89d6e831c80f",
+   "url": "Fanfic/map_of_Hogwarts/grounds.htm"
+  },
+  "raw/map_of_Hogwarts__grounds_frame.htm": {
+   "size": 2988,
+   "sha256": "fa3a3473c248917cdd5cbc62d8e949f3df815e83908303222ad32e8090cec9ff",
+   "url": "Fanfic/map_of_Hogwarts/grounds_frame.htm"
+  },
+  "raw/map_of_Hogwarts__grounds_map.htm": {
+   "size": 16659,
+   "sha256": "85925174af4571338f9c894c27d092b1f59118300114edb93dc4a43d3778e391",
+   "url": "Fanfic/map_of_Hogwarts/grounds_map.htm"
+  },
+  "raw/map_of_Hogwarts__Hogsmeade.htm": {
+   "size": 365350,
+   "sha256": "52008a9324cb296a2215eac1d9c6e90e2ce56fc69f3d56a2663c094606f5ed5a",
+   "url": "Fanfic/map_of_Hogwarts/Hogsmeade.htm"
+  },
+  "raw/map_of_Hogwarts__Hogsmeade_frame.htm": {
+   "size": 2877,
+   "sha256": "8800c9d02461de31e0f92beae139fa33414036004d8d2d94649a1293e1df23c1",
+   "url": "Fanfic/map_of_Hogwarts/Hogsmeade_frame.htm"
+  },
+  "raw/map_of_Hogwarts__Hogsmeade_map.htm": {
+   "size": 20747,
+   "sha256": "be5946bf28144b63c338b4d02ac33a64794b86eb83fc2d14cc6e391823f1f9b3",
+   "url": "Fanfic/map_of_Hogwarts/Hogsmeade_map.htm"
+  },
+  "raw/map_of_Hogwarts__introduction.htm": {
+   "size": 38082,
+   "sha256": "505924577a83b7c1a501e603588c00d11a80c4a9ebc4fb32e18bc4a84db7b3eb",
+   "url": "Fanfic/map_of_Hogwarts/introduction.htm"
+  },
+  "raw/map_of_Hogwarts__journeys.htm": {
+   "size": 11132,
+   "sha256": "a05f49bfde25016fa804d1d6604926ee80d7df56adeaedfcbe1652d31eaebdc9",
+   "url": "Fanfic/map_of_Hogwarts/journeys.htm"
+  },
+  "raw/map_of_Hogwarts__location.htm": {
+   "size": 107004,
+   "sha256": "6b58b95b8a6b46676a8696cfea135ef9581854d6d537cabc20db295c4530ca78",
+   "url": "Fanfic/map_of_Hogwarts/location.htm"
+  },
+  "raw/map_of_Hogwarts__setting.htm": {
+   "size": 135175,
+   "sha256": "a2e910bed79cae0bd923df0c54b691427bf0396b6e7994b316925afba8494b0e",
+   "url": "Fanfic/map_of_Hogwarts/setting.htm"
+  },
+  "txt/Location_Location.htm.txt": {
+   "size": 2574,
+   "sha256": "5b9b5126bcdac7d6f7a18df763204ca9ce67e2091b25d25a54de3e77bc5fbbe9",
+   "url": null
+  },
+  "txt/map_of_Hogwarts.htm.txt": {
+   "size": 2918,
+   "sha256": "1a0346e27058c65402c4a9579a196e62022683922d0a14a8b38b738e341a9687",
+   "url": null
+  },
+  "txt/map_of_Hogwarts__castle.htm.txt": {
+   "size": 138640,
+   "sha256": "9d12745edb2ab149263e649dae18e4b6becb1ce10876bccdaf1079010042cac4",
+   "url": null
+  },
+  "txt/map_of_Hogwarts__castle_routes.htm.txt": {
+   "size": 825,
+   "sha256": "00961e3231f2443807846e93eb55c69bcad7c5d7570776eaa8ce5f62034582b7",
+   "url": null
+  },
+  "txt/map_of_Hogwarts__forest.htm.txt": {
+   "size": 95950,
+   "sha256": "1280e7ff0c45d109666db2d5a7b84f76aa8b4eaa3c20a6e9ce9eb4bf921aedf8",
+   "url": null
+  },
+  "txt/map_of_Hogwarts__grounds.htm.txt": {
+   "size": 406222,
+   "sha256": "2318026958b7d20b2e73c12dcb7ed811fc9f6e79c88eda0f74dad0b673169116",
+   "url": null
+  },
+  "txt/map_of_Hogwarts__Hogsmeade.htm.txt": {
+   "size": 227759,
+   "sha256": "2d28c7058ae4d094ad6958c9d7b0f2858c0e026abc42b78a4fc317a035cf08ee",
+   "url": null
+  },
+  "txt/map_of_Hogwarts__introduction.htm.txt": {
+   "size": 15214,
+   "sha256": "34715d5b092ff69b61d3d84bcc240da7c1bb76fd25bc0b2a4a1cd753e2ecf2b6",
+   "url": null
+  },
+  "txt/map_of_Hogwarts__journeys.htm.txt": {
+   "size": 2351,
+   "sha256": "64fca7b99957980f3606c2577e66b9b0b87fe896ab09ffb0731d19e7164e8f85",
+   "url": null
+  },
+  "txt/map_of_Hogwarts__location.htm.txt": {
+   "size": 56573,
+   "sha256": "a29126b853e0caf3610195b0ef0449611ebe194ab0d3289d5df9c1872f7fa2cc",
+   "url": null
+  },
+  "txt/map_of_Hogwarts__setting.htm.txt": {
+   "size": 68125,
+   "sha256": "72620f76288af1ca895233f304efd367242265b40b1fd044b92f6b535f7c0037",
+   "url": null
+  },
+  "img/castle_graphic.gif": {
+   "size": 6600,
+   "sha256": "8935b1d224f5e817ada5b5caf11e7e84a73ebcfd33b83e6f8b87e411c6e4eb26",
+   "url": "Fanfic/map_of_Hogwarts/artwork/castle_graphic.gif"
+  },
+  "img/castle_plan.gif": {
+   "size": 21783,
+   "sha256": "7ac4c004f11b1bc31dc864a19fa52a94b61d953753b9a81ef510e8e5709e4848",
+   "url": "Fanfic/map_of_Hogwarts/artwork/castle_plan.gif"
+  },
+  "img/FF_map_labelled.gif": {
+   "size": 3979348,
+   "sha256": "5cbed6817ee6e52b7da8345627e57c1d1cfcbb5b5c426dcc875827b1e2442e09",
+   "url": "Fanfic/map_of_Hogwarts/artwork/FF_map_labelled.gif"
+  },
+  "img/FF_map_unlabelled.gif": {
+   "size": 3949725,
+   "sha256": "b575821e1a92e418d8f938578308a32d62438b88aa28f7b080d631ddb2dcd300",
+   "url": "Fanfic/map_of_Hogwarts/artwork/FF_map_unlabelled.gif"
+  },
+  "img/Hogsmeade_map_labelled.gif": {
+   "size": 1041693,
+   "sha256": "8cd03cc34a61e940f9bb287319238293a08e3ab8fc730b958507305a1e670403",
+   "url": "Fanfic/map_of_Hogwarts/artwork/Hogsmeade_map_labelled.gif"
+  },
+  "img/Hogsmeade_map_unlabelled.gif": {
+   "size": 1014434,
+   "sha256": "cd36d2726d16ec82183069c9c31eea66acaa329235d4b0389ea1a594bd652db4",
+   "url": "Fanfic/map_of_Hogwarts/artwork/Hogsmeade_map_unlabelled.gif"
+  },
+  "img/Hogwarts_journey.jpg": {
+   "size": 737709,
+   "sha256": "b0d3a21e38fe1dd42e390bf4dd18dc03356955f895f64c1e185384b6550cf9e2",
+   "url": "Fanfic/map_of_Hogwarts/artwork/Hogwarts_journey.jpg"
+  },
+  "img/Hogwarts_map_labelled.gif": {
+   "size": 1447474,
+   "sha256": "dd6c05a42d6811f2e8e07a58d62b9a8190d15c5b54d25d4fce39c67561b0cdbe",
+   "url": "Fanfic/map_of_Hogwarts/artwork/Hogwarts_map_labelled.gif"
+  },
+  "img/Hogwarts_map_unlabelled.gif": {
+   "size": 1409901,
+   "sha256": "70989b630d71c13078ce385d96868299973449e6c53f8424881cbd4375e0750c",
+   "url": "Fanfic/map_of_Hogwarts/artwork/Hogwarts_map_unlabelled.gif"
+  },
+  "img/JKR_map_cleaned.gif": {
+   "size": 199034,
+   "sha256": "e197aac014338583c10e932e6d5b082c726884faed97ad1f30b1f8618cbe7e47",
+   "url": "Fanfic/map_of_Hogwarts/artwork/JKR_map_cleaned.gif"
+  },
+  "img/lake_partly_at_side.jpg": {
+   "size": 18039,
+   "sha256": "29d629898166f14a1a15d2099307a9101b47b18a2141a9c8a2d58a9a32d72f0c",
+   "url": "Fanfic/map_of_Hogwarts/artwork/lake_partly_at_side.jpg"
+  },
+  "img/mapB_with_Sirius.jpg": {
+   "size": 18299,
+   "sha256": "b3b86b34a0ed463e7b7e524600ab1079a1f7c7a15b043bc96079eb6fccc55581",
+   "url": "Fanfic/map_of_Hogwarts/artwork/mapB_with_Sirius.jpg"
+  },
+  "img/outlines_of_grounds.jpg": {
+   "size": 33584,
+   "sha256": "fcc573b1c3f92610370657c1d3a22f15ec32fe1bd59a62c5aefeca6f870c02ee",
+   "url": "Fanfic/map_of_Hogwarts/artwork/outlines_of_grounds.jpg"
+  },
+  "img/side_lake.jpg": {
+   "size": 7701,
+   "sha256": "4f81bb7a8ead19d784a1df5a89d5c4a9cd28d3cff78cb98c60a31fccdfba694e",
+   "url": "Fanfic/map_of_Hogwarts/artwork/side_lake.jpg"
+  },
+  "legend/sample_building.gif": {
+   "size": 2035,
+   "sha256": "2ea3634748d01bd128ae442173dafe73404eaefd59b1ed1d6c065b435b03dd90",
+   "url": "Fanfic/map_of_Hogwarts/artwork/sample_building.gif"
+  },
+  "legend/sample_bushes.gif": {
+   "size": 1975,
+   "sha256": "ed8c458e71d41ee3a2ac5c6ae334fe6c102627d31399a0d9ea7e2b7dc87191d2",
+   "url": "Fanfic/map_of_Hogwarts/artwork/sample_bushes.gif"
+  },
+  "legend/sample_bushes_small-scale.gif": {
+   "size": 1820,
+   "sha256": "71fe22eda2b99a62ce170cd2b8f7bc71ca8af6cfc056573a9dbfa556690a17e0",
+   "url": "Fanfic/map_of_Hogwarts/artwork/sample_bushes_small-scale.gif"
+  },
+  "legend/sample_dense_trees.gif": {
+   "size": 2176,
+   "sha256": "74416a28d6a04484b464748db34e65a46776dbc3aadc87aede7a7a9ec5ed4482",
+   "url": "Fanfic/map_of_Hogwarts/artwork/sample_dense_trees.gif"
+  },
+  "legend/sample_earth.gif": {
+   "size": 2251,
+   "sha256": "50068932619e1965099aba3285aa5989a3cad1ed6fbc0df56fa0d9d612cef583",
+   "url": "Fanfic/map_of_Hogwarts/artwork/sample_earth.gif"
+  },
+  "legend/sample_scrubland.gif": {
+   "size": 2009,
+   "sha256": "f76a71d4120abfdd641688ebc3679db5bcebca04489ab5db356c1734c0b3c6c7",
+   "url": "Fanfic/map_of_Hogwarts/artwork/sample_scrubland.gif"
+  },
+  "legend/sample_scrubland_small-scale.gif": {
+   "size": 2143,
+   "sha256": "16dd1650ccc7acdf36c8190a56574a08879e23959261974e8e44699f746cb60b",
+   "url": "Fanfic/map_of_Hogwarts/artwork/sample_scrubland_small-scale.gif"
+  },
+  "legend/sample_smooth_land.gif": {
+   "size": 1611,
+   "sha256": "1e3d41235e383a6d8eb26f696e164b52850706d664a5d614e292c0841ceab63b",
+   "url": "Fanfic/map_of_Hogwarts/artwork/sample_smooth_land.gif"
+  },
+  "legend/sample_sparse_trees.gif": {
+   "size": 1840,
+   "sha256": "b47166b9797a527f3fa675299910bc0adc7785cb7580ed2445fd77128a64226d",
+   "url": "Fanfic/map_of_Hogwarts/artwork/sample_sparse_trees.gif"
+  },
+  "legend/sample_sparse_trees_small-scale.gif": {
+   "size": 1844,
+   "sha256": "a7ebda8c33a902f7e3fee944f7ced8c8c4327c03f33e22335f8306cfb943905b",
+   "url": "Fanfic/map_of_Hogwarts/artwork/sample_sparse_trees_small-scale.gif"
+  },
+  "legend/sample_undergrowth.gif": {
+   "size": 2821,
+   "sha256": "d06af878f9ecd554bef659c7eca0df075a7e8069c82a343634b96eb87ba2317b",
+   "url": "Fanfic/map_of_Hogwarts/artwork/sample_undergrowth.gif"
+  },
+  "legend/sample_undergrowth_small-scale.gif": {
+   "size": 1855,
+   "sha256": "82a7e43a76518eef59777303a095733c6158b1666ccbbe9529e17b0a0cbdfb3c",
+   "url": "Fanfic/map_of_Hogwarts/artwork/sample_undergrowth_small-scale.gif"
+  },
+  "legend/sample_water.gif": {
+   "size": 2201,
+   "sha256": "1594ab0a283d19cb90655a9697af9b2dd86e6f9be5acb7d4a4b0f4920fcaa10d",
+   "url": "Fanfic/map_of_Hogwarts/artwork/sample_water.gif"
+  },
+  "legend/sample_wooden.gif": {
+   "size": 1373,
+   "sha256": "8050973f5ee3a3212ef66b4ddf9138c78a190e85642e832b7b1400668a2fd9e0",
+   "url": "Fanfic/map_of_Hogwarts/artwork/sample_wooden.gif"
+  },
+  "whref/Auchindrain.jpg": {
+   "size": 252844,
+   "sha256": "e06ab8a9c37590f1783113a381c4b95f46d05d5f5a12e99cce728d51e08a44e5",
+   "url": "Fanfic/map_of_Hogwarts/artwork/Auchindrain.jpg"
+  },
+  "whref/Balquhidder_kirk.jpg": {
+   "size": 105823,
+   "sha256": "fc21dbb7875a2ef663a0c5240997bf9d4db205f5db5943f93e1d414d8ef73163",
+   "url": "Fanfic/map_of_Hogwarts/artwork/Balquhidder_kirk.jpg"
+  },
+  "whref/Balquhidder_kirk_old.jpg": {
+   "size": 126440,
+   "sha256": "25b2b50de774b0149f5eb98218e06000a5e1dfc80e4734dbad69d8a72920032f",
+   "url": "Fanfic/map_of_Hogwarts/artwork/Balquhidder_kirk_old.jpg"
+  },
+  "whref/Beauxbatons.jpg": {
+   "size": 176774,
+   "sha256": "56d3813ddd86e23515c38cba96f04c0f96d65543e1305134c2d9d87096c2dac7",
+   "url": "Fanfic/map_of_Hogwarts/artwork/Beauxbatons.jpg"
+  },
+  "whref/blockdiag_angled_to_sun.jpg": {
+   "size": 33408,
+   "sha256": "65f3d71f3ce85c4bf8c238f0a3d6772d8c975c991fc187cc5e3a50fbd6f7a4c2",
+   "url": "Fanfic/map_of_Hogwarts/artwork/blockdiag_angled_to_sun.jpg"
+  },
+  "whref/blockdiag_approach_front.jpg": {
+   "size": 24901,
+   "sha256": "8f45cc1462a64a0c11bf8a202a8bfd54da6312743e436ed6eb37726f2c7b0036",
+   "url": "Fanfic/map_of_Hogwarts/artwork/blockdiag_approach_front.jpg"
+  },
+  "whref/blockdiag_approach_side.jpg": {
+   "size": 22241,
+   "sha256": "9dc3bba856cf28cbe65170a3e84ad99349639089ee93373dd2f7b82e8ccdb342",
+   "url": "Fanfic/map_of_Hogwarts/artwork/blockdiag_approach_side.jpg"
+  },
+  "whref/blockdiag_approach_wing.jpg": {
+   "size": 21771,
+   "sha256": "90464a95aca2fe338b75be01b0d02c951e799de8fbd6e9859ddeaef3a23304db",
+   "url": "Fanfic/map_of_Hogwarts/artwork/blockdiag_approach_wing.jpg"
+  },
+  "whref/blockdiag_Borthwick.jpg": {
+   "size": 11546,
+   "sha256": "9735caf902f89a679770a301d0cd60c2a1f8a05309e17d4cd6eb5f199a5aa158",
+   "url": "Fanfic/map_of_Hogwarts/artwork/blockdiag_Borthwick.jpg"
+  },
+  "whref/blockdiag_extended_centre.jpg": {
+   "size": 26109,
+   "sha256": "9f2ac5390e1653318a7c81399aa1e690df9c6b5111684dac0e0a48ff7fcedf6c",
+   "url": "Fanfic/map_of_Hogwarts/artwork/blockdiag_extended_centre.jpg"
+  },
+  "whref/blockdiag_N+S-pointing_wings.jpg": {
+   "size": 31358,
+   "sha256": "bbe68f30aa006c7245c69812834099468f4a2bff9635ee9f5dcfcfe9860ad348",
+   "url": "Fanfic/map_of_Hogwarts/artwork/blockdiag_N+S-pointing_wings.jpg"
+  },
+  "whref/blockdiag_N-pointing_wing.jpg": {
+   "size": 25972,
+   "sha256": "470cfbf5a1b10479afb43e92788ea3a1dcb616cba7fad1d07e3b69ca798c4ae4",
+   "url": "Fanfic/map_of_Hogwarts/artwork/blockdiag_N-pointing_wing.jpg"
+  },
+  "whref/blockdiag_N-pointing_wings.jpg": {
+   "size": 36511,
+   "sha256": "8f0f585071cb83437fee08593eae954b6c6199a39e232e95ff3438cd78b0fe85",
+   "url": "Fanfic/map_of_Hogwarts/artwork/blockdiag_N-pointing_wings.jpg"
+  },
+  "whref/blockdiag_reflexed_wing.jpg": {
+   "size": 21349,
+   "sha256": "0337fbfc1d592ca14a81bda291ce9a79880d6a6d087a22bc8b2e13158ecac7e3",
+   "url": "Fanfic/map_of_Hogwarts/artwork/blockdiag_reflexed_wing.jpg"
+  },
+  "whref/blockdiag_simple.jpg": {
+   "size": 13525,
+   "sha256": "4c4ca0ed22b8b5684b2f2d2c03bf8aae886b2b8d6ce3a581bea2602033bae629",
+   "url": "Fanfic/map_of_Hogwarts/artwork/blockdiag_simple.jpg"
+  },
+  "whref/blockdiag_slanted_centre.jpg": {
+   "size": 20942,
+   "sha256": "76101af965688bd1502e8e863c6048d362a90f60d80019c69697faf5870f4515",
+   "url": "Fanfic/map_of_Hogwarts/artwork/blockdiag_slanted_centre.jpg"
+  },
+  "whref/blockdiag_with_broomshed.jpg": {
+   "size": 38040,
+   "sha256": "220bc3669dfd32ffff7161394a54cc56cf905096ab3413a1f3cc7fce04ce92c3",
+   "url": "Fanfic/map_of_Hogwarts/artwork/blockdiag_with_broomshed.jpg"
+  },
+  "whref/Brechin_lamp.jpg": {
+   "size": 41331,
+   "sha256": "7d86ab285bdffbd1afe8bf60bc570fd74e0cf43dd633de80ccca8eab08ccfdf2",
+   "url": "Fanfic/map_of_Hogwarts/artwork/Brechin_lamp.jpg"
+  },
+  "whref/cabin.jpg": {
+   "size": 16060,
+   "sha256": "1a7f99d75733f2ded7a617041803aaae277f85d815c39eb8296c9684164fa779",
+   "url": "Fanfic/map_of_Hogwarts/artwork/cabin.jpg"
+  },
+  "whref/cabin_front.jpg": {
+   "size": 19617,
+   "sha256": "7b6a9a5f6b6ac8f6014be10a4b3a18ab3acd1f023b06164e646f98bef4363288",
+   "url": "Fanfic/map_of_Hogwarts/artwork/cabin_front.jpg"
+  },
+  "whref/Camserney.jpg": {
+   "size": 83301,
+   "sha256": "e5d7eeddcf8defabc7591123f469dca361630c18644fea3a151bda82e6801052",
+   "url": "Fanfic/map_of_Hogwarts/artwork/Camserney.jpg"
+  },
+  "whref/castle_Alnwick.jpg": {
+   "size": 63865,
+   "sha256": "f337dd45e633217c33fed681acbd331a924381f9103094b1e92f8a2a3033b3b3",
+   "url": "Fanfic/map_of_Hogwarts/artwork/castle_Alnwick.jpg"
+  },
+  "whref/castle_Balmoral.jpg": {
+   "size": 9966,
+   "sha256": "eb66a933a39f4635c854948710a87d85ba7a7af7b6ed74a6271ff85663c1448a",
+   "url": "Fanfic/map_of_Hogwarts/artwork/castle_Balmoral.jpg"
+  },
+  "whref/castle_Borthwick.jpg": {
+   "size": 71720,
+   "sha256": "874a220fb0461708ce1c8241376a54b6b15844dc144890544f0354dfe27003ff",
+   "url": "Fanfic/map_of_Hogwarts/artwork/castle_Borthwick.jpg"
+  },
+  "whref/castle_Bothwell.jpg": {
+   "size": 66587,
+   "sha256": "8f9cb0c173b99c92e6179a36acefda8cb218761a508e80bd82048c8989064819",
+   "url": "Fanfic/map_of_Hogwarts/artwork/castle_Bothwell.jpg"
+  },
+  "whref/castle_Caerlaverock.jpg": {
+   "size": 52219,
+   "sha256": "9c10c6118637ef7577ae340899d3c4906d5973bf4e846d38936ee67788c81894",
+   "url": "Fanfic/map_of_Hogwarts/artwork/castle_Caerlaverock.jpg"
+  },
+  "whref/castle_Caldicot_front.jpg": {
+   "size": 784533,
+   "sha256": "7f091efd73d9221755144a54a35401cf730625d8c9463a356b8253e4c4a9639f",
+   "url": "Fanfic/map_of_Hogwarts/artwork/castle_Caldicot_front.jpg"
+  },
+  "whref/castle_Caldicot_inside.jpg": {
+   "size": 89587,
+   "sha256": "d7b477bc7be2ec3840a4b22dd6237414930e9753ecb238bebbb840f675c13ae5",
+   "url": "Fanfic/map_of_Hogwarts/artwork/castle_Caldicot_inside.jpg"
+  },
+  "whref/castle_Cardoness.jpg": {
+   "size": 178194,
+   "sha256": "bba9e10bc44fb912e15aad228cd48101746414214c06d26583a0e0eeb51a54e0",
+   "url": "Fanfic/map_of_Hogwarts/artwork/castle_Cardoness.jpg"
+  },
+  "whref/castle_Chepstow_above.jpg": {
+   "size": 23886,
+   "sha256": "a84947a54132972fba2ed148eb2d7c345e55b37c4da485eca7f42c8486ff3226",
+   "url": "Fanfic/map_of_Hogwarts/artwork/castle_Chepstow_above.jpg"
+  },
+  "whref/castle_Chepstow_cliff.jpg": {
+   "size": 66571,
+   "sha256": "b4ff323f625ace662c56cff06620366b1cbf7a016bebe35b5485e03bacc50f45",
+   "url": "Fanfic/map_of_Hogwarts/artwork/castle_Chepstow_cliff.jpg"
+  },
+  "whref/castle_Chepstow_river.jpg": {
+   "size": 1038955,
+   "sha256": "ca37190ae4e0442c5d8ffa0467a0db9d42f0c4598c8cdc1cc38a1b52e78b3846",
+   "url": "Fanfic/map_of_Hogwarts/artwork/castle_Chepstow_river.jpg"
+  },
+  "whref/castle_Chepstow_water.jpg": {
+   "size": 51279,
+   "sha256": "7561c93c56ac0a30866bd8d31f71aec5565087ee0a31d6f0967bf9b8883a2819",
+   "url": "Fanfic/map_of_Hogwarts/artwork/castle_Chepstow_water.jpg"
+  },
+  "whref/castle_Coch.jpg": {
+   "size": 58761,
+   "sha256": "efca924e03f12083d4dc4d91836684ebe820544566918fbc91c736d987e2fc22",
+   "url": "Fanfic/map_of_Hogwarts/artwork/castle_Coch.jpg"
+  },
+  "whref/castle_Craigievar_dark.jpg": {
+   "size": 28712,
+   "sha256": "38280214ca4501e92bd840db2456cdb9a3116e902e61d0c97f5c7afe0fead2b8",
+   "url": "Fanfic/map_of_Hogwarts/artwork/castle_Craigievar_dark.jpg"
+  },
+  "whref/castle_Craigievar_pale.jpg": {
+   "size": 69473,
+   "sha256": "d5805f84bed7b1dfb688ea335d29cdc2c9eb8981875c0c7db16e4639c804cd46",
+   "url": "Fanfic/map_of_Hogwarts/artwork/castle_Craigievar_pale.jpg"
+  },
+  "whref/castle_Disneyland.jpg": {
+   "size": 185473,
+   "sha256": "f821c4bfa8b275616889fc7e0efda760dac3ce8101c1ed703d23ca7a874b26a5",
+   "url": "Fanfic/map_of_Hogwarts/artwork/castle_Disneyland.jpg"
+  },
+  "whref/castle_Duncraig.jpg": {
+   "size": 73920,
+   "sha256": "7a386c5f75ab7ef8b277ae6d384979ce90d7db442f3c0bc83dab07cce8b8e8a7",
+   "url": "Fanfic/map_of_Hogwarts/artwork/castle_Duncraig.jpg"
+  },
+  "whref/castle_Edinburgh.jpg": {
+   "size": 105175,
+   "sha256": "1f075507acbcd4a2f17f735bc391158d747547194363a0f99f2856b05a707744",
+   "url": "Fanfic/map_of_Hogwarts/artwork/castle_Edinburgh.jpg"
+  },
+  "whref/castle_Edinburgh_dusk.jpg": {
+   "size": 40736,
+   "sha256": "643e847e55d4cb4e92dbb34d2c22c6e603d10f56d78b7e258ea51c687e3d598f",
+   "url": "Fanfic/map_of_Hogwarts/artwork/castle_Edinburgh_dusk.jpg"
+  },
+  "whref/castle_Edinburgh_loch.jpg": {
+   "size": 112700,
+   "sha256": "096c0bf53fed82c5427e937816eb1960db880ea2a4f4971fe82a496a25fdff60",
+   "url": "Fanfic/map_of_Hogwarts/artwork/castle_Edinburgh_loch.jpg"
+  },
+  "whref/castle_Eilean_Donan.jpg": {
+   "size": 90870,
+   "sha256": "b117e2120fffc56198d11c44e495c78cb99a7ceaf413866baa73d00b1aa0e8f5",
+   "url": "Fanfic/map_of_Hogwarts/artwork/castle_Eilean_Donan.jpg"
+  },
+  "whref/castle_Hogwarts_WB.jpg": {
+   "size": 59680,
+   "sha256": "aff8dd74346bf47a8bd9011efb9da3976cc8b21772665889b1a944d6ba246b06",
+   "url": "Fanfic/map_of_Hogwarts/artwork/castle_Hogwarts_WB.jpg"
+  },
+  "whref/castle_Mont_Orgueil.jpg": {
+   "size": 792455,
+   "sha256": "687852a969548cf64bfdf6351a0fac2ee5b44d94ff0bbab4e2dbcf8c8ba80dd4",
+   "url": "Fanfic/map_of_Hogwarts/artwork/castle_Mont_Orgueil.jpg"
+  },
+  "whref/castle_Neuschwanstein.jpg": {
+   "size": 223609,
+   "sha256": "16d8a74c22c0c37609d16c7467dbb666c74343d211c95386447eb5fe60ab76db",
+   "url": "Fanfic/map_of_Hogwarts/artwork/castle_Neuschwanstein.jpg"
+  },
+  "whref/castle_Neuschwanstein_winter.jpg": {
+   "size": 366756,
+   "sha256": "1bc5274fa7af1d7ba32a5ef27ac32dd400af156eb6a0a76b8c0e22724aabd194",
+   "url": "Fanfic/map_of_Hogwarts/artwork/castle_Neuschwanstein_winter.jpg"
+  },
+  "whref/castle_Orford.jpg": {
+   "size": 37411,
+   "sha256": "8a01d18a2fef4415e78ee2fb74df25e829972e33f0eeaed5a6248d0197950bd6",
+   "url": "Fanfic/map_of_Hogwarts/artwork/castle_Orford.jpg"
+  },
+  "whref/castle_St-Fargeau.jpg": {
+   "size": 20778,
+   "sha256": "3d3b59354167319cbf4e5704636cdc4ff385d399670b3f4b6242ca3595172e0f",
+   "url": "Fanfic/map_of_Hogwarts/artwork/castle_St-Fargeau.jpg"
+  },
+  "whref/castle_Stirling.jpg": {
+   "size": 131828,
+   "sha256": "260d2b7a027005dc1a2e10664fe8414b9a658069638f5d9f56bd7c80b1cb8507",
+   "url": "Fanfic/map_of_Hogwarts/artwork/castle_Stirling.jpg"
+  },
+  "whref/castle_Temple_de_Paris.jpg": {
+   "size": 50702,
+   "sha256": "c9c8eba56af0d0df6e14e3cedc57903d392780efbab9b5565d2e40e70cacfd99",
+   "url": "Fanfic/map_of_Hogwarts/artwork/castle_Temple_de_Paris.jpg"
+  },
+  "whref/castle_Torosay.jpg": {
+   "size": 76840,
+   "sha256": "ddf547061de78c87a875efac960b2516042b214a1a4c4e170b162f4d535af93e",
+   "url": "Fanfic/map_of_Hogwarts/artwork/castle_Torosay.jpg"
+  },
+  "whref/changing_rooms.jpg": {
+   "size": 7949,
+   "sha256": "17a2947f5dc7f4b92fe83ee282319d21f73d20a85d49e6dfd309256799fd82af",
+   "url": "Fanfic/map_of_Hogwarts/artwork/changing_rooms.jpg"
+  },
+  "whref/Christmas_Card.jpg": {
+   "size": 51609,
+   "sha256": "b781639bfc58972f1ec9171cd023870e025a933f33bf9805e6a8ee03ee42521d",
+   "url": "Fanfic/map_of_Hogwarts/artwork/Christmas_Card.jpg"
+  },
+  "whref/Comrie.jpg": {
+   "size": 88976,
+   "sha256": "5dd9cad8bb5e8121d4ef43574ebb13832902f9f3695d3e5ac320f8bfaa77a2d6",
+   "url": "Fanfic/map_of_Hogwarts/artwork/Comrie.jpg"
+  },
+  "whref/Coxley_Wick_willows.jpg": {
+   "size": 158216,
+   "sha256": "25bf2ae8d89592355cad2cf3d6e89b93b4675c472b6762a2896c66a55992077b",
+   "url": "Fanfic/map_of_Hogwarts/artwork/Coxley_Wick_willows.jpg"
+  },
+  "whref/Craigellachie.jpg": {
+   "size": 90203,
+   "sha256": "e327c89eb2ffabb17c98169ed9d47aa91ec07c912ea292948a0e609ad6d0d5db",
+   "url": "Fanfic/map_of_Hogwarts/artwork/Craigellachie.jpg"
+  },
+  "whref/Dunkeld.jpg": {
+   "size": 77652,
+   "sha256": "c44ae671b7bea8d0a9e41aa2a807c5bc42422901fa2f00c9b1c543ca720658ad",
+   "url": "Fanfic/map_of_Hogwarts/artwork/Dunkeld.jpg"
+  },
+  "whref/farm_near_Kilbride.jpg": {
+   "size": 99195,
+   "sha256": "82a2d584c66400c4f3aafa7c344e0944480000f97e3fadc66fe6428a660eaeaf",
+   "url": "Fanfic/map_of_Hogwarts/artwork/farm_near_Kilbride.jpg"
+  },
+  "whref/Fortingall.jpg": {
+   "size": 129211,
+   "sha256": "dbe756b04d76d2f67278a8375d877e9988742d5cb8220a05742aa1f68e92b481",
+   "url": "Fanfic/map_of_Hogwarts/artwork/Fortingall.jpg"
+  },
+  "whref/Fortingall2.jpg": {
+   "size": 110772,
+   "sha256": "4ef0970d0a66eb0b5e2d3cb21ed92b74b812949181bbcd36e13b8214a4a71c26",
+   "url": "Fanfic/map_of_Hogwarts/artwork/Fortingall2.jpg"
+  },
+  "whref/Gearranan.jpg": {
+   "size": 156292,
+   "sha256": "ef525288d258faa59f4894f98574de5976cfbfe261bf7ff939af198e0a6a5e57",
+   "url": "Fanfic/map_of_Hogwarts/artwork/Gearranan.jpg"
+  },
+  "whref/German_Advent_Calendar.jpg": {
+   "size": 56069,
+   "sha256": "5c0819edcd369fc4607105db1fb4403490b8a20774ac432d169634e2e56d2bc5",
+   "url": "Fanfic/map_of_Hogwarts/artwork/German_Advent_Calendar.jpg"
+  },
+  "whref/Glenhead.jpg": {
+   "size": 51700,
+   "sha256": "9ee75a9c04d5eeb97deee232c168f06a535f54c404a592cc21278dec32a4923d",
+   "url": "Fanfic/map_of_Hogwarts/artwork/Glenhead.jpg"
+  },
+  "whref/Glenuaig_Lodge.jpg": {
+   "size": 87066,
+   "sha256": "27e9dc2732b049a93648511ea0f6fa9f26a015c4d8d0a0aea845cf0212cc3550",
+   "url": "Fanfic/map_of_Hogwarts/artwork/Glenuaig_Lodge.jpg"
+  },
+  "whref/Golders_Green_willow.jpg": {
+   "size": 321281,
+   "sha256": "3be9a97296fa5967fa5ffb33b74e853eb6cccf1954476200286624ff7a245c23",
+   "url": "Fanfic/map_of_Hogwarts/artwork/Golders_Green_willow.jpg"
+  },
+  "whref/Hogs_Head.gif": {
+   "size": 110836,
+   "sha256": "6ef04a8365cbb997f42118801b19ec0c436c70bb570c754d2406fafed29d29a1",
+   "url": "Fanfic/map_of_Hogwarts/artwork/Hogs_Head.gif"
+  },
+  "whref/JKR_WW.gif": {
+   "size": 10595,
+   "sha256": "e231cf3659e1388100dfb7d78aef74227851364bca8878d31067458829b11ed6",
+   "url": "Fanfic/map_of_Hogwarts/artwork/JKR_WW.gif"
+  },
+  "whref/Killiecrankie.jpg": {
+   "size": 93626,
+   "sha256": "a1869e6c3c9692b94928ca2ddd6d82493005b1b0c3c49239e21ccf080e71b2b0",
+   "url": "Fanfic/map_of_Hogwarts/artwork/Killiecrankie.jpg"
+  },
+  "whref/Kinrossie.jpg": {
+   "size": 189016,
+   "sha256": "8770bfdc81540d5a9619a1c300407fa84b1c6edd3c93cd700a15cb46c1adce2a",
+   "url": "Fanfic/map_of_Hogwarts/artwork/Kinrossie.jpg"
+  },
+  "whref/Loch_na_Tuadh.jpg": {
+   "size": 161897,
+   "sha256": "f63625a1864f48ba7e41e10c604a6d2b644512801484b2a9fcfc51f690ab8857",
+   "url": "Fanfic/map_of_Hogwarts/artwork/Loch_na_Tuadh.jpg"
+  },
+  "whref/Lochalsh_train.jpg": {
+   "size": 109571,
+   "sha256": "591d8f3f72829ccefb7c31522b751c5ef5faa40776736e6f468d2cf2df2eccf1",
+   "url": "Fanfic/map_of_Hogwarts/artwork/Lochalsh_train.jpg"
+  },
+  "whref/Lochinver.jpg": {
+   "size": 74073,
+   "sha256": "06e652e1416bc5e7505a6f7cc8660bf197b580f0c8f532d45e2d2bebbd1dda11",
+   "url": "Fanfic/map_of_Hogwarts/artwork/Lochinver.jpg"
+  },
+  "whref/mer_village.jpg": {
+   "size": 65803,
+   "sha256": "9898702ceac673a0b0bf427f8125118cade745b9d8799791f619ed0c0b7ed0c6",
+   "url": "Fanfic/map_of_Hogwarts/artwork/mer_village.jpg"
+  },
+  "whref/pitch_with_stands.jpg": {
+   "size": 58035,
+   "sha256": "d317cffd3c527dddd1f61a066a67278ff846866f8807a9ded84e4127b21ee2b9",
+   "url": "Fanfic/map_of_Hogwarts/artwork/pitch_with_stands.jpg"
+  },
+  "whref/Plockton_station.jpg": {
+   "size": 96163,
+   "sha256": "0c69b893e238cfefb32d2753456fad066ad38058f43f0feec7260f417f9c44a1",
+   "url": "Fanfic/map_of_Hogwarts/artwork/Plockton_station.jpg"
+  },
+  "whref/Quidditch_basket.jpg": {
+   "size": 8803,
+   "sha256": "33cb42f07be9238c10bb75bbe35cbd0642c2ae3a11264fa18a9dab71def2efb1",
+   "url": "Fanfic/map_of_Hogwarts/artwork/Quidditch_basket.jpg"
+  },
+  "whref/Quidditch_pitch.jpg": {
+   "size": 12802,
+   "sha256": "78ec8caae3cc25785c7b433760702e579fdb0da1f2e410529016a480fd4b98c6",
+   "url": "Fanfic/map_of_Hogwarts/artwork/Quidditch_pitch.jpg"
+  },
+  "whref/Quidditch_pitch_17thC.jpg": {
+   "size": 15503,
+   "sha256": "e5b2746e891eb412055ae13450cdfeff12aaf41a49180a84ab689dd9fe4e1e80",
+   "url": "Fanfic/map_of_Hogwarts/artwork/Quidditch_pitch_17thC.jpg"
+  },
+  "whref/Scots_Pines.jpg": {
+   "size": 320970,
+   "sha256": "96ce49826fb9db55c5ff9357b58ceb9ebe82ff5f1f25031afdf59d19282ac618",
+   "url": "Fanfic/map_of_Hogwarts/artwork/Scots_Pines.jpg"
+  },
+  "whref/Shrieking_Shack_plan.gif": {
+   "size": 26353,
+   "sha256": "aeff185a6234b1d647a127c3c949cb2a46403f25467fd99493538407c671d43e",
+   "url": "Fanfic/map_of_Hogwarts/artwork/Shrieking_Shack_plan.gif"
+  },
+  "whref/St_Mary_Street.jpg": {
+   "size": 50786,
+   "sha256": "1a1786a1385b527527945b0def06dfdeba93a72363cbe5cd1ae7f98bc3f9c489",
+   "url": "Fanfic/Location_Location/artwork/St_Mary_Street.jpg"
+  },
+  "whref/St_Mungo_plaque.jpg": {
+   "size": 20556,
+   "sha256": "e3b868fc5b09dbd14e5ae23488be7924d88ef00c04a8adaa007cd17f11039a6e",
+   "url": "Fanfic/map_of_Hogwarts/artwork/St_Mungo_plaque.jpg"
+  },
+  "whref/St_Pancras.jpg": {
+   "size": 97083,
+   "sha256": "31bd5eb4f42532835a458777bac2e302e58be61c791703e574566421269c12bd",
+   "url": "Fanfic/map_of_Hogwarts/artwork/St_Pancras.jpg"
+  },
+  "whref/St_Pierre_tree.jpg": {
+   "size": 102424,
+   "sha256": "1439e528d270e298b739c13218c0fda6cd99a15a449f446a30dd7c9887126e21",
+   "url": "Fanfic/map_of_Hogwarts/artwork/St_Pierre_tree.jpg"
+  },
+  "whref/St_Pierre_tree2.jpg": {
+   "size": 281456,
+   "sha256": "5575b23066583d96a6ffb2406d7be0e199cb97a78bf261766a6b23a6e1f9c47f",
+   "url": "Fanfic/map_of_Hogwarts/artwork/St_Pierre_tree2.jpg"
+  },
+  "whref/station.jpg": {
+   "size": 65588,
+   "sha256": "b8d46aaa14a50a688c447b225d37a95afc1e4e520457d5e607d5b69e9fbf5a20",
+   "url": "Fanfic/map_of_Hogwarts/artwork/station.jpg"
+  },
+  "whref/station2.jpg": {
+   "size": 71197,
+   "sha256": "2437af8f3167d73c24388c2c23a4d95dd61d1babbc725922f1c67756f2c0af88",
+   "url": "Fanfic/map_of_Hogwarts/artwork/station2.jpg"
+  },
+  "whref/Strasbourg.jpg": {
+   "size": 91710,
+   "sha256": "9b2047088d8788605c7e461e4430c5c73af06b9dc509006257a1e49e21e6cb58",
+   "url": "Fanfic/map_of_Hogwarts/artwork/Strasbourg.jpg"
+  },
+  "whref/straw_owl.jpg": {
+   "size": 55160,
+   "sha256": "3ec65ff395efb543350955124f07ff2b6896489bf96dcdbb197101be74da3ffa",
+   "url": "Fanfic/map_of_Hogwarts/artwork/straw_owl.jpg"
+  },
+  "whref/Tobermory.jpg": {
+   "size": 92746,
+   "sha256": "99412b88e0653ecdac22bac3c8393c1eed947b6044ba41a5316f152d5f1a4201",
+   "url": "Fanfic/map_of_Hogwarts/artwork/Tobermory.jpg"
+  },
+  "whref/Torrlaoighseach.jpg": {
+   "size": 106108,
+   "sha256": "191e63f2c1d8836af7ee33afc28484fa0fb9986b5e5d8718e332326565758e93",
+   "url": "Fanfic/map_of_Hogwarts/artwork/Torrlaoighseach.jpg"
+  },
+  "whref/train-route_through_England.jpg": {
+   "size": 421977,
+   "sha256": "285adb6de1ebbca3979a5782c8fc52de47618368dc473837ea427aefde6d51a2",
+   "url": "Fanfic/map_of_Hogwarts/artwork/train-route_through_England.jpg"
+  },
+  "whref/train-route_through_Scotland.jpg": {
+   "size": 252853,
+   "sha256": "f77df3a7ed5e212af38918c447f4fb0c617418f7fb16717d1cc13d9af6a77671",
+   "url": "Fanfic/map_of_Hogwarts/artwork/train-route_through_Scotland.jpg"
+  },
+  "whref/train-route_via_Glenfinnan.jpg": {
+   "size": 326373,
+   "sha256": "98542f07bb5fdd6d68b8d0f61f19d698e964f5ac7587aec540baaff45bcc2b18",
+   "url": "Fanfic/map_of_Hogwarts/artwork/train-route_via_Glenfinnan.jpg"
+  },
+  "whref/WB_Hogsmeade.jpg": {
+   "size": 145772,
+   "sha256": "b0991d76083ba64691e4c09186d58d7cd3905d22a1c7b7b693642c889de0d803",
+   "url": "Fanfic/map_of_Hogwarts/artwork/WB_Hogsmeade.jpg"
+  },
+  "whref-index.json": {
+   "size": 33501,
+   "sha256": "f4697ef77ce3b01c3d2e13a6c0bb8028a7df05cb6fab586434acdae30e2b692b",
+   "url": null
+  }
+ }
+}

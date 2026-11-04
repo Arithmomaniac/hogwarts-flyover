@@ -1,5 +1,12 @@
 * text=auto eol=lf
 
-# Generated files: review changes in src/ instead
-build/data.js -diff
-hogwarts-flyover.html -diff
+# Generated files: review changes in their sources instead, and never merge them by hand. After a merge, rebuild them
+# (doit s2, see REBUILD.md) and commit the result; on a conflict, either side will do until then.
+build/data.js -diff -merge
+build/meshes.js -diff -merge
+hogwarts-flyover.html -diff -merge
+src/mesh_scene.json -merge
+
+# Family source assets (src/assets/FAMILY/, such as exports from Blender) are data: stored and checked out byte for
+# byte, so the hashes that key their family's S1 part agree in every worktree.
+src/assets/** -text

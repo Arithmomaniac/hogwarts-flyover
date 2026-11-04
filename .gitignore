@@ -1,8 +1,13 @@
 __pycache__/
 
-# Data pipeline inputs and intermediates are not tracked (see README); build/data.js is the only one the page needs.
+# Local Python environment: created per worktree from requirements.lock.txt (see REBUILD.md); no uv.lock is kept
+/.venv/
+/uv.lock
+
+# Data pipeline inputs and intermediates are not tracked (see README); build/data.js and build/meshes.js are the only ones the page needs.
 /build/*
 !/build/data.js
+!/build/meshes.js
 /raw/
 /txt/
 /img/

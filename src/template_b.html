@@ -12,16 +12,70 @@
   const pcomp = gl.getExtension("KHR_parallel_shader_compile");
   gl.pixelStorei(gl.UNPACK_ALIGNMENT, 1);
   const TREE_N = 1440;               // 3D-tree table: one texel per 7 m tree cell, cells -720..719 (+-5 km round the castle)
+  const CONE_ROWS = 2048 - TREE_N;   // band below the tree table: cone start per 8x8 block (columns < CG[0].c), max-height grid beyond
+  // conservative max-height grid levels for the cone pre-pass: first column in the band, origin (m), cell size (m), cells per side
+  const CG = [{ c: 240, o: -5120, s: 20, n: 512 }, { c: 752, o: -36480, s: 160, n: 456 }, { c: 1208, o: -36480, s: 1280, n: 57 }];
+  const SHINGLE = 7, SHINGLE_BLUR = 0.8;   // the lake's shingle class, and the blur (texels) that smooths its edge
 
   // ---------------------------------------------------------------- data -> textures
+  // the castle's distance-field layers (casA, casB) drew the raymarched castle; the meshes have replaced it
   const dec = {};
-  try { await Promise.all(Object.keys(DATA.tex).map(async (n) => { dec[n] = await decode(n); })); }
+  try { await Promise.all(Object.keys(DATA.tex).filter((n) => !n.startsWith("cas")).map(async (n) => { dec[n] = await decode(n); })); }
   catch (e) { return fail("Could not decode the embedded data: " + e); }
   H.loc = { w: dec.locBed.w, h: dec.locBed.h, bed: dec.locBed.a, wd: dec.locW.a, cb: dec.locCB.a };
   for (const r of ["M", "A", "B"]) H[r] = { w: dec[r + "Bed"].w, h: dec[r + "Bed"].h, bed: dec[r + "Bed"].a, wd: dec[r + "W"].a };
+  // the box (world x0, z0, x1, z1) round the water the shading pass mirrors the meshes in: the main lake, wholly on the
+  // local grid; drawReflections draws only meshes whose mirror image could show through it
+  const lakeBox = (() => {
+    const L = H.loc, [[a, b, c], [d, e, f]] = M.local.aff, det = a * e - b * d;
+    let i0 = Infinity, i1 = -Infinity, j0 = Infinity, j1 = -Infinity;
+    for (let i = 0; i < L.h; i++) for (let j = 0; j < L.w; j++) {
+      const k = i * L.w + j;
+      if (L.wd[k] > 0 && Math.abs(L.bed[k] + L.wd[k] - M.lake) < 0.25) {   // frag5.glsl: the water the mirror serves
+        i0 = Math.min(i0, i); i1 = Math.max(i1, i); j0 = Math.min(j0, j); j1 = Math.max(j1, j);
+      }
+    }
+    if (i0 > i1) return null;
+    const world = (u, v) => [(e * (u - c) - b * (v - f)) / det, (a * (v - f) - d * (u - c)) / det];
+    const p = [[j0 - 1, i0 - 1], [j1 + 2, i0 - 1], [j0 - 1, i1 + 2], [j1 + 2, i1 + 2]].map(([j, i]) => world(j / L.w, i / L.h));
+    return [Math.min(...p.map((q) => q[0])), Math.min(...p.map((q) => q[1])), Math.max(...p.map((q) => q[0])), Math.max(...p.map((q) => q[1]))];
+  })();
+  // The lake's shingle (surface class 7) as a smooth field in locB's red channel, which held the raymarched boundary
+  // walls: its 2 m texels blurred, so a beach's edge follows the shore rather than the texel grid (groundAlb breaks it
+  // with the classes' own noise). Under the beach the class map takes the nearest other class.
+  {
+    const N = dec.locN, B = dec.locB, w = N.w, h = N.h, n = w * h, R = 3;
+    const k = Array.from({ length: 2 * R + 1 }, (_, i) => Math.exp(-((i - R) ** 2) / (2 * SHINGLE_BLUR * SHINGLE_BLUR)));
+    const ks = k.reduce((a, b) => a + b), on = new Float32Array(n), rows = new Float32Array(n);
+    for (let i = 0; i < n; i++) on[i] = N.a[N.ch * i] === SHINGLE ? 1 : 0;
+    for (let y = 0; y < h; y++) for (let x = 0; x < w; x++) {
+      let s = 0;
+      for (let d = -R; d <= R; d++) s += k[d + R] * on[y * w + Math.min(Math.max(x + d, 0), w - 1)];
+      rows[y * w + x] = s / ks;
+    }
+    for (let y = 0; y < h; y++) for (let x = 0; x < w; x++) {
+      let s = 0;
+      for (let d = -R; d <= R; d++) s += k[d + R] * rows[Math.min(Math.max(y + d, 0), h - 1) * w + x];
+      B.a[B.ch * (y * w + x)] = Math.round(255 * s / ks);
+    }
+    for (let y = 0; y < h; y++) for (let x = 0; x < w; x++) {
+      if (!on[y * w + x]) continue;
+      let c = 1;                                     // lawn, if no other class lies within six texels
+      ring: for (let r = 1; r <= 6; r++) for (let dy = -r; dy <= r; dy++) for (let dx = -r; dx <= r; dx++) {
+        const xx = x + dx, yy = y + dy;
+        if (Math.max(Math.abs(dx), Math.abs(dy)) !== r || xx < 0 || yy < 0 || xx >= w || yy >= h || on[yy * w + xx]) continue;
+        c = N.a[N.ch * (yy * w + xx)];
+        break ring;
+      }
+      N.a[N.ch * (y * w + x)] = c;
+    }
+    // the class map rides in locB's third channel, which held the raymarched objects' far-step bound: groundAlb reads
+    // it with texelFetch (nearest), so the class costs the shading pass no sampler of its own
+    for (let i = 0; i < n; i++) B.a[B.ch * i + 2] = N.a[N.ch * i];
+  }
 
   function mkTex(w, h, ifmt, fmt, type, data, filt) {
-    gl.activeTexture(gl.TEXTURE20);                  // scratch unit; the main program samples units 0-15
+    gl.activeTexture(gl.TEXTURE20);                  // scratch unit; the main program samples units 0-13
     const t = gl.createTexture(); gl.bindTexture(gl.TEXTURE_2D, t);
     gl.texImage2D(gl.TEXTURE_2D, 0, ifmt, w, h, 0, fmt, type, data);
     gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, filt);
@@ -30,10 +84,13 @@
     gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
     return t;
   }
-  function texRG(L) {              // bed, water delta (+ castle base height for the local layer)
+  function texRG(L) {              // bed, water delta (+ castle base height for the local layer, which the mesh shader reads)
     const c = L.cb ? 3 : 2, n = L.w * L.h, a = new Float32Array(n * c);
-    for (let i = 0; i < n; i++) { a[c * i] = L.bed[i]; a[c * i + 1] = L.wd[i]; if (c === 3) a[c * i + 2] = L.cb[i]; }
-    return mkTex(L.w, L.h, c === 3 ? gl.RGB32F : gl.RG32F, c === 3 ? gl.RGB : gl.RG, gl.FLOAT, a, fLin ? gl.LINEAR : gl.NEAREST);
+    for (let i = 0; i < n; i++) {
+      a[c * i] = L.bed[i]; a[c * i + 1] = L.wd[i]; if (c === 3) a[c * i + 2] = L.cb[i];
+    }
+    const f = { 2: [gl.RG32F, gl.RG], 3: [gl.RGB32F, gl.RGB] }[c];
+    return mkTex(L.w, L.h, f[0], f[1], gl.FLOAT, a, fLin ? gl.LINEAR : gl.NEAREST);
   }
   function texU8(d, filt) {
     const f = { 1: [gl.R8, gl.RED], 2: [gl.RG8, gl.RG], 3: [gl.RGB8, gl.RGB], 4: [gl.RGBA8, gl.RGBA] }[d.ch];
@@ -48,34 +105,93 @@
     return t;
   }
   const T = {
-    tLocH: texRG(H.loc), tLocA: texU8(dec.locA, gl.LINEAR), tLocB: texU8(dec.locB, gl.LINEAR), tLocN: texU8(dec.locN, gl.NEAREST),
+    tLocH: texRG(H.loc), tLocA: texU8(dec.locA, gl.LINEAR), tLocB: texU8(dec.locB, gl.LINEAR),
     tMH: texRG(H.M), tMS: texJpg(dec.MSat), tMF: texU8(dec.MFor, gl.LINEAR),
     tAH: texRG(H.A), tAS: texJpg(dec.ASat), tAF: texU8(dec.AFor, gl.LINEAR),
     tBH: texRG(H.B), tBS: texJpg(dec.BSat),
-    tCasA: texU8(dec.casA, gl.LINEAR), tCasB: texU8(dec.casB, gl.LINEAR), tFor: texU8(dec.forest, gl.LINEAR),
-    tTree: mkTex(TREE_N, TREE_N, gl.RGBA8, gl.RGBA, gl.UNSIGNED_BYTE, null, gl.NEAREST),   // filled by the tree pass below
+    tFor: texU8(dec.forest, gl.LINEAR),
+    tTree: mkTex(TREE_N, TREE_N + CONE_ROWS, gl.RGBA8, gl.RGBA, gl.UNSIGNED_BYTE, null, gl.NEAREST),   // filled by the tree pass below; band: grid at load, cone each frame
   };
+  {
+    // Every height lookup is a convex blend (bilinear, LOD smoothsteps, local-layer mix) of bed and bed + water texels at
+    // most one texel spacing away per axis, so a cell bounds terrain and water by the highest such texel within one
+    // spacing of it. Detail relief adds at most 1.7 * 0.775 m (1.4), vegetation at most 25.5 m + TREE_SAFE (29.35).
+    const ADD = 1.4 + 25.5 + 3.85;
+    const [GF, GM, GA] = CG, gF = new Float32Array(GF.n * GF.n).fill(-Infinity), gM = new Float32Array(GM.n * GM.n).fill(-Infinity);
+    const put = (g, G, x0, x1, z0, z1, v) => {
+      const i0 = Math.floor((x0 - G.o) / G.s), i1 = Math.floor((x1 - G.o) / G.s), j0 = Math.floor((z0 - G.o) / G.s), j1 = Math.floor((z1 - G.o) / G.s);
+      if (i1 < 0 || j1 < 0 || i0 >= G.n || j0 >= G.n) return;
+      for (let j = Math.max(j0, 0), je = Math.min(j1, G.n - 1); j <= je; j++)
+        for (let i = Math.max(i0, 0), ie = Math.min(i1, G.n - 1), r = j * G.n; i <= ie; i++) if (g[r + i] < v) g[r + i] = v;
+    };
+    const both = (x0, x1, z0, z1, v) => { put(gF, GF, x0, x1, z0, z1, v); put(gM, GM, x0, x1, z0, z1, v); };
+    for (const [nm, half, use] of [["M", 5005, (m, s) => m - s < 4990], ["A", 12015, (m, s) => m + s >= 4700 && m - s < 11990], ["B", 36060, (m, s) => m + s >= 11600]]) {
+      const L = H[nm], sx = 2 * half / L.w, sz = 2 * half / L.h;
+      for (let j = 0; j < L.h; j++) {
+        const z = -half + (j + 0.5) * sz;
+        for (let i = 0; i < L.w; i++) {
+          const x = -half + (i + 0.5) * sx;
+          if (!use(Math.max(Math.abs(x), Math.abs(z)), Math.max(sx, sz))) continue;
+          const k = j * L.w + i;
+          let x0 = x - sx, x1 = x + sx, z0 = z - sz, z1 = z + sz;
+          if (nm === "B") {                          // clamp-to-edge: border texels hold for everything beyond
+            if (i === 0) x0 = -Infinity; if (i === L.w - 1) x1 = Infinity; if (j === 0) z0 = -Infinity; if (j === L.h - 1) z1 = Infinity;
+          }
+          both(x0, x1, z0, z1, Math.max(L.bed[k], L.bed[k] + L.wd[k]));
+        }
+      }
+    }
+    {
+      const L = H.loc, [[a, b, c], [d, e, f]] = M.local.aff, det = a * e - b * d;
+      const rad = Math.hypot(e, d) / Math.abs(det) / L.w + Math.hypot(b, a) / Math.abs(det) / L.h;   // one texel along u plus one along v
+      for (let j = 0; j < L.h; j++) {
+        const v = (j + 0.5) / L.h - f;
+        for (let i = 0; i < L.w; i++) {
+          const u = (i + 0.5) / L.w - c, x = (e * u - b * v) / det, z = (a * v - d * u) / det, k = j * L.w + i;
+          both(x - rad, x + rad, z - rad, z + rad, Math.max(L.bed[k], L.bed[k] + L.wd[k]));
+        }
+      }
+    }
+    let top = -Infinity;
+    for (const g of [gF, gM]) for (let k = 0; k < g.length; k++) if (g[k] > top) top = g[k];
+    for (const g of [gF, gM]) for (let k = 0; k < g.length; k++) g[k] = (g[k] === -Infinity ? top : g[k]) + ADD;
+    const gA = new Float32Array(GA.n * GA.n).fill(-Infinity), q = GA.s / GM.s;
+    for (let j = 0; j < GM.n; j++) for (let i = 0; i < GM.n; i++) {
+      const k = Math.floor(j / q) * GA.n + Math.floor(i / q);
+      gA[k] = Math.max(gA[k], gM[j * GM.n + i]);
+    }
+    gl.activeTexture(gl.TEXTURE20); gl.bindTexture(gl.TEXTURE_2D, T.tTree);
+    for (const [G, g] of [[GF, gF], [GM, gM], [GA, gA]])
+      gl.texSubImage2D(gl.TEXTURE_2D, 0, G.c, TREE_N, G.n, G.n, gl.RGBA, gl.UNSIGNED_BYTE, new Uint8Array(g.buffer));
+  }
   Object.values(T).forEach((t, i) => { gl.activeTexture(gl.TEXTURE0 + i); gl.bindTexture(gl.TEXTURE_2D, t); });
 
   // ---------------------------------------------------------------- shader defines from the georeferenced essay layout
   const poi = (n) => X.poi.find((p) => p.name === n);
-  const gY = (p) => ground(p[0], p[1])[0];
   const fl = (x) => { const s = (+x).toFixed(4); return s; };
   const v2 = (a) => `vec2(${fl(a[0])},${fl(a[1])})`;
   const brg = M.pitch.brg * Math.PI / 180, tw = M.towers;
   const defs = {
-    LAKE: fl(M.lake), PITCH_C: v2(M.pitch.c), PITCH_DIR: v2([Math.sin(brg), Math.cos(brg)]), PITCH_LEVEL: fl(M.pitch.level),
-    TA: v2(M.train.carriages[0]), TB: v2(M.train.carriages[1]), EA: v2(M.train.engine[0]), EB: v2(M.train.engine[1]), TRAIN_Y: fl(M.train.level),
-    SA: v2(X.ship.a), SB: v2(X.ship.b), SHIP_W: fl(X.ship.w),
-    GATE_A: v2(X.gates[0]), GATE_B: v2(X.gates[1]), GATE_Y: fl(Math.min(gY(X.gates[0]), gY(X.gates[1])) - 0.2),
-    TOMB: v2(X.tomb), TOMB_Y: fl(gY(X.tomb) - 0.1), WIL: v2(X.willow), WIL_Y: fl(gY(X.willow) - 0.3),
-    STATION: v2(poi("Hogsmeade station").p), GRAWP: v2(poi("Grawp's clearing").p),
-    CAS_M: v2(affLen(M.castle.aff)), CAS_TOP: fl(Math.max(...tw.map((t) => t[3] + 6 * t[2] + 2), 262)), NTW: String(tw.length),
+    LAKE: fl(M.lake), PITCH_C: v2(M.pitch.c), PITCH_DIR: v2([Math.sin(brg), Math.cos(brg)]),
+    STATION: v2(poi("Hogsmeade station").p), GRAWP: v2(poi("Grawp's clearing").p), NTW: String(tw.length),
     CAS_CLS: `vec2[6](${M.castle.cls.map((c) => v2(c)).join(",")})`, TREE_N: String(TREE_N), TREE_G0: fl(TREE_N / 2),
-    WALL_IN: "1.05", SATGAIN: "1.3", FOG_DENS: "(1.0/24000.0)",
+    SATGAIN: "1.3", FOG_DENS: "(1.0/24000.0)", MESH_SH_LAYERS: "5",
+    // lamplight behind lit windows: black-body tints in linear sRGB (candles ~2200 K, the train's lamps ~2700 K, dim
+    // oil lamps ~2400 K); daylight-white glows would read as white once the night exposure lifts them
+    CANDLE: "vec3(1.0,0.29,0.022)", LAMP: "vec3(1.0,0.4,0.095)", DIMLAMP: "vec3(1.0,0.34,0.06)",
   };
+  // the glow (before the dusk ramp) of each lit glazing code, shared by the shading pass and the lake reflections;
+  // strong enough to read as lamps but short of the tone curve's shoulder at the night exposure, where it would clip white
+  const lampGlsl = `
+vec3 lampGlow(int mat, float aux) {
+  int k = int(aux + 0.5);
+  //__LAMP_GLOW__
+  return vec3(0.);
+}`;
+  [["CG_FINE", CG[0]], ["CG_MID", CG[1]], ["CG_FAR", CG[2]]].forEach(([k, g]) => { defs[k] = `vec4(${fl(g.c)},${fl(g.o)},${fl(g.s)},${fl(g.n)})`; });
   if (!fLin) defs.MANUAL_BILERP = "1";
-  const fragSrc = $("fragSrc").textContent.replace("//__DEFINES__", Object.entries(defs).map(([k, v]) => `#define ${k} ${v}`).join("\n"));
+  const fragSrc = $("fragSrc").textContent.replace("//__DEFINES__", Object.entries(defs).map(([k, v]) => `#define ${k} ${v}`).join("\n"))
+    .replace("//__LAMPS__", lampGlsl);
   const vsSrc = "#version 300 es\nvoid main(){ vec2 p = vec2(float((gl_VertexID << 1) & 2), float(gl_VertexID & 2)); gl_Position = vec4(p * 2.0 - 1.0, 0.0, 1.0); }";
   const upSrc = `#version 300 es
 precision highp float; uniform sampler2D tSrc; uniform vec2 uOut; out vec4 o;
@@ -116,10 +232,23 @@ void main() {
   }
   o = vec4(col, 1.);
 }`;
+  // far-tile classifier: stencil 1 where the 8x8 block's cone start t (as trace() decodes it) satisfies t - r(t) >= TREE_FAR,
+  // so the FAR_TILE variant (3D-tree path compiled out) gives the same result there as the full shader
+  const defOf = (k) => fragSrc.match(new RegExp(`#define ${k} (\\S+)`))[1];
+  const clsSrc = `#version 300 es
+precision highp float; precision highp int; precision highp sampler2D;
+uniform sampler2D tTree; uniform vec2 uRes; uniform float uTanHalf; out vec4 o;
+void main() {
+  uvec4 cb = uvec4(texelFetch(tTree, ivec2(gl_FragCoord.xy) / 8 + ivec2(0, ${TREE_N}), 0) * 255. + 0.5);
+  uint u = cb.r | (cb.g << 8) | (cb.b << 16) | (cb.a << 24);
+  float tc = uintBitsToFloat(u & ~511u), rk = 16. * uTanHalf / uRes.y;
+  if (!(u != 0u && tc <= ${defOf("TMAX")} && tc - rk * tc >= ${defOf("TREE_FAR")})) discard;
+  o = vec4(0.);
+}`;
 
-  function program(fs) {
+  function program(fs, vs = vsSrc) {
     const p = gl.createProgram();
-    for (const [type, src] of [[gl.VERTEX_SHADER, vsSrc], [gl.FRAGMENT_SHADER, fs]]) {
+    for (const [type, src] of [[gl.VERTEX_SHADER, vs], [gl.FRAGMENT_SHADER, fs]]) {
       const s = gl.createShader(type); gl.shaderSource(s, src); gl.compileShader(s); gl.attachShader(p, s);
     }
     gl.linkProgram(p);
@@ -140,42 +269,517 @@ void main() {
   loadMsg("Compiling the raymarching shader (about 10–20 s the first time)…");
   await new Promise((r) => setTimeout(r, 30));
   const tc0 = performance.now();
-  let prog, up, taa, treeP;
+  let prog, up, taa, treeP, coneP, sunP, farP, clsP, shP, p3P;
   try {
-    const ps = [fragSrc, upSrc, taaSrc, fragSrc.replace("#version 300 es", "#version 300 es\n#define TREE_PASS 1")].map(program);
-    [prog, up, taa, treeP] = [await linked(ps[0]), await linked(ps[1]), await linked(ps[2]), await linked(ps[3])];
+    const ps = [fragSrc.replace("#version 300 es", "#version 300 es\n#define SPLIT_P1 1"), upSrc, taaSrc, fragSrc.replace("#version 300 es", "#version 300 es\n#define TREE_PASS 1"),
+                fragSrc.replace("#version 300 es", "#version 300 es\n#define CONE_PASS 1"),
+                fragSrc.replace("#version 300 es", "#version 300 es\n#define SUN_PASS 1"),
+                fragSrc.replace("#version 300 es", "#version 300 es\n#define FAR_TILE 1\n#define SPLIT_P1 1"), clsSrc,
+                fragSrc.replace("#version 300 es", "#version 300 es\n#define SPLIT_SH 1"), fragSrc.replace("#version 300 es", "#version 300 es\n#define SPLIT_P3 1")].map((fs) => program(fs));
+    [prog, up, taa, treeP, coneP, sunP, farP, clsP, shP, p3P] = [await linked(ps[0]), await linked(ps[1]), await linked(ps[2]), await linked(ps[3]), await linked(ps[4]),
+                                                       await linked(ps[5]), await linked(ps[6]), await linked(ps[7]), await linked(ps[8]), await linked(ps[9])];
   }
   catch (e) { window.__hog = { error: String(e.message || e) }; return fail("Shader failed to compile:\n" + (e.message || e)); }
   const compileMs = performance.now() - tc0;
+
+  // ---------------------------------------------------------------- exterior meshes (build/meshes.js)
+  // A depth pre-pass draws the opaque meshes first: each pixel's nearest mesh distance is where P1 ends its march, and
+  // its depth stays in the shared depth buffer. After the raymarch, a depth-only pass writes the raymarched hit where it
+  // is nearer; the mesh draws then pass only where their own front fragment is still nearest, writing the same record
+  // trace() writes for an object hit, so shadows, shading and TAA treat both alike.
+  const MESH_NEAR = 1, MESH_FAR = 20000, MESH_FORMAT = "hogwarts-flyover/meshes", MESH_VERSION = 4;
+  // a thin part (mesh_thin.py) keeps at least THIN_PX of radius in the pixels of the view drawing it; its radius comes
+  // in u16 steps of THIN_UNIT_M
+  const THIN_PX = 0.55, THIN_UNIT_M = 0.0001;
+  const depthOf = `float depthOf(float z) {   // window depth of view depth z, as the mesh projection rasterises it
+  return clamp(0.5 + 0.5 * (${fl((MESH_FAR + MESH_NEAR) / (MESH_FAR - MESH_NEAR))} - ${fl(2 * MESH_FAR * MESH_NEAR / (MESH_FAR - MESH_NEAR))} / max(z, ${fl(MESH_NEAR)})), 0., 1.);
+}`;
+  const meshVs = `#version 300 es
+precision highp float;
+invariant gl_Position;                 // the depth pre-pass and the G-buffer pass must rasterise identical depths
+layout(location = 0) in vec3 aPos;     // u16 within the chunk box
+layout(location = 1) in vec2 aOct;     // octahedral normal, i8
+layout(location = 2) in uvec2 aAttr;   // G-buffer material, aux
+layout(location = 3) in float aThin;   // a thin part's radius, normalized u16 (0 for every other vertex)
+uniform vec3 uLo, uHi, uCamPos; uniform mat3 uCamRot; uniform float uTanHalf, uThin; uniform vec2 uRes, uJitter;
+out vec3 vP; out vec3 vN; flat out uvec2 vAttr;
+void main() {
+  vec3 n = vec3(aOct, 1. - abs(aOct.x) - abs(aOct.y));
+  if (n.z < 0.) n.xy = (1. - abs(n.yx)) * vec2(n.x >= 0. ? 1. : -1., n.y >= 0. ? 1. : -1.);
+  vec3 p = uLo + aPos * (uHi - uLo), e = normalize(n);
+  // a thin part widens along its normals to uThin metres of radius per metre of depth (THIN_PX pixels), so every
+  // jittered frame covers it and the temporal filter's neighbourhood clamp never fades it out
+  float r = aThin * ${fl(65535 * THIN_UNIT_M)};
+  p += e * (r > 0. ? max(uThin * dot(uCamRot[2], p - uCamPos) - r, 0.) : 0.);
+  vec3 v = transpose(uCamRot) * (p - uCamPos);
+  // the raymarcher's ray through pixel centre c is (2 (c + jitter) - res) / res.y * tanHalf: project to exactly that pixel
+  gl_Position = vec4(v.x * uRes.y / (uRes.x * uTanHalf) - 2. * uJitter.x / uRes.x * v.z, v.y / uTanHalf - 2. * uJitter.y / uRes.y * v.z,
+                     (v.z * ${fl((MESH_FAR + MESH_NEAR) / (MESH_FAR - MESH_NEAR))} - ${fl(2 * MESH_FAR * MESH_NEAR / (MESH_FAR - MESH_NEAR))}), v.z);
+  vP = p; vN = normalize(n); vAttr = aAttr;
+}`;
+  const meshFs = `#version 300 es
+precision highp float; precision highp int; precision highp sampler2D;
+in vec3 vP; in vec3 vN; flat in uvec2 vAttr;
+layout(location = 0) out vec4 gOut0; layout(location = 1) out vec4 gOut1; layout(location = 2) out vec4 gOut2;
+layout(location = 3) out vec4 gOut3; layout(location = 4) out vec4 gOut4; layout(location = 5) out vec4 gOut5;
+layout(location = 6) out vec4 gOut6;
+uniform sampler2D tLocH; uniform vec3 uLocU, uLocV, uCamPos, uSunDir; uniform int uDbg;
+uniform float uMeshTop[${defs.NTW}];             // re-ranked mesh tower tops by meta.towers index
+const vec2 CLS[6] = ${defs.CAS_CLS};
+void main() {
+  vec3 d = vP - uCamPos; float t = length(d);
+  vec3 n = normalize(vN);
+  if (dot(n, d) > 0.) n = -n;                       // seen from behind, as where a level flattened a slab: the near side
+  int mat = int(vAttr.x); float aux = float(vAttr.y), ctop = 0.;
+  vec2 luv = vec2(dot(uLocU, vec3(vP.xz, 1.)), dot(uLocV, vec3(vP.xz, 1.)));
+  vec4 l = texture(tLocH, luv);                     // bed, water delta, castle base height
+  if (mat == 4 && aux > 9.5 && aux < 15.5) {        // castle mass class k (aux 10 + k): roof type and top as castleD has them
+    vec2 c = CLS[int(aux) - 10]; aux = c.y; ctop = l.z + c.x;
+  } else if (mat == 4 && aux > 19.5 && aux < 25.5) { // the same with real openings (aux 20 + k): P3 reads 20 + roof type
+    vec2 c = CLS[int(aux) - 20]; aux = 20. + c.y; ctop = l.z + c.x;
+  }
+  if (mat == 4 && aux > 149.5) ctop = uMeshTop[int(aux) - 150];   // mesh tower: P3 reads its top from ctop
+  bool shf = uSunDir.y > -0.03 && (uDbg & 1) == 0;  // trace()'s ST_SHINIT for an object hit
+  gOut0 = vec4(t, float(mat + (shf ? 64 : 0)), aux, ctop);
+  gOut1 = vec4(n, l.x);
+  gOut2 = vec4(1., 0., 0., l.x + l.y);
+  gOut3 = vec4(luv, 0., 0.);
+  gOut4 = vec4(d / t, 0.);
+  gOut5 = vec4(0., 1., 0., 0.);
+  gOut6 = shf ? vec4(vP + n * (0.04 + t * 0.0008) + uSunDir * 0.05, 0.12 + t * 0.0015) : vec4(uSunDir.y < -0.03 ? 0. : 1., 0., 0., -1.);
+}`;
+  const resolveFs = `#version 300 es
+precision highp float; precision highp int; precision highp sampler2D;
+uniform sampler2D tG0; uniform vec2 uRes, uJitter; uniform float uTanHalf;
+${depthOf}
+void main() {
+  vec4 a0 = texelFetch(tG0, ivec2(gl_FragCoord.xy), 0);
+  vec2 uv = (2. * (gl_FragCoord.xy + uJitter) - uRes) / uRes.y;
+  float z = a0.x / length(vec3(uv * uTanHalf, 1.));  // view depth of the radial hit distance along this pixel's ray
+  gl_FragDepth = (int(a0.y) & 7) == 0 ? 1. : depthOf(z);
+}`;
+  // mesh depth pre-pass, before the raymarch: each pixel's nearest opaque mesh as a radial distance, where P1 and
+  // FAR_TILE end their march, and as depth, so the G-buffer pass shades only that front fragment
+  const meshDistFs = `#version 300 es
+precision highp float;
+in vec3 vP;
+uniform vec3 uCamPos;
+out vec4 o;
+void main() { o = vec4(length(vP - uCamPos), 0., 0., 0.); }`;
+  let meshP, resP, shDepthP, reflP, glassP, meshDP, lakeP;
+  const shDepthVs = `#version 300 es
+precision highp float;
+layout(location = 0) in vec3 aPos;
+uniform vec3 uLo, uHi; uniform mat4 uLightM;
+void main() { gl_Position = uLightM * vec4(uLo + aPos * (uHi - uLo), 1.); }`;
+  // lake reflections: meshes mirrored about the main lake and lit simply, as P3 lights reflected objects; the target
+  // keeps the camera's path length to each mirrored point so P3 can compare it with the reflected terrain
+  const reflVs = meshVs.replace("vec3 p = uLo + aPos * (uHi - uLo), e = normalize(n);", `vec3 p = uLo + aPos * (uHi - uLo), e = normalize(n) * vec3(1., -1., 1.);
+  p.y = ${defs.LAKE} * 2. - p.y;`).replace("vN = normalize(n);", "vN = normalize(n); /* unmirrored, for lighting */");
+  const reflFs = `#version 300 es
+precision highp float; precision highp int;
+in vec3 vP; in vec3 vN; flat in uvec2 vAttr;
+out vec4 o;
+uniform vec3 uCamPos, uSunDir, uSunCol, uSkyCol; uniform float uDusk;
+const vec2 CLS[6] = ${defs.CAS_CLS};${lampGlsl}
+vec3 albedo(int mat, float aux, vec3 n) {
+  if (mat == 4) {
+    if (aux > 39.5 && aux < 41.5 || aux > 44.5 && aux < 45.5) return vec3(0.012);   // window glass
+    if (aux > 41.5 && aux < 42.5) return vec3(0.09, 0.06, 0.035);      // oak doors
+    float rt = aux > 9.5 && aux < 15.5 ? CLS[int(aux) - 10].y : aux > 19.5 && aux < 25.5 ? CLS[int(aux) - 20].y : -1.;
+    return (rt == 1. || rt == 3.) && n.y > 0.3 ? vec3(0.045, 0.05, 0.06) : vec3(0.25, 0.219, 0.182);   // P3's warm masonry, a shade darker
+  }
+  if (mat == 5) {
+    bool roof = n.y > 0.25;
+    if (aux == 0.) return roof ? vec3(0.15, 0.115, 0.06) : vec3(0.3, 0.285, 0.26);
+    if (aux == 2.) return vec3(0.16, 0.2, 0.19);
+    if (aux == 3.) return roof ? vec3(0.09, 0.07, 0.045) : vec3(0.19, 0.165, 0.13);
+    if (aux == 4.) return roof ? vec3(0.055, 0.047, 0.042) : vec3(0.085, 0.07, 0.055);
+    if (aux == 5.) return vec3(0.16, 0.12, 0.08);
+    return roof ? vec3(0.05, 0.052, 0.06) : (aux > 5.5 ? vec3(0.24, 0.225, 0.2) : vec3(0.3, 0.285, 0.26));
+  }
+  if (mat == 6) return aux > 0.5 ? vec3(0.13, 0.125, 0.115) : vec3(0.03, 0.058, 0.02);
+  if (mat == 7) {                                                     // set pieces, as P3 shades them
+    int k = int(aux + 0.5);
+    //__SET_PIECES_REFL__
+  }
+  return vec3(0.2);
+}
+void main() {
+  if (${defs.LAKE} * 2. - vP.y < ${defs.LAKE} - 0.05) discard;     // under water: not reflected
+  vec3 n = normalize(vN);
+  if (dot(n * vec3(1., -1., 1.), vP - uCamPos) > 0.) n = -n;        // as meshFs: the side the mirror sees (vN is unmirrored)
+  vec3 c = albedo(int(vAttr.x), float(vAttr.y), n) * (uSunCol * max(dot(n, uSunDir), 0.) + uSkyCol * (0.55 + 0.45 * n.y))
+         + lampGlow(int(vAttr.x), float(vAttr.y)) * uDusk;                 // lit windows shine in the water at night
+  o = vec4(c, length(vP - uCamPos));
+}`;
+  // glazing over the shaded (display-space) image, before TAA: pass 0 multiplies by the tinted transmission, pass 1
+  // adds the Fresnel sky/sun reflection; both commute, so overlapping panes need no sorting. Depth-tested against the
+  // opaque scene without writing depth, and the image's alpha (the opaque hit distance TAA reprojects) is left alone.
+  const glassFs = `#version 300 es
+precision highp float; precision highp int;
+in vec3 vP; in vec3 vN; flat in uvec2 vAttr;
+out vec4 o;
+uniform vec3 uCamPos, uSunDir, uSunCol, uSkyCol, uHorCol; uniform float uExposure; uniform int uGlassPass;
+vec3 aces(vec3 x) { return clamp((x * (2.51 * x + 0.03)) / (x * (2.43 * x + 0.59) + 0.14), 0., 1.); }
+void main() {
+  vec3 v = normalize(vP - uCamPos), n = normalize(vN);
+  if (dot(n, v) > 0.) n = -n;                       // panes are seen from either side
+  float f = 0.04 + 0.96 * pow(1. - max(dot(-v, n), 0.), 5.);
+  // the image is display-encoded: transmission T scales it by T^(1/2.2), and a small reflection adds about its
+  // tonemapped linear value at mid-tones
+  if (uGlassPass == 0) { o = vec4(pow(vec3(0.78, 0.86, 0.8) * (1. - f), vec3(1. / 2.2)), 1.); return; }
+  vec3 r = reflect(v, n);
+  vec3 env = mix(uHorCol, uSkyCol, smoothstep(0., 0.5, r.y)) + uSunCol * pow(max(dot(r, uSunDir), 0.), 400.) * 20.;
+  o = vec4(aces(env * f * uExposure), 0.);
+}`;
+  // the water the shading pass mirrors the meshes in (frag5.glsl: water at the lake's level), every other pixel
+  // discarded: an occlusion query round it tells whether a frame showed any
+  const lakeFs = `#version 300 es
+precision highp float; precision highp int; precision highp sampler2D;
+uniform sampler2D tG0, tG2;
+out vec4 o;
+void main() {
+  ivec2 p = ivec2(gl_FragCoord.xy);
+  if ((int(texelFetch(tG0, p, 0).y) & 7) != 2 || abs(texelFetch(tG2, p, 0).w - ${defs.LAKE}) >= 0.25) discard;
+  o = vec4(0.);
+}`;
+  try {
+    [meshP, resP, shDepthP, reflP, glassP, meshDP, lakeP] = await Promise.all([program(meshFs, meshVs), program(resolveFs),
+      program("#version 300 es\nprecision highp float;\nvoid main() {}", shDepthVs), program(reflFs, reflVs),
+      program(glassFs, meshVs), program(meshDistFs, meshVs), program(lakeFs)].map(linked));
+  }
+  catch (e) { window.__hog = { error: String(e.message || e) }; return fail("Mesh shader failed to compile:\n" + (e.message || e)); }
+  // mesh sun shadows: one depth layer per footprint (layer 0 every caster, then the payload's finer regions), cached
+  // per sun direction and payload; every caster over a footprint is drawn, never only what the camera sees
+  const SH_RES = 2048, SH_LAYERS = +defs.MESH_SH_LAYERS, SH_UNIT = 30, MESH_T_UNIT = 19;
+  if (gl.getParameter(gl.MAX_COMBINED_TEXTURE_IMAGE_UNITS) <= SH_UNIT + 1) return fail("Too few texture units for the mesh passes.");
+  const shTexM = gl.createTexture(), shFbo = gl.createFramebuffer();
+  gl.activeTexture(gl.TEXTURE0 + SH_UNIT); gl.bindTexture(gl.TEXTURE_2D_ARRAY, shTexM);
+  gl.texStorage3D(gl.TEXTURE_2D_ARRAY, 1, gl.DEPTH_COMPONENT16, SH_RES, SH_RES, SH_LAYERS);
+  for (const [k, v] of [[gl.TEXTURE_MIN_FILTER, gl.LINEAR], [gl.TEXTURE_MAG_FILTER, gl.LINEAR], [gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE],
+                        [gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE], [gl.TEXTURE_COMPARE_MODE, gl.COMPARE_REF_TO_TEXTURE], [gl.TEXTURE_COMPARE_FUNC, gl.LEQUAL]])
+    gl.texParameteri(gl.TEXTURE_2D_ARRAY, k, v);
+  gl.bindFramebuffer(gl.FRAMEBUFFER, shFbo); gl.drawBuffers([gl.NONE]); gl.readBuffer(gl.NONE); gl.bindFramebuffer(gl.FRAMEBUFFER, null);
+  const shM = new Float32Array(16 * SH_LAYERS), shPar = new Float32Array(4 * SH_LAYERS);
+  let shKey = "", shN = 0;
+  let shCasters = 0, shFrame = null;
+  // a part narrower than a layer's texels covers their centres only here and there, so its shadow would fall as a row
+  // of dots: the layer draws its triangles' edges too, as lines, which rasterize without a break (mesh_thin)
+  function narrowLines(c, texel) {
+    let n = 0;
+    for (const [w, k] of c.narrow) { if (w >= texel) break; n = k; }
+    if (n) gl.drawElements(gl.LINES, n, gl.UNSIGNED_SHORT, c.lines);
+  }
+  function meshShadows(dir, payload, on) {          // layer count for the shaders; re-renders only on a new sun or payload
+    const key = on && payload.length && dir[1] > -0.03 ? `${dir.join()}|${payload.gen}` : "";
+    if (key === shKey) return shN;
+    shKey = key; shN = 0;
+    if (!key) return 0;
+    // each group's shadow caster where it has one, else its full level: casters stay as still as the sun
+    const chunks = payload.groups.flatMap((g) => g.levels[3].length ? g.levels[3] : g.levels[0]);
+    shCasters = chunks.filter((c) => c.level === 3).length;
+    const zl = [-dir[0], -dir[1], -dir[2]];
+    const ref = Math.abs(zl[1]) > 0.999 ? [1, 0, 0] : [0, 1, 0];
+    const xl = norm([ref[1] * zl[2] - ref[2] * zl[1], ref[2] * zl[0] - ref[0] * zl[2], ref[0] * zl[1] - ref[1] * zl[0]]);
+    const yl = [zl[1] * xl[2] - zl[2] * xl[1], zl[2] * xl[0] - zl[0] * xl[2], zl[0] * xl[1] - zl[1] * xl[0]];
+    const span = (lo, hi) => {                    // light-space bounds of a world box
+      const b = [Infinity, -Infinity, Infinity, -Infinity, Infinity, -Infinity];
+      for (let k = 0; k < 8; k++) {
+        const p = [(k & 1 ? hi : lo)[0], (k & 2 ? hi : lo)[1], (k & 4 ? hi : lo)[2]];
+        const q = [xl, yl, zl].map((a) => a[0] * p[0] + a[1] * p[1] + a[2] * p[2]);
+        for (let a = 0; a < 3; a++) { b[2 * a] = Math.min(b[2 * a], q[a]); b[2 * a + 1] = Math.max(b[2 * a + 1], q[a]); }
+      }
+      return b;
+    };
+    const spans = chunks.map((c) => span(c.lo, c.hi));
+    const all = spans.reduce((a, s) => a.map((v, i) => (i & 1 ? Math.max : Math.min)(v, s[i])));
+    const near = all[4] - 1, far = all[5] + 1;
+    // meshSun takes the last layer whose footprint holds a point, so the layers go coarsest first, and the near layer
+    // (nearShadow) comes after them all
+    const extent = (L) => Math.max(L[1] - L[0], L[3] - L[2]);
+    const layers = [all, ...payload.shadow.map((b) => span(b.slice(0, 3), b.slice(3)))].sort((p, q) => extent(q) - extent(p));
+    gl.bindFramebuffer(gl.FRAMEBUFFER, shFbo); gl.viewport(0, 0, SH_RES, SH_RES);
+    gl.enable(gl.DEPTH_TEST); gl.depthFunc(gl.LESS); gl.depthMask(true);
+    // slope-scaled offset: the four bilinear taps in meshSun reach 1.5 texels each way, so a face lit at a grazing
+    // angle would otherwise compare against its own deeper texels and stripe itself (shadow acne)
+    gl.enable(gl.POLYGON_OFFSET_FILL); gl.polygonOffset(3, 1);
+    gl.useProgram(shDepthP);
+    layers.forEach((L, k) => {
+      const x0 = L[0] - 2, x1 = L[1] + 2, y0 = L[2] - 2, y1 = L[3] + 2, sx = 2 / (x1 - x0), sy = 2 / (y1 - y0), sz = 2 / (far - near);
+      const m = [sx * xl[0], sy * yl[0], sz * zl[0], 0, sx * xl[1], sy * yl[1], sz * zl[1], 0, sx * xl[2], sy * yl[2], sz * zl[2], 0,
+                 -(x1 + x0) / (x1 - x0), -(y1 + y0) / (y1 - y0), -(far + near) / (far - near), 1];
+      const texel = Math.max(x1 - x0, y1 - y0) / SH_RES;
+      shM.set(m, 16 * k);
+      shPar.set([1 / SH_RES, 0, (0.1 + 2 * texel) / (far - near), 0], 4 * k);
+      gl.framebufferTextureLayer(gl.FRAMEBUFFER, gl.DEPTH_ATTACHMENT, shTexM, 0, k);
+      gl.clear(gl.DEPTH_BUFFER_BIT);
+      gl.uniformMatrix4fv(gl.getUniformLocation(shDepthP, "uLightM"), false, m);
+      chunks.forEach((c, i) => {
+        const s = spans[i];
+        if (c.glass || s[1] < x0 || s[0] > x1 || s[3] < y0 || s[2] > y1) return;
+        gl.uniform3fv(gl.getUniformLocation(shDepthP, "uLo"), c.lo); gl.uniform3fv(gl.getUniformLocation(shDepthP, "uHi"), c.hi);
+        gl.bindVertexArray(c.vao); gl.drawElements(gl.TRIANGLES, c.count, gl.UNSIGNED_SHORT, c.offset);
+        narrowLines(c, texel);
+      });
+    });
+    gl.bindVertexArray(null); gl.disable(gl.POLYGON_OFFSET_FILL); gl.disable(gl.DEPTH_TEST); gl.bindFramebuffer(gl.FRAMEBUFFER, null);
+    shN = layers.length;
+    const full = payload.groups.flatMap((g) => g.levels[0]).filter((c) => !c.glass);
+    shFrame = { span, xl, yl, zl, near, far, full, spans: full.map((c) => span(c.lo, c.hi)) };
+    nearKey = "";
+    return shN;
+  }
+  // the near layer: NEAR_M of light-space footprint round the camera's ground point snapped to NEAR_CELL_M, in the
+  // layer after the static ones, so its texels are NEAR_M / SH_RES (9 cm) whatever the sun's slant. It draws every
+  // group's full level, eaves and fittings the casters leave out included, and is drawn again only when that cell, the
+  // sun or the payload changes; 1 when it is in use (none past the static layers' count, or with debug bit 16384)
+  const NEAR_M = 192, NEAR_CELL_M = 32, NEAR_BIAS_M = 0.05;
+  let nearKey = "", nearDrawn = 0;
+  function nearShadow(anchor, dbg) {
+    if (!shN || shN >= SH_LAYERS || dbg & 16384) { nearKey = ""; return 0; }
+    const cell = [Math.round(anchor[0] / NEAR_CELL_M), Math.round(anchor[2] / NEAR_CELL_M)];
+    const key = `${shKey}|${cell.join()}`;
+    if (key === nearKey) return 1;
+    nearKey = key; nearDrawn++;
+    const { span, xl, yl, zl, near, far, full, spans } = shFrame;
+    const c = span([cell[0] * NEAR_CELL_M, anchor[1], cell[1] * NEAR_CELL_M], [cell[0] * NEAR_CELL_M, anchor[1], cell[1] * NEAR_CELL_M]);
+    const x0 = c[0] - NEAR_M / 2, x1 = c[0] + NEAR_M / 2, y0 = c[2] - NEAR_M / 2, y1 = c[2] + NEAR_M / 2;
+    const sx = 2 / (x1 - x0), sy = 2 / (y1 - y0), sz = 2 / (far - near);
+    const m = [sx * xl[0], sy * yl[0], sz * zl[0], 0, sx * xl[1], sy * yl[1], sz * zl[1], 0, sx * xl[2], sy * yl[2], sz * zl[2], 0,
+               -(x1 + x0) / (x1 - x0), -(y1 + y0) / (y1 - y0), -(far + near) / (far - near), 1];
+    shM.set(m, 16 * shN);
+    shPar.set([1 / SH_RES, 0, (NEAR_BIAS_M + 1.5 * NEAR_M / SH_RES) / (far - near), 0], 4 * shN);
+    gl.bindFramebuffer(gl.FRAMEBUFFER, shFbo); gl.viewport(0, 0, SH_RES, SH_RES);
+    gl.enable(gl.DEPTH_TEST); gl.depthFunc(gl.LESS); gl.depthMask(true);
+    gl.enable(gl.POLYGON_OFFSET_FILL); gl.polygonOffset(3, 1);
+    gl.useProgram(shDepthP);
+    gl.framebufferTextureLayer(gl.FRAMEBUFFER, gl.DEPTH_ATTACHMENT, shTexM, 0, shN);
+    gl.clear(gl.DEPTH_BUFFER_BIT);
+    gl.uniformMatrix4fv(gl.getUniformLocation(shDepthP, "uLightM"), false, m);
+    full.forEach((ch, i) => {
+      const s = spans[i];
+      if (s[1] < x0 || s[0] > x1 || s[3] < y0 || s[2] > y1) return;
+      gl.uniform3fv(gl.getUniformLocation(shDepthP, "uLo"), ch.lo); gl.uniform3fv(gl.getUniformLocation(shDepthP, "uHi"), ch.hi);
+      gl.bindVertexArray(ch.vao); gl.drawElements(gl.TRIANGLES, ch.count, gl.UNSIGNED_SHORT, ch.offset);
+      narrowLines(ch, NEAR_M / SH_RES);
+    });
+    gl.bindVertexArray(null); gl.disable(gl.POLYGON_OFFSET_FILL); gl.disable(gl.DEPTH_TEST); gl.bindFramebuffer(gl.FRAMEBUFFER, null);
+    return 1;
+  }
+  // the tree table (tTree below row TREE_N): each 7 m cell's tree density, conifer share and tallest tree near it, so a
+  // 3D tree costs one texel fetch. It is drawn again whenever the footprint layer changes, which also clears the sun
+  // cache in its alpha (bakeSun keys on treeGen).
+  const tFb = gl.createFramebuffer();
+  gl.bindFramebuffer(gl.FRAMEBUFFER, tFb);
+  gl.framebufferTexture2D(gl.FRAMEBUFFER, gl.COLOR_ATTACHMENT0, gl.TEXTURE_2D, T.tTree, 0);
+  gl.bindFramebuffer(gl.FRAMEBUFFER, null);
+  setStatic(treeP);
+  let treeGen = 0, footprint;
+  function treePass() {
+    gl.useProgram(treeP);
+    gl.bindFramebuffer(gl.FRAMEBUFFER, tFb); gl.viewport(0, 0, TREE_N, TREE_N);
+    gl.drawArrays(gl.TRIANGLES, 0, 3);
+    gl.bindFramebuffer(gl.FRAMEBUFFER, null);
+    treeGen++;
+  }
+  // A payload's footprint layer (build_meshes, mesh_footprint) stands in for the data's building distances (locA's
+  // alpha) while that payload is loaded, so the trees and the micro-relief follow the meshes; without one, the data's
+  // own come back.
+  async function footprintOf(payload) {
+    const e = payload.footprint, L = dec.locA;
+    if (!e) return null;
+    if (e.enc !== "u8" || e.w !== L.w || e.h !== L.h || e.ch !== 1) throw new Error("bad mesh footprint layer");
+    const raw = await inflate(e.data);
+    if (raw.length !== L.w * L.h) throw new Error("bad mesh footprint layer");
+    return decU8(e, raw);
+  }
+  function setFootprint(sd) {
+    if (sd === footprint) return;
+    const L = dec.locA, a = sd ? L.a.slice() : L.a;
+    if (sd) for (let k = 0, n = L.w * L.h; k < n; k++) a[4 * k + 3] = sd[k];
+    gl.activeTexture(gl.TEXTURE20); gl.bindTexture(gl.TEXTURE_2D, T.tLocA);
+    gl.texSubImage2D(gl.TEXTURE_2D, 0, 0, 0, L.w, L.h, gl.RGBA, gl.UNSIGNED_BYTE, a);
+    footprint = sd;
+    treePass();
+  }
+  let meshUploads = 0;
+  async function uploadMeshes(payload) {
+    if (!payload) { setFootprint(null); return Object.assign([], { gen: ++meshUploads, shadow: [], groups: [] }); }
+    if (payload.format !== MESH_FORMAT || payload.version !== MESH_VERSION) throw new Error("unsupported mesh payload");
+    // validate everything before creating GL objects, so a rejected payload leaves nothing behind
+    const lv = payload.levels, groups = payload.groups;
+    if (!lv || !(lv.rows > 0) || !(lv.fov > 0 && lv.fov < 180) || !Array.isArray(groups)
+        || !groups.every((g) => g.box.length === 6 && g.box.every(Number.isFinite) && g.switch.length === 2
+          && g.switch.every((d) => d === null || d > 0)))
+      throw new Error("bad mesh levels of detail");
+    const full = new Uint8Array(groups.length);
+    let nv = 0, nt = 0;
+    for (const c of payload.chunks) {
+      if (!Number.isInteger(c.group) || c.group < 0 || c.group >= groups.length || ![0, 1, 2, 3].includes(c.level))
+        throw new Error(`a ${c.asset} chunk has a bad level of detail`);
+      if (c.level === 0) full[c.group] = 1;
+      // 16-bit indices: 65535 itself is WebGL's primitive-restart index
+      if (![c.verts, c.tris].every(Number.isInteger) || c.verts < 0 || c.verts > 65535 || c.tris < 0)
+        throw new Error(`a ${c.asset} chunk has bad counts`);
+      if (c.box.length !== 6 || !c.box.every(Number.isFinite) || [0, 1, 2].some((i) => c.box[i] > c.box[i + 3]))
+        throw new Error(`a ${c.asset} chunk has a bad box`);
+      // its narrow parts' triangles lead it, a run of each width in millimetres, narrowest first
+      const runs = c.narrow || [];
+      if (!Array.isArray(runs) || !runs.every((r, i) => Array.isArray(r) && r.length === 2 && Number.isInteger(r[0]) && r[0] > 0
+            && Number.isInteger(r[1]) && r[1] >= 0 && (i === 0 || r[1] > runs[i - 1][1]))
+          || runs.reduce((n, r) => n + r[0], 0) > c.tris)
+        throw new Error(`a ${c.asset} chunk has bad narrow runs`);
+      nv += c.verts; nt += c.tris;
+    }
+    if (!full.every(Boolean)) throw new Error("a mesh level group has no full level");
+    const decodeStart = performance.now();
+    const s = await meshStreams(payload, nv, nt);
+    console.info(`mesh payload decoded in ${(performance.now() - decodeStart).toFixed(1)} ms (${nv} vertices, ${nt} triangles)`);
+    const idx = new Uint16Array(s.idx.buffer, 0, 3 * nt);
+    let t1 = 0;
+    for (const c of payload.chunks) {
+      for (let i = 3 * t1, e = 3 * (t1 + c.tris); i < e; i++) if (idx[i] >= c.verts) throw new Error(`a ${c.asset} chunk indexes past its vertices`);
+      t1 += c.tris;
+    }
+    const towerTops = new Float32Array(+defs.NTW);
+    (payload.towers || []).forEach((t, i) => { if (!Number.isFinite(t) || i >= towerTops.length) throw new Error("bad mesh tower table"); towerTops[i] = t; });
+    const shadow = payload.shadow || [];
+    if (shadow.length > SH_LAYERS - 1 || !shadow.every((b) => b.length === 6 && b.every(Number.isFinite)))
+      throw new Error("bad mesh shadow regions");
+    const foot = await footprintOf(payload);
+    // after every chunk's triangles, its narrow parts' again as their edges' index pairs, a shadow layer's lines
+    const elems = new Uint16Array(3 * nt + 6 * payload.chunks.reduce((n, c) => n + (c.narrow || []).reduce((k, r) => k + r[0], 0), 0));
+    elems.set(idx);
+    const buf = (target, data) => { const b = gl.createBuffer(); gl.bindBuffer(target, b); gl.bufferData(target, data, gl.STATIC_DRAW); return b; };
+    gl.bindVertexArray(null);
+    const vb = [buf(gl.ARRAY_BUFFER, s.pos), buf(gl.ARRAY_BUFFER, s.nrm), buf(gl.ARRAY_BUFFER, s.attr), buf(gl.ARRAY_BUFFER, s.thin)];
+    const thin = new Uint16Array(s.thin.buffer, s.thin.byteOffset, nv);
+    const out = [];
+    let v0 = 0, t0 = 0, e = 3 * nt;
+    for (const c of payload.chunks) {
+      const lines = e, narrow = [];                                  // [width (m), index count from lines] per run
+      let i = 3 * t0;
+      for (const [n, mm] of c.narrow || []) {
+        for (const end = i + 3 * n; i < end; i += 3, e += 6) {      // edges a-b, b-c, c-a
+          elems[e] = elems[e + 5] = idx[i]; elems[e + 1] = elems[e + 2] = idx[i + 1]; elems[e + 3] = elems[e + 4] = idx[i + 2];
+        }
+        narrow.push([mm / 1000, e - lines]);
+      }
+      const vao = gl.createVertexArray();
+      gl.bindVertexArray(vao);
+      gl.bindBuffer(gl.ARRAY_BUFFER, vb[0]); gl.enableVertexAttribArray(0); gl.vertexAttribPointer(0, 3, gl.UNSIGNED_SHORT, true, 6, 6 * v0);
+      gl.bindBuffer(gl.ARRAY_BUFFER, vb[1]); gl.enableVertexAttribArray(1); gl.vertexAttribPointer(1, 2, gl.BYTE, true, 2, 2 * v0);
+      gl.bindBuffer(gl.ARRAY_BUFFER, vb[2]); gl.enableVertexAttribArray(2); gl.vertexAttribIPointer(2, 2, gl.UNSIGNED_BYTE, 2, 2 * v0);
+      // only a chunk with thin parts reads radii; every other chunk's aThin is the attribute's default, 0
+      const thinParts = thin.subarray(v0, v0 + c.verts).some((r) => r > 0);
+      if (thinParts) { gl.bindBuffer(gl.ARRAY_BUFFER, vb[3]); gl.enableVertexAttribArray(3); gl.vertexAttribPointer(3, 1, gl.UNSIGNED_SHORT, true, 2, 2 * v0); }
+      out.push({ asset: c.asset, vao, lo: c.box.slice(0, 3), hi: c.box.slice(3), count: 3 * c.tris, offset: 6 * t0, glass: c.pass === "glass", thin: thinParts,
+                 group: c.group, level: c.level, narrow, lines: 2 * lines });
+      v0 += c.verts; t0 += c.tris;
+    }
+    const ib = buf(gl.ELEMENT_ARRAY_BUFFER, elems);
+    for (const c of out) { gl.bindVertexArray(c.vao); gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER, ib); }
+    // levels of detail: each group's chunks by level (3: the shadow caster) and the distances from which its coarser
+    // levels may stand in, for the payload's reference view (levels.rows output rows, levels.fov); `pick` is the level
+    // each view drew last
+    out.groups = groups.map((g) => ({ lo: g.box.slice(0, 3), hi: g.box.slice(3), switch: g.switch.map((d) => d ?? Infinity),
+                                      levels: [[], [], [], []], pick: {} }));
+    for (const c of out) out.groups[c.group].levels[c.level].push(c);
+    out.refRows = lv.rows; out.refTan = Math.tan(lv.fov * Math.PI / 360);
+    gl.bindVertexArray(null);
+    out.buffers = [...vb, ib];
+    out.gen = ++meshUploads;
+    out.towerTops = towerTops;
+    out.shadow = shadow;
+    setFootprint(foot);
+    return out;
+  }
+  function freeMeshes(chunks) {
+    chunks.forEach((c) => gl.deleteVertexArray(c.vao));
+    (chunks.buffers || []).forEach((b) => gl.deleteBuffer(b));
+  }
+  let meshChunks;
+  try { meshChunks = await uploadMeshes(typeof MESHES === "undefined" ? null : MESHES); }
+  catch (e) { window.__hog = { error: String(e.message || e) }; return fail("Could not load the embedded meshes: " + (e.message || e)); }
 
   // static uniforms shared by the main program and the tree pass
   function setStatic(p) {
     gl.useProgram(p);
     const loc = (n) => gl.getUniformLocation(p, n);
-    Object.keys(T).forEach((k, i) => { const l = loc(k); if (l) gl.uniform1i(l, p === treeP && k === "tTree" ? 21 : i); });
-    for (const [n, v] of [["uLocU", M.local.aff[0]], ["uLocV", M.local.aff[1]], ["uCasU", M.castle.aff[0]], ["uCasV", M.castle.aff[1]],
-                          ["uForU", M.forest.aff[0]], ["uForV", M.forest.aff[1]]]) { const l = loc(n); if (l) gl.uniform3fv(l, v); }
+    Object.keys(T).forEach((k, i) => { const l = loc(k); if (l) gl.uniform1i(l, (p === treeP || p === sunP) && k === "tTree" ? 21 : i); });
+    for (const [n, v] of [["uLocU", M.local.aff[0]], ["uLocV", M.local.aff[1]], ["uForU", M.forest.aff[0]], ["uForV", M.forest.aff[1]]]) { const l = loc(n); if (l) gl.uniform3fv(l, v); }
     for (const [n, v] of [["uLocM", affLen(M.local.aff)], ["uForM", affLen(M.forest.aff)]]) { const l = loc(n); if (l) gl.uniform2fv(l, v); }
   }
-  // density of every tree cell, rendered once so the 3D trees cost one texel fetch per tree
-  setStatic(treeP);
-  const tFb = gl.createFramebuffer();
-  gl.bindFramebuffer(gl.FRAMEBUFFER, tFb);
-  gl.framebufferTexture2D(gl.FRAMEBUFFER, gl.COLOR_ATTACHMENT0, gl.TEXTURE_2D, T.tTree, 0);
-  gl.viewport(0, 0, TREE_N, TREE_N);
-  gl.drawArrays(gl.TRIANGLES, 0, 3);
-  gl.bindFramebuffer(gl.FRAMEBUFFER, null);
-  gl.deleteFramebuffer(tFb); gl.deleteProgram(treeP);
 
   setStatic(prog);
-  const U = {};
-  for (let i = 0, n = gl.getProgramParameter(prog, gl.ACTIVE_UNIFORMS); i < n; i++) {
-    const nm = gl.getActiveUniform(prog, i).name.replace(/\[0\]$/, "");
-    U[nm] = gl.getUniformLocation(prog, nm);
-  }
+  const uniforms = (p) => {
+    const o = {};
+    for (let i = 0, n = gl.getProgramParameter(p, gl.ACTIVE_UNIFORMS); i < n; i++) {
+      const nm = gl.getActiveUniform(p, i).name.replace(/\[0\]$/, "");
+      o[nm] = gl.getUniformLocation(p, nm);
+    }
+    return o;
+  };
+  const U = uniforms(prog);
+  U.tMeshT && gl.uniform1i(U.tMeshT, MESH_T_UNIT);
   const tw4 = new Float32Array(tw.length * 4), tx4 = new Float32Array(tw.length * 4);
-  tw.forEach((t, i) => { tw4.set(t.slice(0, 4), i * 4); tx4[i * 4] = t[4]; });
-  U.uTw && gl.uniform4fv(U.uTw, tw4); U.uTx && gl.uniform4fv(U.uTx, tx4);
+  tw.forEach((t, i) => { tw4.set(t.slice(0, 4), i * 4); tx4[i * 4] = t[4]; });   // the shading pass's mesh towers
+  // split passes: shadow march (G-buffer units 22, 28) and shading (units 22-27, shadow 29)
+  const splitU = [shP, p3P].map((p) => {
+    setStatic(p);
+    const u = {};
+    for (let i = 0, n = gl.getProgramParameter(p, gl.ACTIVE_UNIFORMS); i < n; i++) {
+      const nm = gl.getActiveUniform(p, i).name.replace(/\[0\]$/, "");
+      u[nm] = gl.getUniformLocation(p, nm);
+    }
+    u.uTw && gl.uniform4fv(u.uTw, tw4); u.uTx && gl.uniform4fv(u.uTx, tx4);
+    for (let k = 0; k < 7; k++) if (u["tG" + k]) gl.uniform1i(u["tG" + k], 22 + k);
+    if (u.tSh) gl.uniform1i(u.tSh, 29);
+    if (u.tMeshSh) gl.uniform1i(u.tMeshSh, SH_UNIT);
+    if (u.tMeshRefl) gl.uniform1i(u.tMeshRefl, 31);
+    return u;
+  });
+  setStatic(farP);
+  const UF = uniforms(farP);
+  UF.tMeshT && gl.uniform1i(UF.tMeshT, MESH_T_UNIT);
+  setStatic(clsP);
+  const UK = uniforms(clsP);
+  setStatic(meshP);
+  const UM = uniforms(meshP), UD = uniforms(meshDP);
+  gl.useProgram(resP);
+  const UR = uniforms(resP);
+  gl.uniform1i(UR.tG0, 22);
+  const UL = uniforms(reflP), REFL_UNIT = 31;
+  const UG = uniforms(glassP);
+  gl.useProgram(lakeP);
+  gl.uniform1i(gl.getUniformLocation(lakeP, "tG0"), 22); gl.uniform1i(gl.getUniformLocation(lakeP, "tG2"), 24);
+  // cone pre-pass: reads the grid from tTree, so it renders into its own target, copied into tTree's band each frame
+  setStatic(coneP);
+  const UC = uniforms(coneP);
+  const coneTex = mkTex(CG[0].c, CONE_ROWS, gl.RGBA8, gl.RGBA, gl.UNSIGNED_BYTE, null, gl.NEAREST), coneFb = gl.createFramebuffer();
+  gl.bindFramebuffer(gl.FRAMEBUFFER, coneFb);
+  gl.framebufferTexture2D(gl.FRAMEBUFFER, gl.COLOR_ATTACHMENT0, gl.TEXTURE_2D, coneTex, 0);
+  gl.bindFramebuffer(gl.FRAMEBUFFER, null);
+  // far-field sun visibility: tTree alpha, re-baked when the sun, quality or debug flags change (tTree is on unit 21 there)
+  setStatic(sunP);
+  const US = {};
+  for (const n of ["uSunDir", "uQual", "uDbg", "uDetail", "uShM", "uShP", "uShN", "tMeshSh"]) US[n] = gl.getUniformLocation(sunP, n);
+  gl.uniform1i(US.tMeshSh, SH_UNIT);
+  let sunSig = "";
+  function bakeSun(dir, qual, dbg, detail, nSh) {
+    const sig = `${dir.join(",")}|${qual}|${dbg}|${shKey}|${treeGen}`;
+    if (sig === sunSig || dir[1] <= -0.03 || (dbg & 1)) return;
+    sunSig = sig;
+    gl.useProgram(sunP);
+    gl.uniform3fv(US.uSunDir, dir); gl.uniform1i(US.uQual, qual); gl.uniform1i(US.uDbg, dbg); gl.uniform1i(US.uDetail, detail);
+    gl.uniformMatrix4fv(US.uShM, false, shM); gl.uniform4fv(US.uShP, shPar); gl.uniform1i(US.uShN, nSh);
+    gl.bindFramebuffer(gl.FRAMEBUFFER, tFb); gl.viewport(0, 0, TREE_N, TREE_N);
+    gl.colorMask(false, false, false, true);
+    gl.drawArrays(gl.TRIANGLES, 0, 3);
+    gl.colorMask(true, true, true, true);
+    gl.bindFramebuffer(gl.FRAMEBUFFER, null);
+  }
   gl.useProgram(up);
   const uUpSrc = gl.getUniformLocation(up, "tSrc"), uUpOut = gl.getUniformLocation(up, "uOut");
   gl.useProgram(taa);
@@ -185,8 +789,12 @@ void main() {
 
   // render targets: scene buffer (alpha = hit distance), full-res history ping-pong when float targets are renderable
   const cbf = !!gl.getExtension("EXT_color_buffer_float");
-  const fbo = gl.createFramebuffer(), hFbo = [gl.createFramebuffer(), gl.createFramebuffer()], hist = [null, null];
+  const fbo = gl.createFramebuffer(), fRb = gl.createRenderbuffer(), hFbo = [gl.createFramebuffer(), gl.createFramebuffer()], hist = [null, null];
   let fTex = null, fw = 0, fh = 0, hw = 0, hh = 0, histOk = false;
+  const gFbo = gl.createFramebuffer(), sFbo = gl.createFramebuffer(), dFbo = gl.createFramebuffer(), SDIV = 4;
+  const rFbo = gl.createFramebuffer(), rRb = gl.createRenderbuffer();   // mirrored mesh pass at half the internal size
+  const mFbo = gl.createFramebuffer();                                  // mesh depth pre-pass: distance + the shared depth
+  let gTex = [], shTex = null, rTex = null, mTex = null, mStale = true;
   function attach(fb, tex) {
     gl.bindFramebuffer(gl.FRAMEBUFFER, fb);
     gl.framebufferTexture2D(gl.FRAMEBUFFER, gl.COLOR_ATTACHMENT0, gl.TEXTURE_2D, tex, 0);
@@ -198,6 +806,42 @@ void main() {
       if (fTex) gl.deleteTexture(fTex);
       fTex = mkTex(sw, sh, cbf ? gl.RGBA16F : gl.RGBA8, gl.RGBA, cbf ? gl.HALF_FLOAT : gl.UNSIGNED_BYTE, null, gl.LINEAR);
       attach(fbo, fTex);
+      gl.bindRenderbuffer(gl.RENDERBUFFER, fRb);
+      gl.renderbufferStorage(gl.RENDERBUFFER, gl.DEPTH24_STENCIL8, sw, sh);
+      gl.bindFramebuffer(gl.FRAMEBUFFER, fbo);
+      gl.framebufferRenderbuffer(gl.FRAMEBUFFER, gl.DEPTH_STENCIL_ATTACHMENT, gl.RENDERBUFFER, fRb);
+      gl.bindFramebuffer(gl.FRAMEBUFFER, null);
+      gTex.forEach((x) => gl.deleteTexture(x)); if (shTex) gl.deleteTexture(shTex);
+      gTex = [0, 1, 2, 3, 4, 5, 6].map(() => mkTex(sw, sh, gl.RGBA32F, gl.RGBA, gl.FLOAT, null, gl.NEAREST));
+      shTex = mkTex(Math.ceil(sw / SDIV), Math.ceil(sh / SDIV), gl.RG32F, gl.RG, gl.FLOAT, null, gl.NEAREST);
+      gl.bindFramebuffer(gl.FRAMEBUFFER, gFbo);
+      gTex.forEach((x, k) => gl.framebufferTexture2D(gl.FRAMEBUFFER, gl.COLOR_ATTACHMENT0 + k, gl.TEXTURE_2D, x, 0));
+      gl.drawBuffers(gTex.map((x, k) => gl.COLOR_ATTACHMENT0 + k));
+      gl.framebufferRenderbuffer(gl.FRAMEBUFFER, gl.DEPTH_STENCIL_ATTACHMENT, gl.RENDERBUFFER, fRb);   // the far-tile stencil
+      if (gl.checkFramebufferStatus(gl.FRAMEBUFFER) !== gl.FRAMEBUFFER_COMPLETE) throw new Error("GBUFFER_INCOMPLETE");
+      gl.bindFramebuffer(gl.FRAMEBUFFER, dFbo);      // depth only: the resolve reads tG0, so it cannot draw into gFbo
+      gl.framebufferRenderbuffer(gl.FRAMEBUFFER, gl.DEPTH_STENCIL_ATTACHMENT, gl.RENDERBUFFER, fRb);
+      gl.drawBuffers([gl.NONE]); gl.readBuffer(gl.NONE);
+      if (gl.checkFramebufferStatus(gl.FRAMEBUFFER) !== gl.FRAMEBUFFER_COMPLETE) throw new Error("DEPTH_RESOLVE_INCOMPLETE");
+      if (mTex) gl.deleteTexture(mTex);
+      mTex = mkTex(sw, sh, gl.R32F, gl.RED, gl.FLOAT, null, gl.NEAREST); mStale = true;
+      gl.bindFramebuffer(gl.FRAMEBUFFER, mFbo);
+      gl.framebufferTexture2D(gl.FRAMEBUFFER, gl.COLOR_ATTACHMENT0, gl.TEXTURE_2D, mTex, 0);
+      gl.framebufferRenderbuffer(gl.FRAMEBUFFER, gl.DEPTH_STENCIL_ATTACHMENT, gl.RENDERBUFFER, fRb);
+      if (gl.checkFramebufferStatus(gl.FRAMEBUFFER) !== gl.FRAMEBUFFER_COMPLETE) throw new Error("MESH_DEPTH_INCOMPLETE");
+      gl.activeTexture(gl.TEXTURE0 + MESH_T_UNIT); gl.bindTexture(gl.TEXTURE_2D, mTex);
+      if (rTex) gl.deleteTexture(rTex);
+      const rw = Math.ceil(sw / 2), rh = Math.ceil(sh / 2);
+      rTex = mkTex(rw, rh, gl.RGBA32F, gl.RGBA, gl.FLOAT, null, gl.NEAREST);
+      gl.bindRenderbuffer(gl.RENDERBUFFER, rRb); gl.renderbufferStorage(gl.RENDERBUFFER, gl.DEPTH_COMPONENT24, rw, rh);
+      gl.bindFramebuffer(gl.FRAMEBUFFER, rFbo);
+      gl.framebufferTexture2D(gl.FRAMEBUFFER, gl.COLOR_ATTACHMENT0, gl.TEXTURE_2D, rTex, 0);
+      gl.framebufferRenderbuffer(gl.FRAMEBUFFER, gl.DEPTH_ATTACHMENT, gl.RENDERBUFFER, rRb);
+      if (gl.checkFramebufferStatus(gl.FRAMEBUFFER) !== gl.FRAMEBUFFER_COMPLETE) throw new Error("REFLECTION_INCOMPLETE");
+      gl.activeTexture(gl.TEXTURE0 + REFL_UNIT); gl.bindTexture(gl.TEXTURE_2D, rTex);
+      gl.bindFramebuffer(gl.FRAMEBUFFER, null);
+      attach(sFbo, shTex);
+      [...gTex, shTex].forEach((x, k) => { gl.activeTexture(gl.TEXTURE22 + k); gl.bindTexture(gl.TEXTURE_2D, x); });
     }
     if (cbf && (w !== hw || h !== hh)) {
       hw = w; hh = h;

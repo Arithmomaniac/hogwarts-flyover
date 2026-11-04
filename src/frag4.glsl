@@ -19,15 +19,17 @@ vec3 satAlb(vec2 xz, float pix) {
 vec3 classCol(float c, vec2 xz) {
   if (c < 0.5) return vec3(0.075, 0.092, 0.034);                                   // rough meadow
   if (c < 1.5) return vec3(0.055, 0.105, 0.028);                                   // lawn
-  if (c < 2.5) return mix(vec3(0.085, 0.045, 0.075), vec3(0.065, 0.058, 0.032), vnoise(xz * 0.35)); // heather in bloom
+  if (c < 2.5) return mix(vec3(0.066, 0.074, 0.031), vec3(0.082, 0.068, 0.036), vnoise(xz * 0.35)) * (0.8 + 0.4 * vnoise(xz * 0.6 + 3.)); // rough scrubland
   if (c < 3.5) return vec3(0.16, 0.13, 0.09);                                      // earth track
   if (c < 4.5) return mix(vec3(0.12, 0.085, 0.045), vec3(0.06, 0.08, 0.025), step(0.5, fract(xz.x * 0.4))); // vegetable beds
   if (c < 5.5) return vec3(0.045, 0.04, 0.025);                                    // forest floor
   if (c < 6.5) return vec3(0.048, 0.115, 0.028);                                   // Quidditch pitch
-  return vec3(0.12, 0.115, 0.1);                                                    // shingle
+  if (c < 7.5) return vec3(0.12, 0.115, 0.1);                                      // shingle
+  return mix(vec3(0.058, 0.068, 0.029), vec3(0.07, 0.062, 0.034), vnoise(xz * 0.21))  // overgrown garden: rank grass and
+    * (0.8 + 0.4 * vnoise(xz * 0.8 + 5.));                                          // dead stems, nettle and bramble clumps
 }
 
-vec3 groundAlb(vec3 p, TS s, float t, float pix, vec3 n) {
+vec3 groundAlb(vec3 p, TS s, float t, float pix, vec3 n, float shingle) {
   GS g = s.g;
   vec3 sat = satAlb(p.xz, pix);
   vec3 a = sat;
@@ -37,10 +39,14 @@ vec3 groundAlb(vec3 p, TS s, float t, float pix, vec3 n) {
   if (fw > 0.) a = mix(a, vec3(0.07, 0.1, 0.034), textureLod(tFor, fuv, 0.).g * fw * 0.6);
   if (g.lw > 0.) {
     vec2 j = (vec2(vnoise(p.xz * 0.6), vnoise(p.xz * 0.6 + 9.)) - 0.5) * 2.4;
+    if ((uDbg & 2048) != 0) j = vec2(0.);           // debug: class edges without their noise
     vec2 luv = vec2(dot(uLocU, vec3(p.xz + j, 1.)), dot(uLocV, vec3(p.xz + j, 1.)));
-    float c = floor(textureLod(tLocN, luv, 0.).r * 255. + 0.5);
+    ivec2 ln = textureSize(tLocB, 0);                // the surface class, nearest: the texel nearest filtering would take
+    float c = floor(texelFetch(tLocB, clamp(ivec2(floor(luv * vec2(ln))), ivec2(0), ln - 1), 0).b * 255. + 0.5);
     vec3 cc = classCol(c, p.xz);
     if (c > 5.5 && c < 6.5) { vec2 u = pitchUV(p.xz); cc *= 0.86 + 0.28 * step(0.5, fract(u.x / 9.)); }
+    // the lake's shingle from its smooth field (the page blurs its texels at load), the edge broken by the same noise
+    cc = mix(cc, classCol(7., p.xz), smoothstep(0.32, 0.48, shingle + 0.125 * j.x));
     float lum = dot(sat, vec3(0.3, 0.55, 0.15));
     cc *= mix(1., clamp(lum / 0.075, 0.65, 1.45), 0.3);
     a = mix(a, cc, g.lw);
@@ -63,7 +69,7 @@ float cloudDen(vec2 xz) {
   return smoothstep(0.5, 0.82, fbm4(q) + 0.12 * vnoise(q * 6.));
 }
 float cloudShadow(vec3 p) {
-  if (uSunDir.y < 0.03) return 1.;
+  if (uSunDir.y < 0.03 || (uDbg & 1024) != 0) return 1.;   // debug: the ground lit as under a clear sky
   return 1. - 0.65 * cloudDen(p.xz + uSunDir.xz * (CLOUD_Y - p.y) / uSunDir.y);
 }
 
@@ -104,7 +110,7 @@ vec3 applyFog(vec3 col, vec3 ro, vec3 rd, float t) {
   float b = 1. / 1100.;
   float k = b * rd.y * t;
   float path = abs(k) < 1e-3 ? t : (1. - exp(-k)) / (b * rd.y);
-  float fa = 1. - exp(-FOG_DENS * exp(-b * (ro.y - 150.)) * path);
+  float fa = 1. - exp(-FOG_DENS * exp(-b * (ro.y - (LAKE - 3.))) * path);
   float sd = max(dot(rd, uSunDir), 0.);
   vec3 fc = mix(uHorCol * 0.95, uSunCol * 0.75 + uHorCol * 0.45, pow(sd, 5.) * 0.65)
           + uGlow * 0.6 * pow(max(dot(normalize(rd.xz + 1e-5), normalize(uSunDir.xz + 1e-5)), 0.), 4.);
@@ -115,10 +121,10 @@ vec3 applyFog(vec3 col, vec3 ro, vec3 rd, float t) {
 float windowMask(vec3 p, float wx, float y0, float y1, vec2 cs, float pix, out float lit) {
   vec2 w = vec2(wx, p.y) / cs;
   vec2 c = floor(w), f = fract(w);
-  lit = step(0.6, hash12(c + 31.7));
+  lit = step(0.6, hash12(c + 31.7)) * (0.5 + 0.5 * hash12(c + 7.31));   // two in five lit, each room its own brightness
   float m = step(0.34, f.x) * step(f.x, 0.66) * step(0.26, f.y) * step(f.y, 0.8);
   float aa = smoothstep(0.2, 0.7, pix / min(cs.x, cs.y));      // sub-pixel windows -> their average coverage
-  m = mix(m, 0.17, aa); lit = mix(lit, 0.14, aa);             // biased dark: a distant lit castle reads as a dark mass, not a lamp
+  m = mix(m, 0.17, aa); lit = mix(lit, 0.1, aa);              // biased dark: a distant lit castle reads as a dark mass, not a lamp
   return m * step(y0, p.y) * step(p.y, y1);
 }
 // horizontal window coordinate along a wall; snap = align to the essay map grid (25.1 deg) and its diagonals,

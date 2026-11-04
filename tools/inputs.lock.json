@@ -1,0 +1,104 @@
+{
+  "baseline-s4-idle": {
+    "kind": "file",
+    "file": "baseline-s4-idle.html",
+    "size": 4858440,
+    "sha256": "45c106cdf4b775f79313d7c4f458b23b68109dc3be9031862b2ff0fcc6df05bd",
+    "about": "the frozen baseline page at Scardroy, main at 4c687c9 plus the uncommitted idle change; tools.site.baseline makes baseline-x, the frame-time and parity reference at X, from it",
+    "obtain": "It is files/baseline-s4-idle.html in Copilot session 66bca34b-296f-4bbc-a31f-5f89354e4d00."
+  },
+  "baseline-x": {
+    "kind": "file",
+    "file": "baseline-x.html",
+    "size": 4472906,
+    "sha256": "c50d218cee3fe7952065a6f74d9a247170d9e007e105c38c864aca8b52f26338",
+    "about": "the frozen baseline page re-frozen at site X: baseline-s4-idle's renderer with its castle's window band, shading ramp and fog made relative to the lake, the page's colours for the surface classes X's data adds, X's build/data.js (sha256 6d2bc65009edb8e4...) in place of Scardroy's, and the trunk page's tour (its waypoints and path, about 574 s) in place of its own; the parity and frame-time reference at X",
+    "obtain": "Run python -X utf8 -m tools.site.baseline in a worktree whose build/data.js has that sha256 and whose hogwarts-flyover.html flies that tour: it writes build/inputs/baseline-x.html, where tools.inputs finds it, and checks it against this pin."
+  },
+  "data-before-railway": {
+    "kind": "file",
+    "file": "data-before-railway.js",
+    "size": 4737634,
+    "sha256": "2d144c51654f2ef4be237b47537247adc5c018938b994c0bf9dbccadbe6438d6",
+    "about": "Scardroy's build/data.js as pack.py and fix_berth.py left it, before the railway regrade, from the original build; kept for the record, since S0 has started from data-before-railway-x since the move to X and nothing needs it",
+    "obtain": "It is files/data-before-railway.js in Copilot session 66bca34b-296f-4bbc-a31f-5f89354e4d00."
+  },
+  "data-before-railway-x": {
+    "kind": "file",
+    "file": "data-before-railway-x.js",
+    "size": 4350370,
+    "sha256": "9ed3b2f0a2abadb479aa113f6f53b1236895c5f339d0298cd1199cac9b0e367e",
+    "about": "site X's build/data.js as pack.py and fix_berth.py leave it, before the railway regrade; the input of stage S0",
+    "obtain": "Build it in this worktree: run `python -X utf8 -m tools.site.sources fetch`, then `python -X utf8 -m tools.site.build x`, which builds X's data from the pinned sources and writes this file to build/inputs/, where it is found. Don't record it in inputs.json, which every worktree shares."
+  },
+  "original-intermediates": {
+    "kind": "tree",
+    "manifest": "original-intermediates.lock.json",
+    "include": ["build", "dem", "s2tiles", "src", "src_run", "feature_offsets.json", "georef.json",
+                "lake_mask_grounds.npy", "osm.json", "osm_water_wide.json", "samplesets.npz", "search1.npz",
+                "search2.npz", "search3.npz", "search4.npz"],
+    "about": "the original data build's inputs and intermediates: class rasters, castle masses, metadata and water layers, DEM and Sentinel-2 tiles, OSM extracts, the location searches and the original build scripts",
+    "obtain": "It is files/hogwarts in Copilot session dd39d8db-7f9d-4bc9-8a0d-c80aa8428778 (White Hound's pages there come from the White Hound cache instead)."
+  },
+  "whitehound-mirror": {
+    "kind": "dir",
+    "about": "a local copy of White Hound's pages, text extracts, images and image index (hogwarts/raw, hogwarts/txt, hogwarts/img, hogwarts/legend, whref, whref-index.json), from which tools/whcache.py fills its cache; tools/whcache.lock.json pins every file",
+    "obtain": "It is the files folder of Copilot session 66bca34b-296f-4bbc-a31f-5f89354e4d00. Without it the cache fetches what it can from the web; the text extracts and the image index exist only in the mirror."
+  },
+  "site-glo30": {
+    "kind": "tree",
+    "manifest": "site/locks/site-glo30.json",
+    "include": ["Copernicus_DSM_COG_10_N57_00_W006_00_DEM.tif", "Copernicus_DSM_COG_10_N57_00_W005_00_DEM.tif"],
+    "about": "Copernicus GLO-30 surface-model tiles N57 W006 and W005, which cover every layer and horizon of both sites",
+    "obtain": "Run `python -X utf8 -m tools.site.sources fetch site-glo30`."
+  },
+  "site-os50": {
+    "kind": "tree",
+    "manifest": "site/locks/site-os50.json",
+    "include": ["terr50_gagg_gb.zip"],
+    "about": "OS Terrain 50, Great Britain's 50 m bare-earth model (ASCII grids), OS's 2026-07 release",
+    "obtain": "Run `python -X utf8 -m tools.site.sources fetch site-os50` while OS still serves the 2026-07 release: its download API serves only the current release, which OS replaces each year. After that, use a kept copy of the pinned terr50_gagg_gb.zip and record its folder with `python -X utf8 -m tools.inputs set site-os50 FOLDER`. Re-pinning to a newer release changes the heights, so its registration and the model comparison must be measured again."
+  },
+  "site-ostn15": {
+    "kind": "tree",
+    "manifest": "site/locks/site-ostn15.json",
+    "include": ["uk_os_OSTN15_NTv2_OSGBtoETRS.tif"],
+    "about": "the OSTN15 grid that transforms British National Grid coordinates to ETRS89",
+    "obtain": "Run `python -X utf8 -m tools.site.sources fetch site-ostn15`."
+  },
+  "site-fabdem": {
+    "kind": "tree",
+    "manifest": "site/locks/site-fabdem.json",
+    "include": ["N57W006_FABDEM_V1-2.tif", "N57W005_FABDEM_V1-2.tif"],
+    "about": "FABDEM V1-2 tiles N57 W006 and W005: Copernicus GLO-30 with forests and buildings removed",
+    "obtain": "Run `python -X utf8 -m tools.site.sources fetch site-fabdem`."
+  },
+  "site-gedtm30": {
+    "kind": "tree",
+    "manifest": "site/locks/site-gedtm30.json",
+    "include": ["gedtm30_n57_w006_w004.npy", "gedtm30_n57_w006_w004.json"],
+    "about": "GEDTM30 v1.2, a 30 m bare-earth ensemble model, over 57-58 N and 6-4 W in metres",
+    "obtain": "Run `python -X utf8 -m tools.site.sources fetch site-gedtm30`."
+  },
+  "site-osm-x": {
+    "kind": "tree",
+    "manifest": "site/locks/site-osm-x.json",
+    "include": ["osm.json"],
+    "about": "OpenStreetMap within 13 km of site X as of 2026-10-31: peaks and hills, places, water, watercourses, roads, railways, buildings and woods",
+    "obtain": "Run `python -X utf8 -m tools.site.sources fetch site-osm-x`."
+  },
+  "site-osm-water-x": {
+    "kind": "tree",
+    "manifest": "site/locks/site-osm-water-x.json",
+    "include": ["osm_water_wide.json"],
+    "about": "OpenStreetMap water bodies, riverbanks and coastline within 40 km of site X, and watercourses within 13 km, as of 2026-10-31",
+    "obtain": "Run `python -X utf8 -m tools.site.sources fetch site-osm-water-x`."
+  },
+  "site-s2-x": {
+    "kind": "tree",
+    "manifest": "site/locks/site-s2-x.json",
+    "include": ["tiles"],
+    "about": "Sentinel-2 cloudless 2023 tiles over site X: zoom 14 for the 12 km layer, zoom 11 for the 36 km layer",
+    "obtain": "Run `python -X utf8 -m tools.site.sources fetch site-s2-x`."
+  }
+}
