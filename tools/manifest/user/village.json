@@ -1,0 +1,10 @@
+{
+  "quotes": [],
+  "choices": [
+    "village_roofer: compas_cgal, CGAL's straight skeleton, as the village roofer; the repository adopts licences as needed to comply",
+    "village_roofs: roofs by style family and street, as built: cottages mostly thatched, some High Street shop-houses and villas slated, the Hog's Head slated",
+    "village_ancillary: the ancillary set as built: High Street lamps, hanging signs and the Hog's Head's boar sign, the Shack's fence, a kirkyard wall with a few headstones, garden walls and gates near the High Street",
+    "village_look: the High Street pilot's look accepted; scale it up to the whole village",
+    "shack_above: (5b) Drop the 7-building farm hamlet (components 25, 26, 29 and 30), and move cottages 28 and 23 across their lane (45 m and 32 m) so their floors fall to about 324.2 m, leaving the Shack 4.1 m above the highest other floor"
+  ]
+}

@@ -3,7 +3,37 @@ precision highp float;
 precision highp int;
 precision highp sampler2D;
 //__DEFINES__
+#define SDIV 4
+#ifdef SPLIT_P1
+layout(location = 0) out vec4 gOut0;
+layout(location = 1) out vec4 gOut1;
+layout(location = 2) out vec4 gOut2;
+layout(location = 3) out vec4 gOut3;
+layout(location = 4) out vec4 gOut4;
+layout(location = 5) out vec4 gOut5;
+layout(location = 6) out vec4 gOut6;
+#else
 out vec4 outColor;
+#endif
+#ifdef SPLIT_P1
+uniform sampler2D tMeshT;  // the mesh depth pre-pass: radial distance to the nearest opaque mesh along this pixel's ray (1e30: none)
+#endif
+#ifdef SPLIT_SH
+uniform sampler2D tG0; uniform sampler2D tG6;
+#endif
+#if defined(SPLIT_P3) || defined(SUN_PASS)
+uniform highp sampler2DArrayShadow tMeshSh;   // mesh casters' sun depth, one layer per footprint (finest last)
+uniform mat4 uShM[MESH_SH_LAYERS];            // world -> layer clip space
+uniform vec4 uShP[MESH_SH_LAYERS];            // texel size (uv), unused, depth bias (normalised), unused
+uniform int uShN;                             // layers rendered: 0 without mesh casters
+#endif
+#ifdef SPLIT_P3
+uniform sampler2D tG0; uniform sampler2D tG1; uniform sampler2D tG2; uniform sampler2D tG3; uniform sampler2D tG4; uniform sampler2D tG5;
+uniform sampler2D tSh;
+uniform sampler2D tMeshRefl;   // mirrored mesh pass: reflected colour, camera path length to the mirrored point (< 0: none)
+uniform int uMeshRefl;
+uniform sampler2D tG6;         // where each pixel's sun shadow starts: the mesh casters are looked up from there
+#endif
 
 uniform vec2 uRes;
 uniform vec2 uJitter;      // sub-pixel offset for temporal upsampling (scene pixels)
@@ -21,11 +51,12 @@ uniform float uExposure;
 uniform int uQual;
 uniform int uDetail;       // 1 full detail, 0 lite (canopy sheet instead of trees, no lake reflections)
 uniform int uDbg;
+uniform int uCone;         // 1: primary rays start at their 8x8 block's cone distance (tTree rows TREE_N..)
 
-uniform sampler2D tLocH;   // RGB32F bed, water delta, castle base height (2 m, map-aligned)
+uniform sampler2D tLocH;   // RGB32F bed, water delta, castle base height (the mesh shader's) (2 m, map-aligned)
 uniform sampler2D tLocA;   // RGBA8  road, trees, hedge sd, building sd
-uniform sampler2D tLocB;   // RG8    boundary-wall sd, stream sd
-uniform sampler2D tLocN;   // RG8    surface class, building code (nearest)
+uniform sampler2D tLocB;   // RGB8   the lake's shingle as a smooth field (made at load in the old wall channel), stream sd,
+                           //        surface class (copied in at load over the old far-step bound; read with texelFetch)
 uniform sampler2D tMH;     // RG32F  10 m  (+-5 km)
 uniform sampler2D tMS;     // sRGB   Sentinel-2 albedo
 uniform sampler2D tMF;     // R8     plantation density
@@ -34,15 +65,15 @@ uniform sampler2D tAS;
 uniform sampler2D tAF;
 uniform sampler2D tBH;     // 120 m (+-36 km)
 uniform sampler2D tBS;
-uniform sampler2D tCasA;   // RGBA8  castle footprint sd of mass classes 0-3 (0.5 m)
-uniform sampler2D tCasB;   // RGBA8  castle footprint sd of mass classes 4-5; nearest two tower indices (texelFetch)
 uniform sampler2D tFor;    // RG8    essay Forest-map density, field fraction (8 m)
 uniform sampler2D tTree;   // RGBA8  per 7 m tree cell (cells -TREE_G0..): 3D-tree density, conifer fraction, tallest tree within two cells / 25.5 m (rendered at load)
+                           //        rows TREE_N..: columns 0..239 per 8x8 pixel block, cone pre-pass baseline march state (each frame):
+                           //        float bits of the start t_k with the baseline step index k in the low 9 bits, 0 = no skip;
+                           //        columns 240.. float bits of the static max-height grid the cone pass bounds against (at load)
 
 uniform vec3 uLocU; uniform vec3 uLocV; uniform vec2 uLocM;
-uniform vec3 uCasU; uniform vec3 uCasV;
 uniform vec3 uForU; uniform vec3 uForV; uniform vec2 uForM;
-uniform vec4 uTw[NTW];     // tower: east, north, radius, top
+uniform vec4 uTw[NTW];     // tower: east, north, radius, top (the shading pass's mesh towers)
 uniform vec4 uTx[NTW];     // tower: roof type
 
 // non-constant zero: stops the D3D compiler from unrolling loops (and inlining their bodies N times)
@@ -113,20 +144,19 @@ vec2 regionalH(vec2 xz) {
   return b;
 }
 
-struct GS { float bed; float wd; float lw; float ed; vec2 luv; vec4 la; float cb; };
+struct GS { float bed; float wd; float lw; float ed; vec2 luv; vec4 la; };
 
 GS sampleGround(vec2 xz) {
   GS g;
   vec2 r = regionalH(xz);
   g.luv = vec2(dot(uLocU, vec3(xz, 1.)), dot(uLocV, vec3(xz, 1.)));
-  g.lw = 0.; g.la = vec4(0., 0., 1., 1.); g.cb = 0.;
+  g.lw = 0.; g.la = vec4(0., 0., 1., 1.);
   vec2 e = min(g.luv, 1. - g.luv) * uLocM;
   float ed = min(e.x, e.y);
   g.ed = ed;
   if (ed > 0.) {
     g.lw = smoothstep(0., 80., ed);
-    vec3 l = texRG(tLocH, g.luv);
-    r = mix(r, l.xy, g.lw); g.cb = l.z;
+    r = mix(r, texRG(tLocH, g.luv).xy, g.lw);
     g.la = textureLod(tLocA, g.luv, 0.);
   }
   g.bed = r.x; g.wd = r.y;
@@ -177,7 +207,7 @@ float treeDens(vec2 xz, out float conF) {
   vec2 e = min(g.luv, 1. - g.luv) * uLocM;
   g.ed = min(e.x, e.y);
   if (g.ed > 80.) {                                  // well inside the local layer only its textures matter
-    g.lw = 1.; g.la = textureLod(tLocA, g.luv, 0.); g.wd = texRG(tLocH, g.luv).y; g.bed = 0.; g.cb = 0.;
+    g.lw = 1.; g.la = textureLod(tLocA, g.luv, 0.); g.wd = texRG(tLocH, g.luv).y; g.bed = 0.;
   } else g = sampleGround(xz);
   return vegDensity(xz, g, conF) * vegMask(g);
 }

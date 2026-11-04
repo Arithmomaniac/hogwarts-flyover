@@ -3,7 +3,7 @@ and the terraformed height field around the grounds and Hogsmeade."""
 from common import *
 from features import local_grid, NX, NY, FX0, FY0, RES
 
-LAKE_LEVEL = 153.0
+LAKE_LEVEL = SITE["lake"]
 
 # Decorations (title, compass, scale bar) to blank in native map pixels: (x0, y0, x1, y1)
 DECOR_G = [(990, 2170, 1900, 2300), (1580, 1840, 1960, 2180), (740, 2270, 900, 2330)]

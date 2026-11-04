@@ -1,7 +1,8 @@
 """Regional LOD layers in a north-up frame centred on the castle (x = east, y = north, metres):
    M: +-5 km @ 10 m, A: +-12 km @ 30 m, B: +-36 km @ 120 m.
    Each height level stores bed height and water-surface height (-1000 = no water).
-   Rows are stored south -> north (row 0 = minimum y)."""
+   Rows are stored south -> north (row 0 = minimum y).
+   Also the Sentinel-2 cloudless colour of each level (S_*) and the plantation density of the M and A levels (SF_*)."""
 from common import *
 from PIL import ImageDraw
 import math
@@ -175,6 +176,50 @@ def main():
                 acc = acc + np.stack([map_coordinates(Ms[..., c], [py, px], order=1, mode='nearest') for c in range(3)], -1)
         np.save(P("build", f"S_{name}.npy"), np.clip(acc / 4, 0, 255).astype(np.uint8))
         print("satellite", name, n)
+    np.save(P("build", "S_B.npy"), satellite_B((CASTLE_E, CASTLE_N), P("s2tiles")))
+    for name in PLANTATIONS:
+        layers = [np.load(P("build", f"{kind}.npy")) for kind in (f"S_{name}", f"R_{name}_bed", f"R_{name}_surf")]
+        np.save(P("build", f"SF_{name}.npy"), plantations(name, *layers))
+
+
+def satellite_B(anchor, tiles, z=11, R=36500.0):
+    """The 120 m layer's Sentinel-2 cloudless colour round the anchor, 2 x 2 supersampled from the zoom-11 tiles in
+    the folder `tiles`."""
+    E0, N0 = anchor
+    n = 2 ** z
+    lons, lats = to_ll.transform([E0 - R, E0 + R, E0 - R, E0 + R], [N0 - R, N0 - R, N0 + R, N0 + R])
+    xs = [(lon + 180) / 360 * n for lon in lons]
+    ys = [(1 - math.asinh(math.tan(math.radians(lat))) / math.pi) / 2 * n for lat in lats]
+    x0, x1, y0, y1 = int(min(xs)), int(max(xs)), int(min(ys)), int(max(ys))
+    Mz = np.zeros(((y1 - y0 + 1) * 256, (x1 - x0 + 1) * 256, 3), np.float32)
+    for x in range(x0, x1 + 1):
+        for y in range(y0, y1 + 1):
+            tile = Image.open(os.path.join(tiles, f"{z}_{x}_{y}.jpg")).convert("RGB")
+            Mz[(y - y0) * 256:(y - y0 + 1) * 256, (x - x0) * 256:(x - x0 + 1) * 256] = np.asarray(tile)
+    X, Y, _ = grid(*LEVELS["B"])
+    acc = 0
+    for dx in (-30, 30):
+        for dy in (-30, 30):
+            lon, lat = to_ll.transform(X + E0 + dx, Y + N0 + dy)
+            xt = (np.asarray(lon) + 180) / 360 * n; yt = (1 - np.arcsinh(np.tan(np.radians(lat))) / np.pi) / 2 * n
+            px = (xt - x0) * 256 - 0.5; py = (yt - y0) * 256 - 0.5
+            acc = acc + np.stack([map_coordinates(Mz[..., c], [py, px], order=1, mode='nearest') for c in range(3)], -1)
+    return np.clip(acc / 4, 0, 255).astype(np.uint8)
+
+
+PLANTATIONS = {"M": (2, 0.7), "A": (1, 0.6)}     # level: (texels kept dry beside water, smoothing sigma in texels)
+
+
+def plantations(name, S, bed, surf):
+    """A level's forest density from its Sentinel-2 colour S: dark green ground away from its water (surf above bed)."""
+    dry_px, sigma = PLANTATIONS[name]
+    S = S.astype(np.float32) / 255.0
+    lum = 0.3 * S[..., 0] + 0.59 * S[..., 1] + 0.11 * S[..., 2]
+    gr = S[..., 1] - S[..., 0]
+    dens = np.clip((0.165 - lum) / 0.035, 0, 1) * np.clip((gr + 0.005) / 0.025, 0, 1)
+    dens = np.where(ndi.binary_dilation(surf > bed, iterations=dry_px), 0, dens)
+    dens = ndi.gaussian_filter(ndi.median_filter(dens, size=3), sigma)
+    return np.clip(dens * 255, 0, 255).astype(np.uint8)
 
 
 if __name__ == "__main__":

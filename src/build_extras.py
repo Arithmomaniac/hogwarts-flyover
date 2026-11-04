@@ -1,6 +1,12 @@
 """Extra point features + points of interest, merged into build/final_meta.json."""
 from common import *
-from build_final import wall_chain_polygon, g2w, h2w, DECOR_G
+from build_final import WILLOW_G, gates_gap, g2w, h2w, DECOR_G
+import forest_places
+
+
+def reference(anchor):
+    """The essay's reference point (the TM frame's origin) from the castle at anchor: distance (km) and direction."""
+    return {"km": round(float(np.hypot(*anchor)) / 1000.0, 1), "dir": compass16(-anchor[0], -anchor[1])}
 
 
 def main():
@@ -9,15 +15,7 @@ def main():
     ex = {}
 
     # --- winged-boar gates (3g): the gap in the boundary wall nearest the label ---
-    chain = wall_chain_polygon(mg["wall"])
-    lab = np.array([416.0, 1248.0])
-    gaps = []
-    for a, b in zip(chain[:-1], chain[1:]):
-        mid = (a + b) / 2
-        if np.linalg.norm(mid - lab) < 140: gaps.append((np.linalg.norm(b - a), a, b))
-    gaps.sort(key=lambda g: -g[0])
-    _, a, b = gaps[0]
-    pa = np.array(g2w(*a), float); pb = np.array(g2w(*b), float)
+    pa, pb = gates_gap(mg["wall"])
     ex["gates"] = [pa.tolist(), pb.tolist()]
     print("gates gap %.1f m" % np.linalg.norm(pb - pa), pa, pb)
 
@@ -37,7 +35,7 @@ def main():
     print("ship length %.1f m width %.1f m" % (np.linalg.norm(s1 - s0), width))
 
     # --- Whomping Willow (5a) ---
-    ex["willow"] = [float(v) for v in g2w(1060, 492)]
+    ex["willow"] = [float(v) for v in g2w(*WILLOW_G)]
 
     # --- lake centroid ---
     lake = np.load(P("lake_mask_grounds.npy"))
@@ -67,16 +65,17 @@ def main():
         ("Hogsmeade", [float(tb[0]), float(tb[1])], "thatched village ~1 mile SSW of the castle"),
         ("Shrieking Shack", [-877.0, -883.5], "on its own little hill on the Hogwarts side of the High Street"),
         ("Forbidden Forest", [float(v) for v in ff_to_world(1150, 2300)], "mainly deciduous, ~4 miles N-S, west and north-west of the castle"),
-        ("Aragog's hollow", [float(v) for v in ff_to_world(1560, 2134)], "steep-sided crater ~1⅓ miles into the Forest"),
-        ("Grawp's clearing", [float(v) for v in ff_to_world(940, 2186)], "artificial clearing among pines"),
+        ("Aragog's hollow", list(forest_places.where(SITE, "Aragog's hollow")), "steep-sided crater ~1⅓ miles into the Forest"),
+        ("Grawp's clearing", list(forest_places.where(SITE, "Grawp's clearing")), "artificial clearing among pines"),
         ("Sirius's cave", [float(v) for v in ff_to_world(60, 1790)], "on the mountain above the stile, ~1,300 yd up a stony path"),
     ]
     # real-world references (OSM, TM frame -> castle frame)
     osm = json.load(open(P("osm.json")))
+    wanted = {name for spellings in SITE["names"] for name in spellings}
     real = {}
     for el in osm["elements"]:
         t = el.get("tags", {}); n = t.get("name")
-        if n in ("Loch Beannacharain", "Scardroy Lodge", "Creag Coire na Feòla", "Bac an Eich", "Sgùrr a' Ghlas Leathaid", "Sgurr a' Ghlas Leathaid", "Meallan nan Uan", "Maoile Lunndaidh", "Sgùrr na Fearstaig", "Sgurr na Fearstaig"):
+        if n in wanted:
             if el["type"] == "node": lat, lon = el["lat"], el["lon"]
             else:
                 g = el.get("geometry") or []
@@ -88,6 +87,9 @@ def main():
     ex["real"] = {k: [round(v[0], 1), round(v[1], 1), v[2]] for k, v in real.items()}
     lon, lat = to_ll.transform(CASTLE_E, CASTLE_N)
     ex["castle_ll"] = [float(lat), float(lon)]
+    ex["place"], ex["glen"] = SITE["place"], SITE["glen"]
+    ex["ref"] = reference((CASTLE_E, CASTLE_N))
+    ex["dem"] = site_dem()                       # the page credits the elevation model the terrain was built from
     print("castle lat/lon", lat, lon)
     print("real refs", ex["real"])
     meta["extras"] = ex

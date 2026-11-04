@@ -2,6 +2,8 @@
 from common import *
 import zlib, base64, io
 
+import forest_places
+
 OUT = P("build", "data.js")
 
 
@@ -154,12 +156,19 @@ def main():
     for name, q in (("M", 0.1), ("A", 0.25), ("B", 0.5)):
         b = np.load(P("build", f"R_{name}_bed.npy")); s = np.load(P("build", f"R_{name}_surf.npy"))
         b, s = clean_water(b, s, {"M": 30, "A": 8, "B": 4}[name])
+        st = {"M": 10.0, "A": 30.0, "B": 120.0}[name]
+        S = deshade(np.load(P("build", f"S_{name}.npy")), b, st)     # the imagery's shading is the natural ground's
+        if name == "M" and SITE["aragog_hollow"]:      # the only level frag1.glsl reads there (regionalH, within 4.7 km)
+            X, Y = np.meshgrid(-5000.0 + st * np.arange(b.shape[1]), -5000.0 + st * np.arange(b.shape[0]))
+            natural = lambda e, n: ndi.map_coordinates(b, [(n + 5000.0) / st, (e + 5000.0) / st], order=1, mode="nearest")
+            cut = forest_places.hollow(b, X, Y, SITE["aragog_hollow"], natural)
+            print(f"  aragog's hollow: {float((b - cut).sum()) * st * st / 1e6:.3f} Mm3 cut, "
+                  f"{float((b - cut).max()):.1f} m at the deepest")
+            b = cut
         w = np.where(s > -999.0, s - b, -8.0)
         w = np.where(w < -1.0, -8.0, w)
         add(f"{name}Bed", enc_height(b, q, name + "Bed"))
         add(f"{name}W", enc_height(w, 0.02, name + "W"))
-        st = {"M": 10.0, "A": 30.0, "B": 120.0}[name]
-        S = deshade(np.load(P("build", f"S_{name}.npy")), b, st)
         np.save(P("build", f"Sd_{name}.npy"), S)
         add(f"{name}Sat", enc_jpg(S, 84 if name != "B" else 86))
         if name in ("M", "A"):
@@ -184,7 +193,9 @@ def main():
 
     # ---- essay Forest map layer (8 m) ----
     fo = np.load(P("build", "final_F2.npy")).copy()
-    fo[..., 0] = q16(ndi.gaussian_filter(fo[..., 0].astype(np.float32), 0.6)); fo[..., 1] = q16(fo[..., 1])
+    smooth = ndi.gaussian_filter(fo[..., 0].astype(np.float32), 0.6)
+    smooth[np.load(P("build", "final_Fclear.npy"))] = 0.0       # what the site's forest rules cleared stays clear
+    fo[..., 0] = q16(smooth); fo[..., 1] = q16(fo[..., 1])
     add("forest", enc_u8(fo, "forest"))
 
     total = sum(sizes.values())

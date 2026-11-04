@@ -1,0 +1,13 @@
+{
+ "files": [
+  [
+   "Copernicus_DSM_COG_10_N57_00_W006_00_DEM.tif",
+   "https://copernicus-dem-30m.s3.amazonaws.com/Copernicus_DSM_COG_10_N57_00_W006_00_DEM/Copernicus_DSM_COG_10_N57_00_W006_00_DEM.tif"
+  ],
+  [
+   "Copernicus_DSM_COG_10_N57_00_W005_00_DEM.tif",
+   "https://copernicus-dem-30m.s3.amazonaws.com/Copernicus_DSM_COG_10_N57_00_W005_00_DEM/Copernicus_DSM_COG_10_N57_00_W005_00_DEM.tif"
+  ]
+ ],
+ "kind": "Http"
+}

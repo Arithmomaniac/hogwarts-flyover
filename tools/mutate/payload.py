@@ -1,0 +1,50 @@
+"""Mutations of the payload codecs that the payload tests must catch."""
+from tools.mutate.run import Mutation
+
+CODECS = "test_assets_payload.CodecTests."
+PAYLOAD = "test_assets_payload.MeshPayloadTests."
+PAGE = "test_render_core.MeshOcclusionTests."
+MUTATIONS = [
+    Mutation("vendored files unchecked", "meshopt.py",
+             "    if hashlib.sha256(data).hexdigest() != PINNED[name]:",
+             "    if False:",
+             (CODECS + "test_vendored_files_match_their_pins",), rebuild=False),
+    Mutation("malformed vertex streams accepted", "meshopt.py",
+             "    if res:\n        raise ValueError(f\"malformed vertex stream",
+             "    if False:\n        raise ValueError(f\"malformed vertex stream",
+             (CODECS + "test_malformed_streams_and_wrong_index_counts_raise",), rebuild=False),
+    Mutation("malformed index streams accepted", "meshopt.py",
+             "    if res:\n        raise ValueError(f\"malformed index stream",
+             "    if False:\n        raise ValueError(f\"malformed index stream",
+             (CODECS + "test_malformed_streams_and_wrong_index_counts_raise",), rebuild=False),
+    Mutation("indices through the triangle codec, which rotates triangles", "meshopt.py",
+             "m.run(\"meshopt_encodeIndexSequence\",",
+             "m.run(\"meshopt_encodeIndexBuffer\",",
+             (CODECS + "test_indices_round_trip_exactly_without_rotating_triangles",), rebuild=False),
+    Mutation("indices past 16 bits accepted", "meshopt.py",
+             "indices.max() > 0xFFFF", "indices.max() > 0xFFFFFFFF",
+             (CODECS + "test_indices_round_trip_exactly_without_rotating_triangles",), rebuild=False),
+    Mutation("the decoder drops each vertex's thin radius", "build_meshes.py",
+             "\"thin\": wide[:, 6:].tobytes()}", "\"thin\": bytes(2 * verts)}",
+             (PAYLOAD + "test_streams_decode_to_exactly_what_the_encoder_quantized",), rebuild=False),
+    Mutation("raw streams no longer pin the vertex count", "build_meshes.py",
+             "        if len(stored[k]) != 2 * verts:", "        if False:",
+             (PAYLOAD + "test_old_and_damaged_payloads_are_rejected", PAYLOAD + "test_payload_rejects_unsafe_geometry"),
+             rebuild=False),
+    Mutation("positions read from the wrong bytes", "build_meshes.py",
+             "\"pos\": wide[:, :6].tobytes()", "\"pos\": wide[:, 2:8].tobytes()",
+             (PAYLOAD + "test_streams_decode_to_exactly_what_the_encoder_quantized",), rebuild=False),
+    # the page's decoder: these need a browser (set HOG_GPU) and rebuild the page in the copy
+    Mutation("page keeps a padding word in each position", "template.html",
+             "p[3 * v + 2] = w[4 * v + 2];", "p[3 * v + 2] = w[4 * v + 3];",
+             (PAGE + "test_the_page_decodes_the_streams_the_encoder_quantized",)),
+    Mutation("page drops each vertex's thin radius", "template.html",
+             "thin[v] = w[4 * v + 3];", "thin[v] = 0;",
+             (PAGE + "test_the_page_decodes_the_streams_the_encoder_quantized",)),
+    Mutation("page lets the vertex codec choose the vertex count", "template.html",
+             "  if (nrm.length !== 2 * nv || attr.length !== 2 * nv) throw", "  if (false) throw",
+             (PAGE + "test_rejected_payloads_leave_the_loaded_meshes",)),
+    Mutation("page skips the decoded indices' range check", "template_b.html",
+             "if (idx[i] >= c.verts) throw", "if (false) throw",
+             (PAGE + "test_rejected_payloads_leave_the_loaded_meshes",)),
+]

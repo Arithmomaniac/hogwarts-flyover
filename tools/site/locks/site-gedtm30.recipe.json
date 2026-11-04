@@ -1,0 +1,12 @@
+{
+ "bounds": [
+  -6.0,
+  57.0,
+  -4.0,
+  58.0
+ ],
+ "kind": "Window",
+ "scale": 1.0,
+ "stem": "gedtm30_n57_w006_w004",
+ "url": "https://s3.opengeohub.org/global/dtm/v1.2/gedtm_rf_m_30m_s_20060101_20151231_go_epsg.4326.3855_v1.2.tif"
+}
