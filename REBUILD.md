@@ -6,7 +6,7 @@ This guide records the scene's construction so a rewrite can preserve its reason
 
 The scene visualizes **White Hound's interpretation**, not a definitive location or architectural plan. Fictional geography comes only from [*The Map of Hogwarts* and related pages](https://web.archive.org/web/20261008141630/http://members.madasafish.com/~cj_whitehound/Fanfic/map_of_Hogwarts.htm); geographic context comes from elevation, satellite imagery and OpenStreetMap data. It does not use the films' castle or theme-park layout.
 
-This guide describes the accepted WebGL version based on commit [`9153cc9`](https://github.com/Arithmomaniac/hogwarts-flyover/commit/9153cc939f10411d596a7fe44429381d20cc5306), not the local experimental WebGPU work. Assembling the existing page is supported; regenerating its source data is not yet self-contained.
+This guide describes the published WebGL version: the mesh upgrade of the raymarched version based on commit [`9153cc9`](https://github.com/Arithmomaniac/hogwarts-flyover/commit/9153cc939f10411d596a7fe44429381d20cc5306), not the local experimental WebGPU work. Assembling the existing page is supported; regenerating its source data is only partly self-contained (see [Reproducibility limits](#reproducibility-limits)).
 
 ## Contents
 
