@@ -2,13 +2,16 @@
 reflections dropped, the meshes off by default, the cone pre-pass's copy of the step rule drifting from the march's,
 a raymarched object left without its mesh, a retired raymarched-only code registered again, the footprint layer
 leaving out a standing asset, reading its distances at texel centres or not reaching the page's trees, the beach and
-its bank back on the texel grid, metering judged under the clouds' shadows, thin set pieces left sub-pixel, widened
+its bank back on the texel grid or creased where the water's reach ends, metering judged under the clouds' shadows, thin set pieces left sub-pixel, widened
 too little, unevenly between passes or close up, or measured wrongly, thin casters' shadows broken into dots (looked
 up per shadow-pass block, left out of a layer's lines, measured or compared wrongly, or a lattice merged by lines),
 the mirror drawing what the
 lake cannot show,
-and levels of detail picked by the wrong pixels, without hysteresis, apart in the pre-pass and the G-buffer pass, kept
-from the shadow layers, nearer than their guards allow or from the simplifier where a lane built its own.
+levels of detail picked by the wrong pixels, without hysteresis, apart in the pre-pass and the G-buffer pass, kept
+from the shadow layers, nearer than their guards allow or from the simplifier where a lane built its own, a
+glasshouse's floor in its lawn or its dwarf wall short of the ground, glazing without its sheen or tint, small lights
+missing, shown through walls, over near panes, too dim or with a lantern's faces merged, a skimming ray called ground
+in mid-air or stepping over ridges, the far canopy a lawn, the burns painted beds and stars in a civil-dusk sky.
 
 The page mutations rebuild the copy's page and need a browser (set HOG_GPU):
 
@@ -39,6 +42,11 @@ SPAN = "test_assets_integration.LevelTests.test_a_group_of_a_familys_own_levels_
 DIRTY = "test_render_integrated.DirtyStateTests."
 LAKE = (DIRTY + "test_the_mirror_is_drawn_only_while_lake_water_shows",)
 NEAR = "test_render_integrated.NearShadowTests."
+GREENHOUSE = "test_assets_greenhouses.GreenhouseTests."
+GLAZING = "test_render_integrated.GlazingTests."
+LIGHTS = "test_render_integrated.LightPointTests."
+SMALL_LIGHTS = (LIGHTS + "test_panes_too_small_for_a_pixel_show_as_lights",)
+FAR = "test_render_integrated.FarTerrainTests."
 MUTATIONS = [
     Mutation("meshes off by default", "template_c.html",
              'let meshOn = Q.get("meshes") !== "0"', 'let meshOn = Q.get("meshes") === "1"',
@@ -115,7 +123,7 @@ MUTATIONS = [
              "max(0.8 * vd, max(eps, 0.0012 * tr))", "max(0.8 * vd, max(eps, 0.002 * tr))",
              (STEP + "test_the_cone_pass_replays_the_marchs_own_step_rule",), rebuild=False),
     Mutation("half the hedges left without their mesh", "mesh_grounds.py",
-             '"field-boundaries": hedges(scene, kept),', '"field-boundaries": hedges(scene, kept[::2]),',
+             '"field-boundaries": hedges(scene, kept, paths),', '"field-boundaries": hedges(scene, kept[::2], paths),',
              (OBJECTS + "test_every_boundary_wall_and_hedge_has_a_mesh",)),
     Mutation("the raymarched Willow's code registered again", "materials/shared.py",
              '    set_piece(4, "dark-timber",',
@@ -144,8 +152,11 @@ MUTATIONS = [
              "const SHINGLE = 7, SHINGLE_BLUR = 0.8;", "const SHINGLE = 7, SHINGLE_BLUR = 0.05;",
              (SCENE + "test_the_beach_follows_the_shore_not_the_texel_grid",)),
     Mutation("the bank's normal from the 0.3 m step again", "frag3.glsl",
-             "(s).g.wd > -0.9 ? 2. : 0.)", "(s).g.wd > -0.9 ? 0.3 : 0.)",
+             "2. * smoothstep(-3., -0.9, (s).g.wd))", "0.3 * smoothstep(-3., -0.9, (s).g.wd))",
              (SCENE + "test_the_bank_shades_as_one_slope_not_cell_by_cell",)),
+    Mutation("the bank's normal step switches at the water's reach at once", "frag3.glsl",
+             "2. * smoothstep(-3., -0.9, (s).g.wd))", "((s).g.wd > -0.9 ? 2. : 0.))",
+             (SCENE + "test_the_banks_normal_has_no_seam_where_it_leaves_the_waters_reach",)),
     Mutation("metering judged under the clouds' shadows again", "frag4.glsl",
              "if (uSunDir.y < 0.03 || (uDbg & 1024) != 0) return 1.;", "if (uSunDir.y < 0.03) return 1.;",
              ("test_render_core.MeshOcclusionTests.test_metered_exposure_keeps_sunlit_ground_steady_through_the_day",)),
@@ -251,14 +262,25 @@ MUTATIONS = [
              "(found.get(level, []) if level in own else found[0])", "found.get(level, [])",
              ("test_assets_payload.UnitLevelTests",), rebuild=False),
     Mutation("the class read half a texel off", "frag4.glsl",
-             "clamp(ivec2(floor(luv * vec2(ln))), ivec2(0), ln - 1)", "clamp(ivec2(floor(luv * vec2(ln) + 0.5)), ivec2(0), ln - 1)",
-             (SCENE + "test_the_ground_takes_its_class_from_the_texel_nearest_filtering_takes",)),
+             "vec2 f = luv * vec2(n) - 0.5, w = fract(f);", "vec2 f = luv * vec2(n), w = fract(f);",
+             (SCENE + "test_soft_classes_blend_as_the_texels_round_each_point_weigh_them",)),
     Mutation("the class read from the stream's channel", "frag4.glsl",
-             "ln - 1), 0).b * 255. + 0.5);", "ln - 1), 0).g * 255. + 0.5);",
-             (SCENE + "test_the_ground_takes_its_class_from_the_texel_nearest_filtering_takes",)),
+             "clamp(i, ivec2(0), n - 1), 0).b * 255. + 0.5);", "clamp(i, ivec2(0), n - 1), 0).g * 255. + 0.5);",
+             (SCENE + "test_soft_classes_blend_as_the_texels_round_each_point_weigh_them",)),
     Mutation("the page never copies the class into locB", "template_b.html",
              "for (let i = 0; i < n; i++) B.a[B.ch * i + 2] = N.a[N.ch * i];", "",
-             (SCENE + "test_the_ground_takes_its_class_from_the_texel_nearest_filtering_takes",)),
+             (SCENE + "test_soft_classes_blend_as_the_texels_round_each_point_weigh_them",)),
+    Mutation("the soft classes taken from the nearest texel", "frag4.glsl",
+             "vec2 f = luv * vec2(n) - 0.5, w = fract(f);", "vec2 f = luv * vec2(n) - 0.5, w = step(0.5, fract(f));",
+             (SCENE + "test_soft_classes_blend_as_the_texels_round_each_point_weigh_them",)),
+    Mutation("paths, beds and the pitch blended like the soft classes", "frag4.glsl",
+             "bool hardClass(float c) { return c > 2.5 && c < 6.5 && abs(c - 5.) > 0.5; }",
+             "bool hardClass(float c) { return false; }",
+             (SCENE + "test_a_hard_class_keeps_a_sharp_edge_where_its_weight_passes_a_half",)),
+    Mutation("the rock's strata back in regular bands", "frag4.glsl",
+             "  return mix(vec3(0.088, 0.082, 0.073) * r,",
+             "  return mix(vec3(0.088, 0.082, 0.073) * r * (0.86 + 0.14 * sin(p.y * 1.9)),",
+             ("test_render_ground.GroundLookTests.test_the_cliffs_rock_repeats_at_no_period",)),
     Mutation("the mirror target keeps one size", "template_b.html",
              "const rw = Math.ceil(sw / 2), rh = Math.ceil(sh / 2);", "const rw = 193, rh = 126;",
              (DIRTY + "test_a_resize_rebuilds_the_mesh_distance_and_the_mirror",)),
@@ -307,6 +329,58 @@ MUTATIONS = [
     Mutation("the near shadow layer biased as the static layers", "template_b.html",
              "(NEAR_BIAS_M + 1.5 * NEAR_M / SH_RES)", "(0.1 + 2 * NEAR_M / SH_RES)",
              (NEAR + "test_a_near_eave_shades_the_wall_beneath_it",)),
+    Mutation("a glasshouse's floor at its corners' median ground", "mesh_greenhouses.py",
+             "    y = clear_floor(inside, ground)", "    y = floor_level(rect, ground)",
+             (GREENHOUSE + "test_the_floor_stands_clear_of_the_ground_under_it",), rebuild=False),
+    Mutation("a glasshouse's dwarf wall stops under its floor", "mesh_greenhouses.py",
+             "prism(footprint.difference(inside), below(sill), sill, WALL_STONE)",
+             "prism(footprint.difference(inside), y - 0.1, sill, WALL_STONE)",
+             (GREENHOUSE + "test_the_dwarf_wall_meets_the_ground_under_a_raised_floor",), rebuild=False),
+    Mutation("the glazing scatters no sheen", "template_b.html",
+             "GLASS_HAZE = 0.05, GLASS_SUN", "GLASS_HAZE = 0, GLASS_SUN", (GLAZING + "test_a_pane_over_a_dim_room_shows_its_sheen",)),
+    Mutation("the glazing adds its sheen's tonemapped value", "template_b.html",
+             "o = vec4(${fl(GLASS_SCREEN)} * pow(aces((env * f + haze) * uExposure), vec3(1. / 2.2)), 0.);",
+             "o = vec4(aces((env * f + haze) * uExposure), 0.);", (GLAZING + "test_a_pane_over_a_dim_room_shows_its_sheen",)),
+    Mutation("the glazing's old faint tint", "template_b.html",
+             "const GLASS_T = `vec3(0.6, 0.74, 0.66)`", "const GLASS_T = `vec3(0.78, 0.86, 0.8)`",
+             (GLAZING + "test_a_pane_tints_what_it_covers_green",)),
+    Mutation("no small lights", "template_c.html",
+             "if (!pts || !pts.count || L.dusk <= 0 || dbg & 131072) return;", "return;",
+             SMALL_LIGHTS + (LIGHTS + "test_the_castle_reads_as_inhabited_at_night",)),
+    Mutation("small lights shine through walls", "template_c.html",
+             "gl.uniform1f(ULt.uDusk, L.dusk); gl.uniform1f(ULt.uExposure, L.exposure);\n    gl.enable(gl.DEPTH_TEST);",
+             "gl.uniform1f(ULt.uDusk, L.dusk); gl.uniform1f(ULt.uExposure, L.exposure);\n    gl.disable(gl.DEPTH_TEST);",
+             (LIGHTS + "test_a_light_hides_behind_what_stands_in_front_of_it",)),
+    Mutation("a pane big enough to draw itself keeps its light", "template_b.html",
+             " * (1. - smoothstep(1., 3., cover)) * step(0.1, facing);", " * step(0.1, facing);",
+             (LIGHTS + "test_a_pane_big_enough_to_draw_itself_takes_no_point",)),
+    Mutation("a small light only as bright as its pane's share of a pixel", "template_b.html",
+             "LIGHT_MIN = 0.25", "LIGHT_MIN = 0.", SMALL_LIGHTS),
+    Mutation("a lantern's faces joined as one pane", "template_b.html",
+             "const facing = cr.reduce((b, v, j) => b * 3 + Math.round(side * v / (2 * area)) + 1, 0);", "const facing = 0;",
+             (LIGHTS + "test_a_lamps_lantern_shows_from_above",)),
+    Mutation("a small light at its pane's face", "template_b.html",
+             "vec3 v = transpose(uCamRot) * (aPos - d / t * (0.25 + 0.001 * t) - uCamPos);", "vec3 v = transpose(uCamRot) * d;",
+             SMALL_LIGHTS),
+    Mutation("a skimming ray called ground when its budget runs out", "frag3.glsl",
+             "cont = (uDbg & 262144) != 0 ? 0 : CONT_N;", "cont = 0;", (FAR + "test_no_sky_shows_under_far_terrain",)),
+    Mutation("a skimming ray's steps grow as it goes on", "frag3.glsl",
+             "max(t - tPrev, CONT_PX * 2. * uTanHalf / uRes.y * tPrev)",
+             "max(t - tPrev, CONT_PX * 2. * uTanHalf / uRes.y * tPrev * exp2(float(cnt - maxM) / 16.))",
+             (FAR + "test_sky_never_hides_ground",)),
+    Mutation("the far canopy a smooth sheet", "frag5.glsl",
+             "    if (s.tp.w < 0. && (uDbg & 524288) == 0) {", "    if (false) {",
+             (FAR + "test_the_far_canopy_reads_as_the_trees_it_stands_for",)),
+    Mutation("the near canopy sheet a quilt of its cells", "frag5.glsl",
+             "float k = smoothstep(1.5, 3.5, pix) * (1. - smoothstep(7., 21., pix));",
+             "float k = 1. - smoothstep(7., 21., pix);",
+             ("test_render_integrated.LiteDetailTests.test_the_near_canopy_sheet_stays_smooth",)),
+    Mutation("the burns painted beds", "frag5.glsl",
+             "  if (burn > 0. && (uDbg & 524288) == 0) {", "  if (false) {",
+             ("test_render_integrated.BurnTests.test_a_burn_mirrors_the_sky_through_its_riffles",)),
+    Mutation("stars in a civil-dusk sky", "frag4.glsl",
+             "(1. - smoothstep(STARS_SUN_Y.x, STARS_SUN_Y.y, uSunDir.y))", "uDusk",
+             ("test_render_integrated.NightSkyTests.test_stars_come_out_only_as_the_twilight_fades",)),
     Mutation("a still view draws its meshes", "template_c.html",
              "const L = idle ? lastL : render(pos, f);",
              "const L = idle ? (drawMeshes(pos, basis(f), Math.tan(FOV / 2), [0, 0], fw, fh, lastL.dir), lastL) : render(pos, f);",

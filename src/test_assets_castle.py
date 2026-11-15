@@ -21,6 +21,7 @@ import mesh_castle  # noqa: E402
 import mesh_openings  # noqa: E402
 from mesh_source import CASTLE_CLASSES, Grid, castle_class_sd, castle_piece_labels, decode, sample  # noqa: E402
 from assets_testing import surface_heights, segment_hits  # noqa: E402
+from build_meshes import piece_owners  # noqa: E402
 
 # the faults trimesh finds in this family's decoded meshes today (assets_testing.mesh_faults), pinned: a new fault
 # fails, and so does a fix until this is updated
@@ -212,6 +213,61 @@ class CastleOpeningTests(unittest.TestCase):
             with self.subTest(tower=name):
                 self.assertGreaterEqual(int((np.hypot(self.centre[:, 0] - x, self.centre[:, 2] - z) < 1.3 * r + 1.0).sum()), 3)
 
+    def test_gryffindors_turrets_and_the_thin_columns_have_windows(self):
+        towers = self.meta["towers"]
+        pick = lambda name: min(range(len(towers)), key=lambda i: math.dist(towers[i][:2], self.meta["named"][name]))
+        reach = lambda i: np.hypot(self.centre[:, 0] - towers[i][0], self.centre[:, 2] - towers[i][1])
+        gt = pick("GT")
+        top = float(self.tris[np.all(self.attr == (4, mesh_castle.MESH_TOWER_AUX + gt), axis=1)][:, :, 1].max())
+        turrets = (reach(gt) < 1.3 * towers[gt][2]) & (self.centre[:, 1] > top - mesh_castle.TURRET_M - mesh_castle.CROWN + 1.0)
+        self.assertGreaterEqual(int(turrets.sum()), 3)                   # "three thinner turrets", lived in
+        for name in ("AT", "NT"):                                        # "a long thin column topped by a wider ... top"
+            i = pick(name)
+            column = reach(i) < mesh_castle.COLUMN * towers[i][2] + 0.5
+            with self.subTest(tower=name):
+                self.assertGreaterEqual(int(column.sum()), 3)
+
+
+class PartyWallTests(unittest.TestCase):
+    """A wall is left out as hidden only where taller masonry covers it along its whole length: one whose middle
+    touches a drum but whose end faces open air keeps its facade."""
+
+    def test_a_wall_only_partly_against_a_drum_stays(self):
+        cls = [[2.2, 4], [13.0, 0], [24.0, 1], [32.0, 1], [21.0, 3], [27.0, 0]]
+        # a range whose east wall at x = 6 runs from z = -4 to z = 4, beside a drum of radius 6 centred at (12, 0): its middle against the drum, its ends in the open
+        rng = orient(Polygon([(0, -4), (6, -4), (6, 4), (0, 4)]), 1.0)
+        drum = (Point(12.0, 0.0).buffer(6.05, 64), world.datum() + 60.0)
+        base = lambda x, z: np.full(np.shape(x), world.datum())
+        [(hidden, _)] = mesh_castle.party_walls([(2, rng)], cls, [drum], None, None, base=base)
+        walls = mesh_castle.edges(rng)
+        east = next(i for i, (p0, p1) in enumerate(walls) if abs(p0[0] - 6) < 1e-9 and abs(p1[0] - 6) < 1e-9)
+        self.assertFalse(hidden[east])
+
+
+class StraightenTests(unittest.TestCase):
+    """Straightening each class's traced outline moves its walls by up to STRAIGHTEN_M; where two masses met along a
+    raster edge, the slit that opens between them is filled again."""
+
+    def test_the_traced_masses_meet_without_slits(self):
+        from mesh_source import field_polygons
+
+        data = world.data()
+        meta = data["meta"]
+        grid = Grid(meta["castle"])
+        image, pieces = castle_piece_labels(data)
+        owners = piece_owners(world.scene(), pieces)
+        keep = np.isin(image, [p for p, a in owners.items() if a == "castle"])
+        csd = castle_class_sd(data)
+        cls = meta["castle"]["cls"]
+        raws = [(k, p) for k in range(len(cls)) for p in field_polygons(csd[..., k], grid, 0.0, keep)]
+        out = mesh_castle.straighten(raws, cls)
+        lost = shapely.union_all([p for _, p in raws]).difference(shapely.union_all([p for _, p in out]))
+        tree = shapely.STRtree([p for _, p in out])
+        slits = [g for g in getattr(lost, "geoms", [lost]) if g.geom_type == "Polygon" and g.area > 0.5
+                 and len(tree.query(g.buffer(0.05), predicate="intersects")) >= 2
+                 and g.boundary.difference(shapely.union_all([p for _, p in out]).buffer(0.05)).length < 0.3 * g.length]
+        self.assertLess(sum(g.area for g in slits), 50.0, [tuple(np.round(g.centroid.coords[0], 1)) for g in slits[:5]])
+
 
 class OpenAirTests(unittest.TestCase):
     """A window's reveal must stay inside its own wing: a courtyard close behind the wall would open through it."""
@@ -261,6 +317,20 @@ class CastleEntranceTests(unittest.TestCase):
         self.assertLess(np.hypot(*towards), 20.0)
         facing = -self.out[[0, 2]]
         self.assertGreater(towards @ np.array([facing[1], -facing[0]]), 0.0)   # on the right as you face the doors
+
+    def test_the_oak_doors_are_boarded_and_bound_in_iron(self):
+        centre = (self.door.min(axis=0) + self.door.max(axis=0)) / 2
+        width = float(np.ptp(self.door[:, [0, 2]] @ np.array([-self.out[2], self.out[0]])))
+        mid = self.tris.mean(axis=1)
+        iron = np.all(self.attr == (4, mesh_castle.IRON), axis=1) & (np.linalg.norm(mid - centre, axis=1) < 5.0)
+        side = np.array([-self.out[2], 0.0, self.out[0]])
+        straps = {round(float(y), 1) for t in self.tris[iron] if np.ptp(t @ side) > 0.3 * width for y in [t[:, 1].mean()]}
+        self.assertGreaterEqual(len({round(y) for y in straps}), 3)         # straps across the leaves at three heights
+        seams = np.all(self.attr == (4, mesh_castle.IRON), axis=1) & (np.linalg.norm(mid - centre, axis=1) < 5.0)
+        uprights = {round(float(t[:, [0, 2]].mean(axis=0) @ side[[0, 2]] - centre[[0, 2]] @ side[[0, 2]]), 1)
+                    for t in self.tris[seams] if np.ptp(t[:, 1]) > 2.0}
+        self.assertGreaterEqual(len(uprights), 6)                            # the boards' joints
+        self.assertEqual({abs(u) for u in uprights if u > 0}, {abs(u) for u in uprights if u < 0})   # the leaves mirror
 
     def test_a_flight_of_steps_climbs_from_the_lawn_to_the_doors(self):
         foot = self.door[:, 1].min()
@@ -326,10 +396,10 @@ class CastlePendTests(unittest.TestCase):
     def test_open_gates_could_bar_the_passage(self):
         mid = (self.lawn + self.court) / 2
         centre = self.tris.mean(axis=1)
-        near = (np.hypot(centre[:, 0] - mid[0], centre[:, 2] - mid[1]) < 12.0) & np.all(self.attr == mesh_castle.TIMBER, axis=1)
+        near = (np.hypot(centre[:, 0] - mid[0], centre[:, 2] - mid[1]) < 12.0) & np.all(self.attr == (4, mesh_castle.OAK), axis=1)
         a, b, c = (self.tris[near, k] for k in range(3))
-        timber = 0.5 * np.linalg.norm(np.cross(b - a, c - a), axis=1).sum() / 2      # two faces to each leaf
-        self.assertGreater(timber, mesh_castle.PEND_WIDTH_M * mesh_castle.GATE_M)
+        oak = 0.5 * np.linalg.norm(np.cross(b - a, c - a), axis=1).sum() / 2      # two faces to each leaf
+        self.assertGreater(oak, mesh_castle.PEND_WIDTH_M * mesh_castle.GATE_M)   # oak leaves, as the doors
 
 
 class HeadsTowerTests(unittest.TestCase):
@@ -438,6 +508,18 @@ class CourtHouseTests(unittest.TestCase):
                 roofs = surface_heights(self.tris[~np.all(self.attr == (4, mesh_castle.PLAIN), axis=1)], x, z)
                 self.assertGreater(top[:, 1].max(), roofs.max() + 0.5)               # a chimney standing over its roof
 
+    def test_court_houses_have_a_door_and_windows_on_the_court(self):
+        panes = np.isin(self.attr[:, 1], mesh_castle.GLASS_PANES) & (self.attr[:, 0] == 4)
+        for p in self.houses:
+            with self.subTest(piece=p["id"]):
+                near = np.hypot(self.centre[:, 0] - p["x"], self.centre[:, 2] - p["z"]) < 0.8 * math.sqrt(p["area"]) + 1.0
+                door = near & np.all(self.attr == (4, mesh_castle.OAK), axis=1)
+                self.assertGreater(int(door.sum()), 0)                                   # a door, at the foot of a wall
+                self.assertLess(float(self.tris[door][:, :, 1].min()) - float(self.tris[near][:, :, 1].min()), 2.0)
+                centres = {(round(x, 0), round(y, 0), round(z, 0)) for x, y, z in self.centre[near & panes]}
+                self.assertGreaterEqual(len(centres), 4)                                 # windows on two storeys
+                self.assertGreater(float(np.ptp([c[1] for c in centres])), 2.0)
+
     def test_ranges_and_blocks_carry_a_few_chimneys(self):
         stacks = np.all(self.attr == (4, mesh_castle.PLAIN), axis=1) & (self.normal[:, 1] > 0.99)
         tops = self.centre[stacks]
@@ -446,6 +528,162 @@ class CourtHouseTests(unittest.TestCase):
         clusters = {(round(x / 3), round(z / 3)) for x, _, z in tops}
         self.assertGreaterEqual(len(clusters), 10)
         self.assertLessEqual(len(clusters), 120)                                   # sparing
+
+
+def top_down(tris, lo, cell, shape):
+    """The highest surface over each cell of a grid starting at `lo` (x, z): -inf where none passes; triangles seen
+    edge-on from above are left out."""
+    out = np.full(shape, -np.inf)
+    n = np.cross(tris[:, 1] - tris[:, 0], tris[:, 2] - tris[:, 0])
+    tris = tris[np.abs(n[:, 1]) > 0.05 * np.linalg.norm(n, axis=1)]
+    for t in tris:
+        (c0, r0), (c1, r1) = (np.floor((f(t[:, [0, 2]], axis=0) - lo) / cell).astype(int) for f in (np.min, np.max))
+        c0, r0, c1, r1 = max(c0, 0), max(r0, 0), min(c1, shape[1] - 1), min(r1, shape[0] - 1)
+        if c1 < c0 or r1 < r0:
+            continue
+        x, z = np.meshgrid(lo[0] + (np.arange(c0, c1 + 1) + 0.5) * cell, lo[1] + (np.arange(r0, r1 + 1) + 0.5) * cell)
+        a, b, c = t
+        v0, v1 = (b - a)[[0, 2]], (c - a)[[0, 2]]
+        den = v0[0] * v1[1] - v0[1] * v1[0]
+        px, pz = x - a[0], z - a[2]
+        v = (px * v1[1] - pz * v1[0]) / den
+        w = (v0[0] * pz - v0[1] * px) / den
+        inside = (v >= 0) & (w >= 0) & (v + w <= 1)
+        if not inside.any():                      # smaller than a cell: its centre stands for it
+            m = t.mean(axis=0)
+            r, k = (int((m[2] - lo[1]) // cell), int((m[0] - lo[0]) // cell))
+            if 0 <= r < shape[0] and 0 <= k < shape[1]:
+                out[r, k] = max(out[r, k], t[:, 1].max())
+            continue
+        y = a[1] + v * (b - a)[1] + w * (c - a)[1]
+        block = out[r0:r1 + 1, c0:c1 + 1]
+        block[inside] = np.maximum(block[inside], y[inside])
+    return out
+
+
+class CastleMassingTests(unittest.TestCase):
+    """The castle's masses meet cleanly: no lower mass's roof or wall pokes out beside a taller one's wall or a tower's
+    drum as a sliver, and the hip roofs are planar slopes at their pitch, meeting in straight hips and ridges."""
+    CELL = 0.25                     # m
+    THIN = 2                        # cells: what a disc of this radius cannot pass through is a sliver
+    RISE = 1.0                      # m: a taller wall rises at least this far over the sliver within REACH
+    REACH = 4                       # cells
+
+    @classmethod
+    def setUpClass(cls):
+        from scipy import ndimage
+
+        cls.tris, cls.attr, cls.normal = world.payload_part("castle")
+        cls.meta = world.data()["meta"]
+        lo = cls.tris[:, :, [0, 2]].reshape(-1, 2).min(axis=0) - 2.0
+        hi = cls.tris[:, :, [0, 2]].reshape(-1, 2).max(axis=0) + 2.0
+        shape = tuple(np.ceil((hi - lo) / cls.CELL).astype(int)[::-1])
+        r = cls.THIN
+        disc = np.hypot(*np.mgrid[-r:r + 1, -r:r + 1]) <= r + 0.01
+        traced = {t["id"]: t for t in next(a for a in world.scene()["assets"] if a["id"] == "castle")["traced"]}
+        plan, _ = mesh_castle.plan_fit(traced["plan-fit"]["plan_px"], {k: tuple(v) for k, v in cls.meta["named"].items()})
+        ho = plan(*traced["heads-tower"]["plan_px"])
+        zz, xx = np.mgrid[:shape[0], :shape[1]]
+        head = np.hypot(lo[0] + (xx + 0.5) * cls.CELL - ho[0], lo[1] + (zz + 0.5) * cls.CELL - ho[1]) \
+            < mesh_castle.HEAD_R + 2 * mesh_castle.STAIR_TURRET_R + 1.0
+        cls.slivers, cls.proud = {}, {}
+        for k, name in enumerate(CASTLE_CLASSES):
+            mine = np.all(cls.attr == (4, mesh_castle.REAL_AUX + k), axis=1)
+            if name == "low_wall" or not mine.any():
+                continue
+            own, others = top_down(cls.tris[mine], lo, cls.CELL, shape), top_down(cls.tris[~mine], lo, cls.CELL, shape)
+            covered = np.isfinite(own) & (own >= others - 0.05)        # seen from above, not buried in other masonry
+            thin = covered & ~ndimage.binary_opening(covered, disc)
+            taller = ndimage.maximum_filter(others, size=2 * cls.REACH + 1) > own + cls.RISE
+            parts, n = ndimage.label(thin & taller, np.ones((3, 3)))
+            cls.slivers[name] = ndimage.sum(thin & taller, parts, range(1, n + 1)).max(initial=0) * cls.CELL ** 2
+            if int(cls.meta["castle"]["cls"][k][1]) != mesh_castle.FLAT:
+                continue
+            # a parapet or merlon (standing over its own walk) beside taller masonry: one along a wall hidden in it;
+            # the Head's tower (keep masonry) rightly has its parapet beside its own stair turrets
+            raised = covered & (own > ndimage.minimum_filter(np.where(covered, own, np.inf), size=9) + 0.5) & ~head
+            parts, n = ndimage.label(raised & ndimage.maximum_filter(others > own + cls.RISE, size=5), np.ones((3, 3)))
+            cls.proud[name] = ndimage.sum(parts > 0, parts, range(1, n + 1)).max(initial=0) * cls.CELL ** 2
+
+    def test_lower_masses_stop_at_the_drums_as_the_skyline_ranks_them(self):
+        towers = self.meta["towers"]
+        mass = (self.attr[:, 0] == 4) & (self.attr[:, 1] >= mesh_castle.REAL_AUX) & (self.attr[:, 1] < mesh_castle.REAL_AUX + 6)
+        centre = self.tris.mean(axis=1)
+        for name in ("GT", "RT", "AT"):
+            i = min(range(len(towers)), key=lambda j: math.dist(towers[j][:2], self.meta["named"][name]))
+            x, z, r = towers[i][:3]
+            mine = np.all(self.attr == (4, mesh_castle.MESH_TOWER_AUX + i), axis=1)
+            top = float(self.tris[mine][:, :, 1].max())
+            radius = (mesh_castle.COLUMN if name == "AT" else 1.0) * r
+            inside = mass & (np.hypot(centre[:, 0] - x, centre[:, 2] - z) < radius - 0.5) & (self.tris[:, :, 1].max(axis=1) < top - 3.0)
+            a = 0.5 * np.linalg.norm(np.cross(self.tris[inside, 1] - self.tris[inside, 0], self.tris[inside, 2] - self.tris[inside, 0]), axis=1)
+            with self.subTest(tower=name):
+                self.assertLess(float(a.sum()), 1.0)
+
+    def test_no_parapet_stands_against_a_taller_wall(self):
+        for name, area in self.proud.items():           # the end of one meeting it is about a quarter of a square metre
+            with self.subTest(mass=name):
+                self.assertLess(area, 1.5)
+
+    def test_no_lower_mass_shows_as_a_sliver_beside_a_taller_one(self):
+        for name, area in self.slivers.items():          # the largest; masonry meeting at a slant leaves smaller ones
+            with self.subTest(mass=name):
+                self.assertLess(area, 3.0)
+
+    def test_hip_roofs_slope_at_their_pitch(self):
+        for k, (_, rt) in enumerate(self.meta["castle"]["cls"]):
+            if int(rt) not in mesh_castle.ROOFS:
+                continue
+            pitch = mesh_castle.ROOFS[int(rt)][1]
+            mine = np.all(self.attr == (4, mesh_castle.REAL_AUX + k), axis=1) & (self.normal[:, 1] > 0.2)
+            t = self.tris[mine]
+            area = 0.5 * np.linalg.norm(np.cross(t[:, 1] - t[:, 0], t[:, 2] - t[:, 0]), axis=1)
+            ny = self.normal[mine, 1]
+            slope = np.sqrt(np.maximum(1.0 - ny ** 2, 0.0)) / ny
+            # the pitch (the castle base's own fall tilts it a little), a flat top, or the turrets' steep caps
+            off = (slope > 0.05) & (np.abs(slope / pitch - 1.0) > 0.1) & (slope < 1.5)
+            with self.subTest(mass=CASTLE_CLASSES[k]):
+                self.assertLess(area[off].sum() / area.sum(), 0.02)
+
+    def test_the_courts_stay_enclosed(self):
+        from scipy import ndimage
+
+        data = world.data()
+        grid = Grid(self.meta["castle"])
+        image, pieces = castle_piece_labels(data)
+        owners = piece_owners(world.scene(), pieces)
+        raw = (castle_class_sd(data) < 0).any(axis=-1) & np.isin(image, [p for p, a in owners.items() if a == "castle"])
+        lo = self.tris[:, :, [0, 2]].reshape(-1, 2).min(axis=0) - 4.0
+        hi = self.tris[:, :, [0, 2]].reshape(-1, 2).max(axis=0) + 4.0
+        shape = tuple(np.ceil((hi - lo) / 0.5).astype(int)[::-1])
+        free, _ = ndimage.label(~np.isfinite(top_down(self.tris, lo, 0.5, shape)))
+        meshed = np.bincount(free.ravel()) * 0.25
+        texel = float(np.prod(grid.texel_size()))
+        courts, n = ndimage.label(~raw)
+        sizes = np.bincount(courts.ravel()) * texel
+        outside = courts[0, 0]
+        for c in range(1, n + 1):
+            if c == outside or sizes[c] < 300.0:
+                continue
+            i, j = np.unravel_index(np.argmax(ndimage.distance_transform_edt(courts == c)), raw.shape)
+            x, z = grid.to_world(i, j)
+            label = free[int((z - lo[1]) // 0.5), int((x - lo[0]) // 0.5)]
+            with self.subTest(court=c, at=(round(float(x)), round(float(z)))):
+                self.assertNotEqual(label, 0)
+                self.assertLess(meshed[label], 1.3 * sizes[c] + 300.0)          # not opened to another court or out
+
+    def test_the_north_towers_top_stands_clear_of_its_neighbours(self):
+        towers = self.meta["towers"]
+        i = min(range(len(towers)), key=lambda j: math.dist(towers[j][:2], self.meta["named"]["NT"]))
+        x, z, r = towers[i][:3]
+        mine = np.all(self.attr == (4, mesh_castle.MESH_TOWER_AUX + i), axis=1)
+        pts = self.tris[mine].reshape(-1, 3)
+        head = mesh_castle.OVERHANG * r
+        foot = pts[np.abs(np.hypot(pts[:, 0] - x, pts[:, 2] - z) - head) < 0.2, 1].min()   # the overhanging top's foot
+        rest = self.tris[~mine].reshape(-1, 3)
+        reach = np.hypot(rest[:, 0] - x, rest[:, 2] - z)
+        near = (reach > head + 0.05) & (reach < head + 1.0) & (rest[:, 1] > foot - 1.0)   # its own windows lie within
+        self.assertFalse(near.any(), np.round(rest[near][:3], 1).tolist())   # a tower beside its neighbours, not fused
 
 
 class CastleSkylineTests(unittest.TestCase):
@@ -488,6 +726,63 @@ class CastleMeshOracleTests(unittest.TestCase):
 
     def test_the_decoded_meshes_have_only_the_known_faults(self):
         self.assertEqual(world.mesh_faults("castle"), MESH_FAULTS)
+
+
+class CastleFootingTests(unittest.TestCase):
+    """The castle stands on its base. A wall's foot follows the ground under it, SINK_M below it, so where the ground
+    under a wall falls away down the lake's cliff, its face hangs down the cliff as a pale wedge (an inspection defect:
+    up to 39 m below the castle at the lake's edge). Under the castle's walls the ground is its platform or the skirt
+    of lawn round it, at most a few metres lower. And the ground that holds their level stays clear of the lake: its
+    edge is drawn between texels, where the depth of a wet texel and a dry one, read bilinearly, crosses zero, and
+    pack.py keeps every dry depth below -1 m as -8 m, so beside a bank as tall as the cliff's sheer drop the lake's
+    edge would stand metres above it, a dark tooth up the cliff's foot (as the castle-cliff fix first made it)."""
+
+    HANG_M = 5.0                                    # the deepest a foot may reach below the castle's base
+    REACH_M, LEVEL_M = 30.0, 1.0                    # within this of the castle, the lake's edge so near its level
+
+    def test_no_castle_masonry_hangs_down_the_cliff(self):
+        data = world.data()
+        cbase, local = decode(data["tex"]["locCB"]), Grid(data["meta"]["local"])
+        hung = {}
+        for chunk in world.payload()["chunks"]:
+            if chunk["asset"] != "castle":
+                continue
+            depth = sample(cbase, local, chunk["pos"][:, 0], chunk["pos"][:, 2]) - chunk["pos"][:, 1]
+            for (x, _, z), d in zip(chunk["pos"][depth > self.HANG_M], depth[depth > self.HANG_M]):
+                cell = (int(round(x / 10.0)) * 10, int(round(z / 10.0)) * 10)
+                hung[cell] = max(hung.get(cell, 0.0), round(float(d), 1))
+        self.assertEqual(hung, {}, "castle masonry hangs this far (m) below the castle's base, by 10 m cell (east, "
+                                   "north)")
+
+    def test_the_lake_lies_level_at_the_foot_of_the_castles_cliff(self):
+        from scipy import ndimage as ndi
+
+        data = world.data()
+        bed, wd = decode(data["tex"]["locBed"]), decode(data["tex"]["locW"])
+        local, lake = Grid(data["meta"]["local"]), float(data["meta"]["lake"])
+        castle = np.concatenate([c["pos"][:, [0, 2]] for c in world.payload()["chunks"] if c["asset"] == "castle"])
+        i, j = (np.clip(np.round(v).astype(int), 0, n - 1)
+                for v, n in zip(local.to_texel(castle[:, 0], castle[:, 1]), (local.ny, local.nx)))
+        near = np.zeros(bed.shape, bool)
+        near[i, j] = True
+        near = ndi.binary_dilation(near, iterations=round(self.REACH_M / 2.0))
+        e, n = local.to_world(*np.mgrid[0:local.ny, 0:local.nx])
+        harbour = Polygon(data["meta"]["extras"]["harbour"]["bounds"]).buffer(2.0)    # its recess: inside its shell
+        near &= ~shapely.contains_xy(harbour, e, n)
+        high = {}
+        rows, cols = bed.shape
+        for di, dj in ((0, 1), (1, 0), (1, 1), (1, -1)):                # each pair of neighbouring texels, both ways
+            a = (slice(max(-di, 0), rows - max(di, 0)), slice(max(-dj, 0), cols - max(dj, 0)))
+            b = (slice(max(di, 0), rows - max(-di, 0)), slice(max(dj, 0), cols - max(-dj, 0)))
+            for wet, dry in ((a, b), (b, a)):
+                edge = (wd[wet] > 0) & (wd[dry] <= 0) & near[wet]
+                t = wd[wet][edge] / (wd[wet][edge] - wd[dry][edge])
+                rise = bed[wet][edge] + t * (bed[dry][edge] - bed[wet][edge]) - lake
+                for x, z, r in zip(e[wet][edge][rise > self.LEVEL_M], n[wet][edge][rise > self.LEVEL_M],
+                                   rise[rise > self.LEVEL_M]):
+                    cell = (int(round(x / 10.0)) * 10, int(round(z / 10.0)) * 10)
+                    high[cell] = max(high.get(cell, 0.0), round(float(r), 1))
+        self.assertEqual(high, {}, "the lake's edge stands this far (m) above the lake, by 10 m cell (east, north)")
 
 
 if __name__ == "__main__":

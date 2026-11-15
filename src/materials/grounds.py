@@ -1,6 +1,9 @@
 """Grounds set pieces (material 7, aux 26-59): the hut and garden, then the pitch, gates, walls, tomb, harbour and
 bridges."""
 from materials import set_piece
+from materials.village import MATERIALS as VILLAGE
+
+RUBBLE = next(m for m in VILLAGE if m.name == "rubble")
 
 FAMILY = "grounds"
 RANGES = ((7, 26, 59),)
@@ -60,14 +63,18 @@ MATERIALS = [
               refl_tail="                    // green doors"),
     set_piece(33, "boar-stone",
               note="the winged boars on the gate pillars: weathered, lichened stone",
-              p3=" alb = vec3(0.17, 0.168, 0.15) * (0.75 + 0.4 * vnoise(p.xz * 6.1 + p.y * 4.3)) * (0.85 + 0.15 * smoothstep(-0.2, 0.6, n.y));   // the boars' weathered stone",
+              p3=(" {                             // the boars' weathered stone, lichened where the rain lies\n"
+                  "        float w = vnoise(p.xz * 6.1 + p.y * 4.3) * 0.65 + vnoise(p.xz * 17. - p.y * 13.) * 0.35;\n"
+                  "        alb = vec3(0.19, 0.185, 0.165) * (0.55 + 0.7 * w) * (0.7 + 0.3 * smoothstep(-0.2, 0.6, n.y));\n"
+                  "        alb = mix(alb, vec3(0.15, 0.16, 0.08), 0.6 * smoothstep(0.5, 0.75, vnoise(p.xz * 2.3 - p.y * 1.7)) * smoothstep(0., 0.5, n.y));\n"
+                  "      }"),
               refl="vec3(0.17, 0.168, 0.15)",
               refl_tail="                    // the boars' stone"),
     set_piece(34, "harbour-rock",
-              note="the harbour mouth's rock: the terrain's cliff rock, streaked down its face",
-              model="speckled", values={"alb": "vec3(0.08, 0.076, 0.068)", "lo": "0.55", "amp": "0.85", "freq": "0.35",
-                                        "rise": "0.6", "spec": "0.05", "shin": "20."},
-              refl="vec3(0.075, 0.071, 0.064)",
+              note="the harbour mouth's rock: the terrain's cliff rock (frag4.glsl rockAlb), so it matches the cliff "
+                   "around it",
+              p3=" { alb = rockAlb(p, n); spec = 0.05; shin = 20.; }",
+              refl="vec3(0.1, 0.094, 0.084)",
               refl_tail="                   // the harbour mouth's rock"),
     set_piece(35, "ivy",
               note="ivy: dark glossy leaves, curtaining the harbour mouth",
@@ -80,4 +87,13 @@ MATERIALS = [
               model="flat", values={"alb": "vec3(0.006, 0.006, 0.005)", "spec": "0.", "shin": "32."},
               refl="vec3(0.006, 0.006, 0.005)",
               refl_tail="           // the dark under an arch"),
+    set_piece(37, "grounds-rubble",
+              note="the grounds' walls, gate pillars and bridges: the village's rubble stone, in rough courses",
+              p3=RUBBLE.p3, refl=RUBBLE.refl),         # the same body as the village's, so the same shading branch
+    set_piece(38, "bridge-deck",
+              note="a raised bridge deck's gravel, as the tracks'",
+              model="speckled", values={"alb": "vec3(0.17, 0.155, 0.13)", "lo": "0.8", "amp": "0.35", "freq": "1.9",
+                                        "rise": "0.", "spec": "0.", "shin": "32."},
+              refl="vec3(0.17, 0.155, 0.13)",
+              refl_tail="                // a bridge's deck"),
 ]

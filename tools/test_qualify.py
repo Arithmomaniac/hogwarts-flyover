@@ -2,6 +2,7 @@
 runs AMD on the layout the trial supports, in one hold of the quiet lock; it reruns a step only when other processes'
 load blocked it, never one that measured."""
 import contextlib
+import io
 import json
 import math
 from pathlib import Path
@@ -159,7 +160,7 @@ class StepTests(unittest.TestCase):
 
 
 class QualifyTests(unittest.TestCase):
-    def qualify(self, reports, projection=lambda *args: 0.04, statuses=None):
+    def qualify(self, reports, projection=lambda *args: 0.04, statuses=None, skip_amd=False):
         events = []
 
         @contextlib.contextmanager
@@ -174,9 +175,9 @@ class QualifyTests(unittest.TestCase):
             return measured(name, reports.get(name), status=(statuses or {}).get(name, 0))
         with tempfile.TemporaryDirectory() as folder, mock.patch.object(qualify, "git_head", return_value="head"), \
                 mock.patch.object(qualify.inputs, "spec", return_value={"sha256": "baseline"}):
-            summary = qualify.qualify("baseline.html", Path(folder), qualify.MAX_AMD_HOURS, quiet=quiet, run=run,
-                                      sleep=lambda s: events.append(f"sleep {s}"), projection=projection,
-                                      say=lambda message: None)
+            summary = qualify.qualify("baseline.html", Path(folder), qualify.MAX_AMD_HOURS, skip_amd=skip_amd,
+                                      quiet=quiet, run=run, sleep=lambda s: events.append(f"sleep {s}"),
+                                      projection=projection, say=lambda message: None)
         return summary, events
 
     def test_nvidia_runs_first_then_the_amd_trial_then_amd_all_in_one_hold_of_the_quiet_lock(self):
@@ -193,6 +194,13 @@ class QualifyTests(unittest.TestCase):
         self.assertEqual(events[-1], "unlock")
         self.assertEqual((summary["design"]["layout"], summary["outcome"]), ("fresh-window", "pass"))
         self.assertAlmostEqual(summary["trial"]["visitS"], 600.0 / len(reports["trial-amd"]["loads"]))
+
+    def test_skip_amd_runs_nvidia_alone_and_judges_the_qualification_on_it(self):
+        summary, events = self.qualify({"nvidia": pages_report()}, skip_amd=True)
+        self.assertEqual(events, ["lock", ("nvidia", ()), "unlock"])
+        self.assertEqual((list(summary["verdicts"]), summary["design"], summary["outcome"]), (["nvidia"], None, "pass"))
+        self.assertTrue(summary["rules"]["skipAmd"])
+        self.assertIn(qualify.SKIPPED_AMD, qualify.report(summary))
 
     def test_a_noisy_trial_runs_amd_on_two_pages(self):
         reports = {"nvidia": pages_report(), "trial-amd": fresh_report(), "amd-pages": pages_report()}
@@ -226,11 +234,29 @@ class QualifyTests(unittest.TestCase):
                          "fail")
 
 
+class MainTests(unittest.TestCase):
+    def test_the_command_line_passes_skip_amd_to_the_qualification(self):
+        passed = []
+
+        def fake(baseline, folder, max_hours, skip_amd=False):
+            passed.append(skip_amd)
+            return {"page": "page", "head": "head", "outcome": "pass", "steps": [], "trial": None, "design": None,
+                    "rules": {"skipAmd": skip_amd}, "verdicts": {}}
+        for argv, skip_amd in ((["--skip-amd"], True), ([], False)):
+            with self.subTest(argv=argv), tempfile.TemporaryDirectory() as logs, \
+                    mock.patch.object(qualify, "LOGS", Path(logs)), mock.patch.object(qualify, "qualify", fake), \
+                    mock.patch.object(qualify.inputs, "require", return_value="baseline.html"), \
+                    mock.patch.object(qualify.frozen, "check_baseline"), contextlib.redirect_stdout(io.StringIO()):
+                self.assertEqual(qualify.main(argv), 0)
+                self.assertEqual(passed[-1], skip_amd)
+
+
 class ReportTests(unittest.TestCase):
     def test_each_judged_windows_line_logs_its_induced_and_other_load(self):
         first = fresh_report(windows=("castle", "greenhouses"), induced=lambda session: 0.7 + 0.1 * session)
         focus = fresh_report(windows=qualify.FOCUS, seed=1, induced=lambda session: 2.4)
         summary = {"page": "page", "head": "head", "outcome": "pass", "steps": [], "trial": None, "design": None,
+                   "rules": {"skipAmd": False},
                    "verdicts": {"amd": qualify.verdicts([measured("amd-fresh", first), measured("amd-focus", focus)])}}
         lines = {window: next(line for line in qualify.report(summary).splitlines() if f" {window} " in line)
                  for window in ("castle", "greenhouses")}

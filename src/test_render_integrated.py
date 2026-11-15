@@ -21,14 +21,15 @@ import assets_testing as at  # noqa: E402
 import build_meshes  # noqa: E402
 import mesh_footprint  # noqa: E402
 import mesh_grounds  # noqa: E402
+import mesh_village_small  # noqa: E402
 from mesh_geometry import bar, box, concat, lathe  # noqa: E402
 from materials import code  # noqa: E402
-from mesh_source import CHANNELS, Grid, decode, load_data, sd_bytes  # noqa: E402
-from pagetest import PAGE, smoke  # noqa: E402
+from mesh_source import CHANNELS, Grid, decode, load_data, sample, sd_bytes  # noqa: E402
+from pagetest import PAGE, START_TIMEOUT_MS, smoke  # noqa: E402
 import shapely  # noqa: E402
 from shapely.geometry import Polygon  # noqa: E402
-from render_testing import (FRAME_TIMEOUT_S, JITTER_CYCLE, MAT_GROUND, NEXT_FRAME, SCENE, SUNLIT, WALL,  # noqa: E402
-                            RenderTestCase, payload, ray)
+from render_testing import (EAST, FRAME_TIMEOUT_S, JITTER_CYCLE, MAT_GROUND, MAT_SKY, NEXT_FRAME, SCENE, SUNLIT, WALL,  # noqa: E402
+                            WEST, RenderTestCase, payload, ray)
 from test_site import class_colours  # noqa: E402
 
 OBJECT_MATS = (4, 5, 6, 7)                  # castle, building, wall or hedge, set piece: what objects write
@@ -54,12 +55,23 @@ CROWN_M = 4.9                               # frag1.glsl treeH's widest crown, w
 FAR_FROM_MESHES_M = 60.0
 DBG_CLEAN_EDGES = 2048                      # the surface classes' edges without their noise
 DBG_NO_CLOUD_SHADOWS = 1024                 # the ground lit as under a clear sky
-# a class's own texel or its neighbour's: seen from CLASS_VIEW_M straight above (2 m texels about 9 internal pixels
-# across), ground pixels between CLASS_EDGE_TEXELS of a texel from an edge with the other class must show their own
-# texel's class; the two classes' colours must stand CLASS_SEPARATION apart in log chromaticity
+# the surface classes as the four texels round each point weigh them: seen from CLASS_VIEW_M straight above (2 m texels
+# about 9 internal pixels across), with the classes' noise off, a pixel's place between two soft classes' colours (0 at
+# the one's, 1 at the other's, in log chromaticity) keeps, for each band of CLASS_BANDS of its share of the other's
+# weight, a median within CLASS_BLEND_TOL of the band's middle; beside a hard class, whose weight there is between
+# HARD_SIDE, it keeps within HARD_TOL of its own colour. The two colours stand CLASS_SEPARATION apart.
 CLASS_VIEW_M = 60.0
-CLASS_EDGE_TEXELS = (0.05, 0.4)
-CLASS_AGREE = 0.98
+CLASS_BANDS = ((0.1, 0.3), (0.4, 0.6), (0.7, 0.9))
+CLASS_BLEND_TOL = 0.15
+# nor is the change half a texel off: over the pixels where the weights of points centred on the texels, or half a texel
+# off them in any direction, change, the pixels' median distance from the centred weights' share is below SHIFT_MISFIT
+# of the least any half-texel-off one's comes to (0.31 of it measured, 4.1 with the class read half a texel off)
+SHIFT_MISFIT = 0.5
+HARD_CLASSES = (3, 4, 6)                    # paths, the beds and the pitch keep their own edges (frag4.glsl hardClass)
+HARD_SIDE = (0.1, 0.4)
+HARD_TOL = 0.1
+HARD_RISE, HARD_CLEAR_TEXELS = 0.5, 3       # the beds' edge, on their hollow's rim among the greenhouses
+DBG_NO_SUN_SHADOWS = 1
 CLASS_SEPARATION = 0.2
 SHINGLE = 7                                 # the page re-draws the shingle's texels at load (template_b.html)
 # dirty state: a box mirrored in the lake's middle fills MIRRORED_MIN of the lake within MIRROR_PROBE_PX internal
@@ -86,8 +98,20 @@ SHORE_KINK_STEP_M = 0.5
 # nor may it turn at texel corners: the 90th percentile of its second difference over 0.5 m steps measured 1.0 m on the
 # staircase, 0.45 m with the shingle's field unblurred or the shingle kept in the class map, 0.18 m smoothed
 SHORE_KINK_P90_M = 0.3
+# the beach is judged with the classes read from the nearest texel alone (frag4.glsl), as those measures were taken:
+# blended bilinearly, the shingle's own texels kept in the class map round off into a beach that follows them, which
+# the corners' measure misses (read from the nearest texel, it measured 0.36 m so)
+DBG_NEAREST_CLASS = 4
 BANK_NY = 0.95                              # sloped ground: the bank
 BANK_ANGLE_P95_DEG = 8.0                    # neighbouring bank normals 0.26 m apart: 15.9 degrees cell by cell, 3.5 smoothed
+# the ground normal's wider step within the water's reach (frag3.glsl GNORM_E) eases back to its usual one inland, with
+# no seam: seen from SEAM_EYE_M over the water SEAM_OUT_M off the shore beside the tomb, looking inland, neighbouring
+# ground pixels where the water layer's depth is within SEAM_BAND of REACH_WD differ in normal by under SEAM_P99_DEG at the
+# 99th percentile (a switch at REACH_WD measured 5.2-5.5 degrees there, the ramp 0.4-1.4, the shore elsewhere up to 2.8)
+REACH_WD = -0.9
+SEAM_EYE_M, SEAM_OUT_M, SEAM_PITCH = 6.0, 3.0, -0.5
+SEAM_BAND = 0.04
+SEAM_P99_DEG = 2.5
 NORMALS = """() => { const [w, h] = __hog.probe(0, 0).res, x0 = (w / 10) | 0;
     return [w - 2 * x0, __hog.probeRect(x0, 2, w - 2 * x0, h - 4)]; }"""
 DBG_THIN_OFF = 4096                         # thin parts keep their true size (template_c.html thinPerM)
@@ -182,33 +206,56 @@ def with_clearing(spot):
     return mesh_footprint.encode(np.minimum(embedded_footprint(), disc))
 
 
-def class_edge():
-    """(class map, its grid, (a, b), world (east, north)): the pair of surface classes that meets most on open ground,
-    of those with one colour each (test_site.class_colours) but the shingle, and the middle of the 25-texel window
-    where they meet most. Open ground is level, dry and clear of roads, and far enough from trees and meshes for their
-    noon shadows, at least 120 m inside the local grid, where its layers alone colour the ground (frag1.glsl's lw)."""
+def class_edge(classes, with_class=None, rise_max=0.1, clear_texels=8):
+    """(class map, its grid, (a, b), world (east, north)): the pair of surface classes among `classes` (one of them
+    `with_class`, if given) that meets most on open ground, and the middle of the 25-texel window where they meet most.
+    Open ground is dry and clear of roads, rises no more than `rise_max`, and lies `clear_texels` from trees and meshes
+    (far enough for their noon shadows by default), at least 120 m inside the local grid, where its layers alone colour
+    the ground (frag1.glsl's lw)."""
     data = load_data()
     grid = Grid(data["meta"]["local"])
     cls = decode(data["tex"]["locN"])[..., CHANNELS["locN"].index("surface")].astype(int)
     la = decode(data["tex"]["locA"])
     texel = float(np.mean(grid.texel_size()))
     rise = np.hypot(*np.gradient(decode(data["tex"]["locBed"]).astype(float), texel))
-    near = (la[..., CHANNELS["locA"].index("road")] > 10) | (decode(data["tex"]["locW"]) > 0) | (rise > 0.1)
+    near = (la[..., CHANNELS["locA"].index("road")] > 10) | (decode(data["tex"]["locW"]) > 0) | (rise > rise_max)
     tall = (la[..., CHANNELS["locA"].index("trees")] > 10) | (sd_bytes(embedded_footprint()) < mesh_footprint.OPEN_M)
-    open_ = ~(ndi.binary_dilation(near, iterations=3) | ndi.binary_dilation(tall, iterations=8))
+    tall |= sd_bytes(decode(data["tex"]["locB"])[..., CHANNELS["locB"].index("wall")]) < 1.5   # the boundary walls
+    open_ = ~(ndi.binary_dilation(near, iterations=3) | ndi.binary_dilation(tall, iterations=clear_texels))
     inset = int(math.ceil(120.0 / texel))
     open_[:inset] = open_[-inset:] = False
     open_[:, :inset] = open_[:, -inset:] = False
-    plain = [k for k, (colours, noise) in class_colours().items() if len(colours) == 1 and not noise and k != SHINGLE]
     keys = []
     for a, b, ok in ((cls[:-1], cls[1:], open_[:-1] & open_[1:]), (cls[:, :-1], cls[:, 1:], open_[:, :-1] & open_[:, 1:])):
-        m = ok & (a != b) & np.isin(a, plain) & np.isin(b, plain)
+        m = ok & (a != b) & np.isin(a, classes) & np.isin(b, classes)
+        if with_class is not None:
+            m &= (a == with_class) | (b == with_class)
         keys.append(np.minimum(a[m], b[m]) * 16 + np.maximum(a[m], b[m]))
     a, b = divmod(int(np.bincount(np.concatenate(keys)).argmax()), 16)
     cross = ndi.generate_binary_structure(2, 1)
     edge = open_ & (((cls == a) & ndi.binary_dilation(cls == b, cross)) | ((cls == b) & ndi.binary_dilation(cls == a, cross)))
     i, j = np.unravel_index(np.argmax(ndi.uniform_filter(edge.astype(float), 25)), edge.shape)
     return cls, grid, (a, b), tuple(float(v) for v in grid.to_world(i, j))
+
+
+def soft_classes(plain=False):
+    """The soft surface classes: not HARD_CLASSES, nor the shingle the page re-draws; with `plain`, only those that
+    classCol colours with one colour and no noise."""
+    return [k for k, (colours, noise) in class_colours().items()
+            if k not in HARD_CLASSES and k != SHINGLE and (not plain or (len(colours) == 1 and not noise))]
+
+
+def class_weights(cls, grid, world, a, b, shift=(0.0, 0.0)):
+    """For ground points `world` ((n, 2) east, north): class b's share of the bilinear weights of the four texels round
+    each, from their centres (or as if each point lay `shift` texels (rows, columns) off), and whether those four texels
+    all hold a or b."""
+    row, col = grid.to_texel(world[:, 0], world[:, 1])            # texel centres at whole numbers
+    row, col = row + shift[0], col + shift[1]
+    i, j = np.floor(row).astype(int), np.floor(col).astype(int)
+    fi, fj = row - i, col - j
+    four = [(cls[i, j], (1 - fi) * (1 - fj)), (cls[i + 1, j], fi * (1 - fj)), (cls[i, j + 1], (1 - fi) * fj),
+            (cls[i + 1, j + 1], fi * fj)]
+    return sum(w * (c == b) for c, w in four), np.all([np.isin(c, (a, b)) for c, _ in four], axis=0)
 
 
 class IntegratedSceneTests(RenderTestCase):
@@ -286,7 +333,7 @@ class IntegratedSceneTests(RenderTestCase):
         try:
             await page.goto(PAGE.as_uri() + self.QUERY)
             await page.wait_for_function("window.__hog && (__hog.error || (__hog.ready && __hog.frames >= 10))",
-                                         timeout=120000)
+                                         timeout=START_TIMEOUT_MS)
             stats = await page.evaluate("__hog.error || __hog.meshStats()")
         finally:
             await page.close()
@@ -374,9 +421,10 @@ class IntegratedSceneTests(RenderTestCase):
         self.assertEqual(cleared, 0, "trees stand on ground the payload's footprint marks as built")
         self.assertGreater(back, 0.25 * probed_back, "the wood should come back with the embedded payload's footprint")
 
-    async def shore_view(self):
+    async def shore_view(self, dbg=0):
         """Look straight down on the shore 40 m along it from the tomb, the lawn at the bottom of the frame and the lake
-        at the top, with the classes' edges free of their noise: metres per screen pixel on the ground."""
+        at the top, with the classes' edges free of their noise (and the debug bits `dbg`): metres per screen pixel on
+        the ground."""
         extras = await self.page.evaluate("DATA.meta.extras")
         tomb, lake = np.array(extras["tomb"], float), np.array(extras["lake_c"], float)
         out = (lake - tomb) / np.linalg.norm(lake - tomb)
@@ -391,12 +439,12 @@ class IntegratedSceneTests(RenderTestCase):
         p = p - 3.0 * out                                             # over the beach
         eye = [float(p[0]), await self.ground(*p) + SHORE_HEIGHT_M, float(p[1])]
         frames = await self.page.evaluate("([e, y]) => { __hog.tod(12.5); __hog.dbg(%d); __hog.camera(e, y, -1.5); "
-                                          "return __hog.frames; }" % DBG_CLEAN_EDGES, [eye, math.atan2(out[0], out[1])])
+                                          "return __hog.frames; }" % (DBG_CLEAN_EDGES | dbg), [eye, math.atan2(out[0], out[1])])
         await self.page.wait_for_function(f"__hog.frames >= {frames + 60}", timeout=FRAME_TIMEOUT_S * 1000)
         return 2.0 * SHORE_HEIGHT_M * (await self.centre())["tanH"] / self.VIEWPORT["height"]
 
     async def test_the_beach_follows_the_shore_not_the_texel_grid(self):
-        metres = await self.shore_view()
+        metres = await self.shore_view(DBG_NEAREST_CLASS)
         image = np.asarray(Image.open(io.BytesIO(await self.page.screenshot())).convert("RGB"), float)
         green = image[..., 1] - 0.5 * (image[..., 0] + image[..., 2])
         lawn = float(np.median(green[-image.shape[0] // 10:]))         # the bottom of the frame is lawn
@@ -420,6 +468,48 @@ class IntegratedSceneTests(RenderTestCase):
         with self.subTest(measure="corners"):
             self.assertLess(float(np.percentile(bends, 90)), SHORE_KINK_P90_M)
 
+    async def test_the_banks_normal_has_no_seam_where_it_leaves_the_waters_reach(self):
+        extras = await self.page.evaluate("DATA.meta.extras")
+        tomb, lake = np.array(extras["tomb"], float), np.array(extras["lake_c"], float)
+        out = (lake - tomb) / np.linalg.norm(lake - tomb)
+        p = tomb + 40.0 * np.array([out[1], -out[0]])
+        for _ in range(120):                                          # out to the waterline
+            bed, top = await self.page.evaluate("([x, z]) => __hog.ground(x, z)", [float(p[0]), float(p[1])])
+            if top > bed + 0.05:
+                break
+            p = p + 0.5 * out
+        else:
+            self.fail("no waterline found beside the tomb")
+        p = p + SEAM_OUT_M * out
+        eye = [float(p[0]), await self.ground(*p) + SEAM_EYE_M, float(p[1])]
+        frames = await self.page.evaluate("([e, y, q]) => { __hog.tod(12.5); __hog.dbg(%d); __hog.camera(e, y, q); "
+                                          "return __hog.frames; }" % DBG_CLEAN_EDGES,
+                                          [eye, math.atan2(-out[0], -out[1]), SEAM_PITCH])
+        await self.page.wait_for_function(f"__hog.frames >= {frames + 60}", timeout=FRAME_TIMEOUT_S * 1000)
+        view, w, probed = await self.page.evaluate("""() => { const v = __hog.probe(0, 0), [w, h] = v.res;
+            return [v, w, __hog.probeRect(0, 0, w, h)]; }""")
+        g = np.array(probed, float).reshape(-1, w, 6)                 # material, normal, aux, distance
+        ground = g[..., 0] == MAT_GROUND
+        ys, xs = np.nonzero(ground[:-1, :-1])
+        hits = []
+        for px, py in zip(xs, ys):
+            origin, direction = ray(view, px, py)
+            hits.append(origin + direction * g[py, px, 5])
+        hits = np.array(hits)
+        data = load_data()
+        wd = sample(decode(data["tex"]["locW"]), Grid(data["meta"]["local"]), hits[:, 0], hits[:, 2])
+        at = np.abs(wd - REACH_WD) < SEAM_BAND
+        n = g[..., 1:4] / np.linalg.norm(g[..., 1:4], axis=-1, keepdims=True)
+        angles = []
+        for dy, dx in ((0, 1), (1, 0)):
+            y, x = ys[at], xs[at]
+            both = ground[y + dy, x + dx]
+            cos = np.einsum("ij,ij->i", n[y, x][both], n[y + dy, x + dx][both])
+            angles.append(np.degrees(np.arccos(np.clip(cos, -1.0, 1.0))))
+        angles = np.concatenate(angles)
+        self.assertGreater(len(angles), 200, "too little of the water's reach's edge in the frame")
+        self.assertLess(float(np.percentile(angles, 99)), SEAM_P99_DEG)
+
     async def test_the_bank_shades_as_one_slope_not_cell_by_cell(self):
         await self.shore_view()
         width, probed = await self.page.evaluate(NORMALS)
@@ -432,14 +522,12 @@ class IntegratedSceneTests(RenderTestCase):
         self.assertGreater(len(angles), 200, "too little bank in the frame")
         self.assertLess(float(np.percentile(angles, 95)), BANK_ANGLE_P95_DEG)
 
-    async def test_the_ground_takes_its_class_from_the_texel_nearest_filtering_takes(self):
-        # the shading pass reads the surface class with texelFetch, from the texel nearest filtering would take: with
-        # the classes' noise off, a ground pixel near an edge between two classes shows its own texel's class, which
-        # a read half a texel off would swap for its neighbour's
-        cls, grid, (a, b), (x, z) = class_edge()
+    async def ground_pixels(self, x, z, dbg=0):
+        """From CLASS_VIEW_M straight above (x, z) at noon, with the classes' noise and the clouds' shadows off (and the
+        debug bits `dbg`): each ground pixel's world (east, north) and log chromaticity (R/G, B/G)."""
         top = await self.ground(x, z)
         frames = await self.page.evaluate("([p]) => { __hog.dbg(%d); __hog.tod(12.5); __hog.camera(p, 0, -1.5); "
-                                          "return __hog.frames; }" % (DBG_CLEAN_EDGES | DBG_NO_CLOUD_SHADOWS),
+                                          "return __hog.frames; }" % (DBG_CLEAN_EDGES | DBG_NO_CLOUD_SHADOWS | dbg),
                                           [[x, top + CLASS_VIEW_M, z]])
         await self.page.wait_for_function(f"__hog.frames >= {frames + 4}", timeout=FRAME_TIMEOUT_S * 1000)
         view, found = await self.page.evaluate("""() => {
@@ -455,23 +543,66 @@ class IntegratedSceneTests(RenderTestCase):
                                 (2 * (px[:, 1] + 0.5 + view["jit"][1]) - h) / h * view["tanH"], np.ones(len(px))])
         rays = rays @ np.array(view["rot"]).reshape(3, 3)                 # as `ray` turns them into the world
         world = np.array(view["pos"]) + rays / np.linalg.norm(rays, axis=1, keepdims=True) * px[:, 2:3]
-        row, col = grid.to_texel(world[:, 0], world[:, 2])
-        rr, cc = row + 0.5, col + 0.5                                      # texel corners at whole numbers
-        i, j = np.floor(rr).astype(int), np.floor(cc).astype(int)
-        own, fi, fj = cls[i, j], rr - i, cc - j
-        across = [(cls[np.where(fi < 0.5, i - 1, i + 1), j], np.minimum(fi, 1 - fi)),
-                  (cls[i, np.where(fj < 0.5, j - 1, j + 1)], np.minimum(fj, 1 - fj))]
-        pair = np.isin(own, (a, b))
-        edge = pair & np.any([(n != own) & np.isin(n, (a, b)) & (d > CLASS_EDGE_TEXELS[0]) & (d < CLASS_EDGE_TEXELS[1])
-                              for n, d in across], axis=0)
-        inner = pair & np.all([(n == own) & (d > 0.25) for n, d in across], axis=0)
-        chroma = np.log(np.maximum(px[:, [3, 5]], 1e-4)) - np.log(np.maximum(px[:, [4]], 1e-4))   # R/G, B/G
-        ref = {k: np.median(chroma[inner & (own == k)], axis=0) for k in (a, b)}
-        self.assertGreater(min(np.sum(inner & (own == k)) for k in (a, b)), 100, f"too little of classes {a} and {b} in view")
-        self.assertGreater(float(np.linalg.norm(ref[a] - ref[b])), CLASS_SEPARATION, "the two classes look alike")
-        self.assertGreater(int(edge.sum()), 200, "too little edge in view")
-        shown = np.where(np.linalg.norm(chroma - ref[a], axis=1) < np.linalg.norm(chroma - ref[b], axis=1), a, b)
-        self.assertGreaterEqual(float(np.mean(shown[edge] == own[edge])), CLASS_AGREE)
+        chroma = np.log(np.maximum(px[:, [3, 5]], 1e-4)) - np.log(np.maximum(px[:, [4]], 1e-4))
+        return world[:, [0, 2]], chroma
+
+    def between(self, chroma, start, end):
+        """Each pixel's place between two colours' log chromaticities, 0 at `start` and 1 at `end`."""
+        d = end - start
+        self.assertGreater(float(np.linalg.norm(d)), CLASS_SEPARATION, "the two classes look alike")
+        return (chroma - start) @ d / float(d @ d)
+
+    def references(self, chroma, share, only, a, b):
+        """The median log chromaticities of the pixels whose four texels all hold class a, and all class b."""
+        pure = {a: only & (share < 1e-6), b: only & (share > 1.0 - 1e-6)}
+        self.assertGreater(min(int(m.sum()) for m in pure.values()), 100, f"too little of classes {a} and {b} in view")
+        return {k: np.median(chroma[m], axis=0) for k, m in pure.items()}
+
+    async def test_soft_classes_blend_as_the_texels_round_each_point_weigh_them(self):
+        # where two soft classes meet, the ground's colour moves from one to the other across the texel between them,
+        # as the four texels round each point weigh it from their centres, so that patches fade rather than end in
+        # squares (the hard-edged blotches and camouflage of tours 6, 8 and 15); a read half a texel off moves the
+        # change half a texel, which the weights centred on the texels would show. A textured class's colour varies
+        # along its own mix, so the median place in each band still follows the share
+        cls, grid, (a, b), (x, z) = class_edge(soft_classes())
+        world, chroma = await self.ground_pixels(x, z)
+        share, only = class_weights(cls, grid, world, a, b)
+        ref = self.references(chroma, share, only, a, b)
+        place = self.between(chroma, ref[a], ref[b])
+        curve = [(round(lo, 1), round(float(np.median(place[only & (share > lo) & (share < lo + 0.1)])), 2))
+                 for lo in np.arange(0.0, 1.0, 0.1) if (only & (share > lo) & (share < lo + 0.1)).sum() > 20]
+        for lo, hi in CLASS_BANDS:
+            band = only & (share > lo) & (share < hi)
+            with self.subTest(share=(lo, hi)):
+                self.assertGreater(int(band.sum()), 50, "too little edge in view")
+                self.assertLess(abs(float(np.median(place[band])) - (lo + hi) / 2), CLASS_BLEND_TOL,
+                                f"classes {a} to {b}: median place by share {curve}")
+        # a read half a texel off moves the change towards edges facing one way and away from those facing the other,
+        # which the medians by band, taken over both, can miss: the centred weights must fit far better than any off
+        fits = {s: class_weights(cls, grid, world, a, b, s) for s in
+                [(0.5 * r, 0.5 * c) for r in (-1, 0, 1) for c in (-1, 0, 1)]}
+        moving = np.all([o for _, o in fits.values()], axis=0) & \
+            np.any([(w > 0.02) & (w < 0.98) for w, _ in fits.values()], axis=0)
+        misfit = {s: round(float(np.median(np.abs(place[moving] - w[moving]))), 3) for s, (w, _) in fits.items()}
+        with self.subTest(measure="half a texel off"):
+            self.assertLess(misfit[(0.0, 0.0)], SHIFT_MISFIT * min(v for s, v in misfit.items() if s != (0.0, 0.0)),
+                            f"classes {a} to {b}: median misfit by shift (rows, columns) {misfit}")
+
+    async def test_a_hard_class_keeps_a_sharp_edge_where_its_weight_passes_a_half(self):
+        # the beds, like paths and the pitch, keep their own edges: beside them, where the beds' weight among the four
+        # texels round a point is below a half, the ground beside them shows its own colour, unmixed. The beds lie in a
+        # hollow below the castle among the greenhouses, so their edge is sought on slopes too, and near trees and
+        # meshes, with no sun shadows to cast
+        cls, grid, (a, b), (x, z) = class_edge(soft_classes(plain=True) + [4], with_class=4, rise_max=HARD_RISE,
+                                               clear_texels=HARD_CLEAR_TEXELS)
+        other = b if a == 4 else a
+        world, chroma = await self.ground_pixels(x, z, DBG_NO_SUN_SHADOWS)
+        share, only = class_weights(cls, grid, world, other, 4)
+        ref = self.references(chroma, share, only, other, 4)
+        place = self.between(chroma, ref[other], ref[4])
+        beside = only & (share > HARD_SIDE[0]) & (share < HARD_SIDE[1])
+        self.assertGreater(int(beside.sum()), 50, "too little edge in view")
+        self.assertLess(float(np.median(np.abs(place[beside]))), HARD_TOL)
 
     async def goal_view(self, target, back, up, bearing):
         """The camera `back` metres from `target` along `bearing` (degrees from north) and `up` metres over the ground,
@@ -1195,3 +1326,471 @@ class ThinShadowTests(RenderTestCase):
         open_ground = shapely.contains_xy(band, xs, ys) & (mats == MAT_GROUND)
         self.assertGreater(open_ground.sum(), 100, "too little of the lattice's shadow in view")
         self.assertGreater(suns[open_ground].mean(), THIN_LATTICE_SUN_MIN)
+
+
+# glazing shows, as the greenhouse-glass decision's see-through tinted panes: seen square on at GLASS_HOUR, a slab of
+# glass GLASS_PANE_M across (two panes' faces) halfway between the camera and a wall GLASS_EYE_M off (template_b.html
+# glassFs) brightens the wall's shaded face by at least GLASS_SHEEN (display, 0-1) with the light its old glass
+# scatters, as a pane over a dim room does, and turns the wall's sunlit face greener, its green over red up by at least
+# GLASS_TINT. Panes that only multiplied the image by their tint and added their reflection's tonemapped value measured
+# the shaded face 0.016 darker and the sunlit one 10% greener; screening the display value of their reflection alone,
+# 0.048 brighter, and of the reflection and the sheen, 0.112 brighter and 17% greener. The wall floats GLASS_UP_M over
+# the ground, seen level.
+GLASS_HOUR = 15.0
+GLASS_EYE_M, GLASS_PANE_M, GLASS_UP_M = 20.0, 6.0, 40.0
+GLASS_SHEEN = 0.08
+GLASS_TINT = 0.13
+GLASS_PROBE = 0.15                          # the probed middle of the frame, as a share of its height: inside the pane
+
+
+class GlazingTests(RenderTestCase):
+    async def through_glass(self, sunlit):
+        """Mean display colour of the middle of the frame looking square on at a wall's sunlit face, or its shaded one,
+        at GLASS_HOUR: (without the pane, with it)."""
+        frames = await self.page.evaluate("(h) => { __hog.tod(h); return __hog.frames; }", GLASS_HOUR)
+        await self.page.wait_for_function(f"__hog.frames >= {frames + 2}", timeout=FRAME_TIMEOUT_S * 1000)
+        sun = (await self.page.evaluate("(h) => __hog.light(h)", GLASS_HOUR))["dir"]
+        side = math.copysign(1.0, sun[0]) * (1.0 if sunlit else -1.0)     # the face seen: +x faces east
+        x, z = SUNLIT
+        wall = x - side * GLASS_EYE_M
+        top = await self.ground(x, z) + GLASS_UP_M
+        face = (wall - 0.5, top - 30.0, z - 30.0, wall + 0.5, top + 30.0, z + 30.0)
+        mid = wall + side * GLASS_EYE_M / 2
+        pane = (mid - 0.05, top - GLASS_PANE_M / 2, z - GLASS_PANE_M / 2, mid + 0.05, top + GLASS_PANE_M / 2, z + GLASS_PANE_M / 2)
+        looks = []
+        for panes in ((), (pane,)):
+            await self.show([face], at=(x, z), yaw=WEST if side > 0 else EAST, pitch=0.0,
+                            height=top - await self.ground(x, z), panes=panes)
+            frames = await self.page.evaluate("__hog.frames")
+            await self.page.wait_for_function(f"__hog.frames >= {frames + 10}", timeout=FRAME_TIMEOUT_S * 1000)
+            colour = await self.page.evaluate("""(share) => {
+                const [w, h] = __hog.probe(0, 0).res, r = Math.round(share * h), c = __hog.probeColorRect((w >> 1) - r, (h >> 1) - r, 2 * r, 2 * r);
+                const sum = [0, 0, 0];
+                for (let i = 0; i < c.length; i += 4) for (let k = 0; k < 3; k++) sum[k] += c[i + k];
+                return sum.map((v) => v / (c.length / 4)); }""", GLASS_PROBE)
+            looks.append(np.array(colour))
+        return looks
+
+    async def test_a_pane_over_a_dim_room_shows_its_sheen(self):
+        bare, glazed = await self.through_glass(sunlit=False)
+        self.assertGreater(float((glazed - bare).mean()), GLASS_SHEEN, f"bare {bare.round(3)}, glazed {glazed.round(3)}")
+
+    async def test_a_pane_tints_what_it_covers_green(self):
+        bare, glazed = await self.through_glass(sunlit=True)
+        self.assertGreater(glazed[1] / glazed[0] / (bare[1] / bare[0]) - 1.0, GLASS_TINT,
+                           f"bare {bare.round(3)}, glazed {glazed.round(3)}")
+
+
+# small lights at night: a lit pane too small for a pixel of its own still shows, as a point of its own light
+# (template_b.html lightVs), so the castle reads as inhabited and the High Street's lamps and lit upper windows show
+# from the flyover's distances. LIGHTS_N x LIGHTS_N lamplit panes LIGHTS_PANE_M across (wide, tall) and LIGHTS_PITCH_M
+# apart, set LIGHTS_REVEAL_M back in their openings in a dark wall LIGHTS_FAR_M off and seen LIGHTS_SKEW_DEG off its
+# normal, level, LIGHTS_UP_M over the ground at true night (the sun NIGHT_EL_DEG down): each reveal hides its pane's
+# middle, and each pane covers about a twentieth of an internal pixel. In the shading pass's image each pane's point
+# shines with red at least LIGHTS_POINT_R (display, 0-1) within a pixel of where the pane projects (a quarter of the
+# pane's glow measured 0.68, a light only twice its pixel cover 0.42), and once the temporal filter has settled each
+# shows within LIGHTS_PAD_PX screen pixels as warm light, red at least LIGHTS_WARM_R (0-255) and over LIGHTS_WARM_RB times
+# blue (the panes alone, a share of a pixel, measured about 60), but no redder than a pane seen close up. A box halfway
+# to a wall of panes standing proud of it hides the panes behind it: red under LIGHTS_DARK_R round them. A pane big
+# enough to draw itself takes no point: from LIGHTS_NEAR_M, no pixel LIGHTS_INSET_PX inside a pane in the shading pass's
+# image outshines the pane's median by LIGHTS_SPOT in any channel. No point is drawn by day. A lamp's lantern
+# LIGHTS_LANTERN_M across (lamp glass on its sides and its bottom, as the High Street's lamps have it,
+# LIGHTS_LANTERN_LIFT_M over the ground, clear of trees) shows from LIGHTS_LANTERN_OFF_M off and LIGHTS_LANTERN_UP_M up:
+# taken as one pane, its sides would cancel out and its bottom turn it away. Seen as the
+# inspection did, the castle from CASTLE_NIGHT_EYE at true night and the High Street from VILLAGE_DUSK_EYE at
+# VILLAGE_DUSK_HOUR show at least CASTLE_SPOTS_MIN and VILLAGE_SPOTS_MIN warm spots (8-connected warm pixels): without
+# the points they showed 1 and 0, with them 52 and 193.
+LIGHT_CODE = code("lamplit-glass")
+NIGHT_EL_DEG = -12.0
+LIGHTS_N, LIGHTS_PITCH_M = 5, 15.0
+LIGHTS_PANE_M = (0.4, 0.6)
+LIGHTS_FAR_M, LIGHTS_UP_M = 600.0, 150.0
+LIGHTS_REVEAL_M, LIGHTS_SKEW_DEG = 0.45, 35.0
+LIGHTS_POINT_R = 0.55
+LIGHTS_PAD_PX = 4
+LIGHTS_WARM_R, LIGHTS_WARM_RB = 110, 1.6
+LIGHTS_DARK_R = 60
+LIGHTS_NEAR_M = 12.0
+LIGHTS_INSET_PX = 2
+LIGHTS_SPOT = 0.03
+LIGHTS_LANTERN_M = 0.35
+LIGHTS_LANTERN_OFF_M, LIGHTS_LANTERN_LIFT_M, LIGHTS_LANTERN_UP_M = 360.0, 40.0, 300.0
+DBG_NO_LIGHTS = 131072
+CASTLE_NIGHT_EYE = ((420.0, -620.0), 140.0, (0.0, 0.0), 30.0)       # (east, north) and metres over the ground there
+VILLAGE_DUSK_EYE = ((-1303.14, -761.11), (-875.0, -1155.0), 335.9)  # eye and High Street (east, north), eye over it
+VILLAGE_DUSK_HOUR = 21.5
+CASTLE_SPOTS_MIN, VILLAGE_SPOTS_MIN = 25, 60
+
+
+def warm(image):
+    """The warm, bright pixels of a screenshot (RGB 0-255)."""
+    return (image[..., 0] >= LIGHTS_WARM_R) & (image[..., 0] > LIGHTS_WARM_RB * image[..., 2])
+
+
+class LightPointTests(RenderTestCase):
+    async def night(self):
+        hour = await self.light_at(lambda L: L["el"] < NIGHT_EL_DEG)
+        frames = await self.page.evaluate("(h) => { __hog.tod(h); return __hog.frames; }", hour)
+        await self.page.wait_for_function(f"__hog.frames >= {frames + 2}", timeout=FRAME_TIMEOUT_S * 1000)
+        return hour
+
+    async def screen(self):
+        """The displayed frame (RGB 0-255) once the temporal filter has settled."""
+        frames = await self.page.evaluate("__hog.frames")
+        await self.page.wait_for_function(f"__hog.frames >= {frames + 110}", timeout=60000)
+        return np.asarray(Image.open(io.BytesIO(await self.page.screenshot())).convert("RGB"), float)
+
+    def on_screen(self, view, point):
+        """The screenshot pixel (column, row from the top) `point` projects to with the jitter settled out."""
+        x, y, _ = to_pixel({**view, "jit": [0.0, 0.0]}, point)
+        w, h = view["res"]
+        return (x + 0.5) * self.VIEWPORT["width"] / w - 0.5, self.VIEWPORT["height"] - (y + 0.5) * self.VIEWPORT["height"] / h - 0.5
+
+    def around(self, image, pixel):
+        x, y = (int(round(v)) for v in pixel)
+        return image[max(y - LIGHTS_PAD_PX, 0):y + LIGHTS_PAD_PX + 1, max(x - LIGHTS_PAD_PX, 0):x + LIGHTS_PAD_PX + 1]
+
+    async def pane_wall(self, distance, hide=False):
+        """The lamplit panes on their wall `distance` m west of the camera (and the box hiding the two southern
+        columns' panes from it if `hide`): the view and each pane's face centre, column by column, south first."""
+        x, z = SUNLIT
+        level = await self.ground(x, z) + LIGHTS_UP_M
+        wall = x - distance
+        offsets = (np.arange(LIGHTS_N) - (LIGHTS_N - 1) / 2) * LIGHTS_PITCH_M
+        centres = [np.array([wall + 0.1, level + dy, z + dz]) for dz in offsets for dy in offsets]
+        hw, hh = LIGHTS_PANE_M[0] / 2, LIGHTS_PANE_M[1] / 2
+        boxes = [(c[0] - 0.1, c[1] - hh, c[2] - hw, c[0], c[1] + hh, c[2] + hw) for c in centres]
+        span = LIGHTS_PITCH_M * LIGHTS_N
+        walls = [(Polygon([(wall - 1.0, z - span), (wall - 0.0, z - span), (wall - 0.0, z + span), (wall - 1.0, z + span)]),
+                  level - span, level + span)]
+        if hide:                                    # halfway, round the two southern columns as the camera sees them
+            near = x - distance / 2
+            south = (offsets[0] - LIGHTS_PITCH_M / 2) / 2, (offsets[1] + LIGHTS_PITCH_M / 2) / 2
+            walls.append((Polygon([(near - 1.0, z + south[0]), (near, z + south[0]), (near, z + south[1]), (near - 1.0, z + south[1])]),
+                          level - span / 2, level + span / 2))
+        await self.show(boxes, at=(x, z), yaw=WEST, pitch=0.0, height=LIGHTS_UP_M, walls=walls, attr=LIGHT_CODE)
+        return await self.centre(), centre_columns(centres, LIGHTS_N)
+
+    async def recessed_wall(self):
+        """The lamplit panes set LIGHTS_REVEAL_M back in their openings in a wall facing east, LIGHTS_FAR_M off and seen
+        LIGHTS_SKEW_DEG off its normal, level: each pane's face centre."""
+        x, z = SUNLIT
+        level = await self.ground(x, z) + LIGHTS_UP_M
+        a = math.radians(LIGHTS_SKEW_DEG)
+        face, wz = x - LIGHTS_FAR_M * math.cos(a), z - LIGHTS_FAR_M * math.sin(a)
+        back = face - LIGHTS_REVEAL_M - 0.05                     # the openings' back, where the panes stand
+        offsets = (np.arange(LIGHTS_N) - (LIGHTS_N - 1) / 2) * LIGHTS_PITCH_M
+        hz, hy = LIGHTS_PANE_M[0] / 2, LIGHTS_PANE_M[1] / 2
+        span = LIGHTS_PITCH_M * LIGHTS_N / 2
+        rect = lambda x0, x1, z0, z1: Polygon([(x0, z0), (x1, z0), (x1, z1), (x0, z1)])
+        walls = [(rect(back - 1.0, back, wz - span, wz + span), level - span, level + span)]
+        ys = [level - span] + [level + o + s for o in offsets for s in (-hy, hy)] + [level + span]
+        walls += [(rect(back, face, wz - span, wz + span), y0, y1) for y0, y1 in zip(ys[::2], ys[1::2])]   # between rows
+        zs = [wz - span] + [wz + o + s for o in offsets for s in (-hz, hz)] + [wz + span]
+        walls += [(rect(back, face, z0, z1), level + o - hy, level + o + hy)                               # between openings
+                  for o in offsets for z0, z1 in zip(zs[::2], zs[1::2])]
+        centres = [np.array([back + 0.05, level + dy, wz + dz]) for dz in offsets for dy in offsets]
+        boxes = [(back, c[1] - hy, c[2] - hz, back + 0.05, c[1] + hy, c[2] + hz) for c in centres]
+        yaw, _ = aim([x, level, z], [face, level, wz])
+        await self.show(boxes, at=(x, z), yaw=yaw, pitch=0.0, height=LIGHTS_UP_M, walls=walls, attr=LIGHT_CODE)
+        return centres
+
+    async def test_panes_too_small_for_a_pixel_show_as_lights(self):
+        await self.night()
+        centres = await self.recessed_wall()
+        frames = await self.page.evaluate("__hog.frames")
+        await self.page.wait_for_function(f"__hog.frames >= {frames + 4}", timeout=FRAME_TIMEOUT_S * 1000)
+        view, c = await self.page.evaluate("""() => { const v = __hog.probe(0, 0), [w, h] = v.res;
+            return [v, Array.from(__hog.probeColorRect(0, 0, w, h))]; }""")
+        w, h = view["res"]
+        red = np.array(c, float).reshape(h, w, 4)[..., 0]
+        points = []
+        for q in centres:
+            px, py, _ = to_pixel(view, q)
+            x0, y0 = int(round(px)), int(round(py))
+            points.append(float(red[max(y0 - 1, 0):y0 + 2, max(x0 - 1, 0):x0 + 2].max()))
+        self.assertGreater(min(points), LIGHTS_POINT_R, f"dimmest points {sorted(points)[:5]}")
+        image = await self.screen()
+        peaks = []
+        for q in centres:
+            patch = self.around(image, self.on_screen(view, q))
+            k = np.unravel_index(np.argmax(patch[..., 0]), patch.shape[:2])
+            peaks.append(patch[k])
+        peaks = np.array(peaks)
+        shown = (peaks[:, 0] >= LIGHTS_WARM_R) & (peaks[:, 0] > LIGHTS_WARM_RB * peaks[:, 2])
+        self.assertTrue(shown.all(), f"{int((~shown).sum())} of {len(shown)} panes show no light (reds {sorted(peaks[:, 0])[:5]})")
+        x, z = SUNLIT
+        level = await self.ground(x, z) + LIGHTS_UP_M
+        await self.show([(x - LIGHTS_NEAR_M - 0.1, level - LIGHTS_PANE_M[1] / 2, z - LIGHTS_PANE_M[0] / 2,
+                          x - LIGHTS_NEAR_M, level + LIGHTS_PANE_M[1] / 2, z + LIGHTS_PANE_M[0] / 2)],
+                        at=(x, z), yaw=WEST, pitch=0.0, height=LIGHTS_UP_M, attr=LIGHT_CODE)
+        close = await self.screen()
+        h, w = close.shape[:2]
+        pane = close[h // 2 - 4:h // 2 + 5, w // 2 - 4:w // 2 + 5].reshape(-1, 3)
+        self.assertLessEqual(float(peaks[:, 0].max()), float(np.median(pane[:, 0])) + 8.0, "a light outshines its pane")
+
+    async def test_a_light_hides_behind_what_stands_in_front_of_it(self):
+        await self.night()
+        view, columns = await self.pane_wall(LIGHTS_FAR_M, hide=True)
+        image = await self.screen()
+        hidden = [float(self.around(image, self.on_screen(view, c))[..., 0].max()) for col in columns[:2] for c in col]
+        shown = [warm(self.around(image, self.on_screen(view, c))).any() for col in columns[2:] for c in col]
+        self.assertLess(max(hidden), LIGHTS_DARK_R)
+        self.assertTrue(all(shown), "the panes left in view should still show")
+
+    async def test_a_pane_big_enough_to_draw_itself_takes_no_point(self):
+        await self.night()
+        x, z = SUNLIT
+        level = await self.ground(x, z) + LIGHTS_UP_M
+        await self.show([(x - LIGHTS_NEAR_M - 0.1, level - LIGHTS_PANE_M[1] / 2, z - LIGHTS_PANE_M[0] / 2,
+                          x - LIGHTS_NEAR_M, level + LIGHTS_PANE_M[1] / 2, z + LIGHTS_PANE_M[0] / 2)],
+                        at=(x, z), yaw=WEST, pitch=0.0, height=LIGHTS_UP_M, attr=LIGHT_CODE)
+        frames = await self.page.evaluate("__hog.frames")
+        await self.page.wait_for_function(f"__hog.frames >= {frames + 4}", timeout=FRAME_TIMEOUT_S * 1000)
+        w, h, g, c = await self.page.evaluate("""() => { const [w, h] = __hog.probe(0, 0).res;
+            return [w, h, __hog.probeRect(0, 0, w, h).map((p) => [p[0], p[4]]), Array.from(__hog.probeColorRect(0, 0, w, h))]; }""")
+        g = np.array(g, float).reshape(h, w, 2)
+        mask = ndi.binary_erosion((g[..., 0] == LIGHT_CODE[0]) & (np.abs(g[..., 1] - LIGHT_CODE[1]) < 0.5), iterations=LIGHTS_INSET_PX)
+        colours = np.array(c, float).reshape(h, w, 4)[..., :3][mask]
+        self.assertGreater(len(colours), 20, "too little of the pane in view")
+        self.assertLess(float((colours - np.median(colours, axis=0)).max()), LIGHTS_SPOT)
+
+    async def test_no_lights_by_day(self):
+        frames = await self.page.evaluate("() => { __hog.tod(12.5); return __hog.frames; }")
+        await self.page.wait_for_function(f"__hog.frames >= {frames + 3}", timeout=FRAME_TIMEOUT_S * 1000)
+        self.assertEqual((await self.page.evaluate("__hog.meshStats()")).get("lights"), 0)
+
+    async def test_a_lamps_lantern_shows_from_above(self):
+        await self.night()
+        x, z = SUNLIT
+        lx = x - LIGHTS_LANTERN_OFF_M
+        base = await self.ground(lx, z) + LIGHTS_LANTERN_LIFT_M
+        lantern = mesh_village_small._frustum((lx, z), LIGHTS_LANTERN_M, LIGHTS_LANTERN_M, base, base + LIGHTS_LANTERN_M,
+                                              "lamp-glass", bottom=True)
+        body = json.loads(build_meshes.strip_js(build_meshes.encode_payload({"diagnostic": [lantern]}, SCENE)))
+        eye, middle = [x, await self.ground(x, z) + LIGHTS_LANTERN_UP_M, z], np.array([lx, base + LIGHTS_LANTERN_M / 2, z])
+        frames = await self.page.evaluate("async ([b, p, y, q]) => { __hog.camera(p, y, q); await __hog.loadMeshes(b); return __hog.frames; }",
+                                          [body, eye, *aim(eye, middle)])
+        await self.page.wait_for_function(f"__hog.frames >= {frames + 3}", timeout=FRAME_TIMEOUT_S * 1000)
+        view = await self.centre()
+        image = await self.screen()
+        patch = self.around(image, self.on_screen(view, middle))
+        self.assertTrue(warm(patch).any(), f"no light (reddest {patch[..., 0].max():.0f})")
+
+    async def spots(self, eye, target, hour):
+        frames = await self.page.evaluate("(h) => { __hog.tod(h); return __hog.frames; }", hour)
+        await self.page.wait_for_function(f"__hog.frames >= {frames + 2}", timeout=FRAME_TIMEOUT_S * 1000)
+        yaw, pitch = aim(eye, target)
+        await self.page.evaluate("([p, y, q]) => __hog.camera(p, y, q)", [list(eye), yaw, pitch])
+        _, count = ndi.label(warm(await self.screen()), structure=np.ones((3, 3)))
+        return count
+
+    async def test_the_castle_reads_as_inhabited_at_night(self):
+        (ex, ez), up, (tx, tz), t_up = CASTLE_NIGHT_EYE
+        eye = [ex, await self.ground(ex, ez) + up, ez]
+        target = [tx, await self.ground(tx, tz) + t_up, tz]
+        self.assertGreaterEqual(await self.spots(eye, target, await self.light_at(lambda L: L["el"] < NIGHT_EL_DEG)), CASTLE_SPOTS_MIN)
+
+    async def test_the_high_streets_lights_show_from_afar_at_dusk(self):
+        (ex, ez), (tx, tz), up = VILLAGE_DUSK_EYE
+        target = [tx, await self.ground(tx, tz) + 2.0, tz]
+        eye = [ex, target[1] + up, ez]
+        self.assertGreaterEqual(await self.spots(eye, target, VILLAGE_DUSK_HOUR), VILLAGE_SPOTS_MIN)
+
+
+# far terrain stays whole (frag3.glsl trace): a ray that skims a long crest and spends the march's step budget there
+# (maxM) marches on with steps at least CONT_PX pixels long, where it used to be called ground at its last step,
+# drawing a band of false ground in mid-air over a sliver of the real sky. Seen from the inspection's station
+# and high-fringe close-ups and level across the lake (true grazing cases), no sky pixel lies under terrain over
+# SLIVER_FAR_M off in its column; and along the ray of the lowest sky pixel over the terrain in each column the page's
+# CPU terrain (template.html ground) stays under the ray, or at most SLIVER_TOL_M over it (the shader's own relief), out
+# to SLIVER_REACH_M: sky never hides ground. The station building's close-up showed 2,591 such sky pixels at 1920 x 1080.
+SLIVER_VIEWS = {   # name: (eye (east, north), metres over the ground there, target, metres over the ground there, hour)
+    "station building": ((318, 96), 6.0, (340.7, 110.2), 3.0, 15.0),
+    "station platform": ((366.0, 92.7), 3.1, (282, 186), 2.5, 16.0),
+    "high fringe": ((-800.0, -1180.0), 12.0, (-444.5, -505.5), 3.0, 15.0),
+}
+SLIVER_LAKE_UP_M, SLIVER_LAKE_PITCH = 3.0, 0.03
+SLIVER_FAR_M = 200.0
+SLIVER_TOL_M = 1.5
+SLIVER_REACH_M = 20000.0
+# the far canopy reads as the trees it stands for (frag5.glsl: the canopy sheet beyond TREE_FAR_M, where the 3D trees
+# stop): seen CANOPY_UP_M over CANOPY_EYE looking north CANOPY_PITCH down at 15:00, the sheet's pixels up to
+# CANOPY_BAND_M beyond TREE_FAR_M have a mean display luminance within CANOPY_MEAN of the 3D trees' up to as far within
+# it, and a local contrast (mean absolute difference from the four neighbours, over the mean) at least CANOPY_CONTRAST of
+# theirs. The smooth sheet measured 0.004 against the trees' 0.25 and read as a lawn from above.
+CANOPY_EYE, CANOPY_UP_M, CANOPY_PITCH = (-500.0, 1291.2), 1600.0, -0.5
+TREE_FAR_M, CANOPY_BAND_M = 2600.0, 400.0
+CANOPY_MEAN = 0.1
+CANOPY_CONTRAST = 0.35
+# lite detail draws the sheet at every distance: from LITE_UP_M over CANOPY_EYE looking north LITE_PITCH down, where its
+# 7 m cells span ten pixels and more, its pixels from LITE_NEAR_M to LITE_FAR_M off stay smooth, their local contrast
+# under LITE_CONTRAST (the cells' own hues and light would make a quilt of hard-edged squares)
+LITE_UP_M, LITE_PITCH = 250.0, -0.6
+LITE_NEAR_M, LITE_FAR_M = 150.0, 700.0
+LITE_CONTRAST = 0.03
+
+
+class FarTerrainTests(RenderTestCase):
+    async def frames(self):
+        """(name, view, material, distance) of each probed frame: SLIVER_VIEWS, then level across the lake."""
+        views = []
+        for name, ((ex, ez), up, (tx, tz), t_up, hour) in SLIVER_VIEWS.items():
+            eye = [ex, await self.ground(ex, ez) + up, ez]
+            views.append((name, eye, *aim(eye, [tx, await self.ground(tx, tz) + t_up, tz]), hour))
+        lake = await self.page.evaluate("DATA.meta.extras.lake_c")
+        views.append(("across the lake", [lake[0], await self.ground(*lake) + SLIVER_LAKE_UP_M, lake[1]], 0.0, SLIVER_LAKE_PITCH, 15.0))
+        out = []
+        for name, eye, yaw, pitch, hour in views:
+            frames = await self.page.evaluate("([p, y, q, h]) => { __hog.tod(h); __hog.camera(p, y, q); return __hog.frames; }",
+                                              [eye, yaw, pitch, hour])
+            await self.page.wait_for_function(f"__hog.frames >= {frames + 4}", timeout=FRAME_TIMEOUT_S * 1000)
+            view, probed = await self.page.evaluate("""() => { const v = __hog.probe(0, 0), [w, h] = v.res;
+                return [v, __hog.probeRect(0, 0, w, h).map((p) => [p[0], p[5]])]; }""")
+            w, h = view["res"]
+            g = np.array(probed, float).reshape(h, w, 2)              # rows run up from the frame's bottom
+            out.append((name, view, g[..., 0].astype(int), g[..., 1]))
+        return out
+
+    async def test_no_sky_shows_under_far_terrain(self):
+        for name, _, mats, ts in await self.frames():
+            far = (mats == MAT_GROUND) & (ts > SLIVER_FAR_M)
+            above = np.flip(np.cumsum(np.flip(far, 0), 0), 0) - far > 0   # far terrain somewhere higher in the column
+            with self.subTest(view=name):
+                self.assertEqual(int(((mats == MAT_SKY) & above).sum()), 0)
+
+    async def test_sky_never_hides_ground(self):
+        for name, view, mats, _ in await self.frames():
+            h, w = mats.shape
+            rays = []
+            for x in range(w):
+                solid = np.flatnonzero(mats[:, x] != MAT_SKY)
+                if len(solid) and solid[-1] + 1 < h:
+                    o, d = ray(view, x, solid[-1] + 1)
+                    rays.append([x, *o, *d])
+            under = await self.page.evaluate("""([rays, reach]) => rays.map(([x, ox, oy, oz, dx, dy, dz]) => {
+                let low = Infinity;
+                for (let t = 1; t < reach; t += Math.max(0.5, t * 0.002))
+                  low = Math.min(low, oy + dy * t - __hog.ground(ox + dx * t, oz + dz * t)[1]);
+                return [x, low]; })""", [rays, SLIVER_REACH_M])
+            with self.subTest(view=name):
+                self.assertGreater(len(rays), w // 2, "too little sky over the terrain")
+                self.assertEqual([(x, round(low, 1)) for x, low in under if low < -SLIVER_TOL_M], [])
+
+    async def test_the_far_canopy_reads_as_the_trees_it_stands_for(self):
+        x, z = CANOPY_EYE
+        frames = await self.page.evaluate("([p, q]) => { __hog.tod(15); __hog.camera(p, 0, q); return __hog.frames; }",
+                                          [[x, await self.ground(x, z) + CANOPY_UP_M, z], CANOPY_PITCH])
+        await self.page.wait_for_function(f"__hog.frames >= {frames + 4}", timeout=FRAME_TIMEOUT_S * 1000)
+        w, h, g, c = await self.page.evaluate("""() => { const [w, h] = __hog.probe(0, 0).res;
+            return [w, h, __hog.probeRect(0, 0, w, h).map((p) => [p[0], p[5]]), Array.from(__hog.probeColorRect(0, 0, w, h))]; }""")
+        g = np.array(g, float).reshape(h, w, 2)
+        y = np.array(c, float).reshape(h, w, 4)[..., :3] @ [0.2126, 0.7152, 0.0722]
+        looks = {}
+        for name, lo, hi in (("trees", TREE_FAR_M - CANOPY_BAND_M, TREE_FAR_M - 20.0), ("sheet", TREE_FAR_M + 20.0, TREE_FAR_M + CANOPY_BAND_M)):
+            band = (g[..., 0] == MAT_TREE) & (g[..., 1] > lo) & (g[..., 1] < hi)
+            inner = band[1:-1, 1:-1] & band[:-2, 1:-1] & band[2:, 1:-1] & band[1:-1, :-2] & band[1:-1, 2:]
+            self.assertGreater(inner.sum(), 1000, f"too few {name} in view")
+            around = (y[:-2, 1:-1] + y[2:, 1:-1] + y[1:-1, :-2] + y[1:-1, 2:]) / 4
+            mean = float(y[band].mean())
+            looks[name] = (mean, float(np.abs(y[1:-1, 1:-1] - around)[inner].mean()) / mean)
+        (trees, trees_contrast), (sheet, sheet_contrast) = looks["trees"], looks["sheet"]
+        self.assertLess(abs(sheet / trees - 1.0), CANOPY_MEAN, looks)
+        self.assertGreater(sheet_contrast, CANOPY_CONTRAST * trees_contrast, looks)
+
+
+# stars come out as the twilight fades (frag4.glsl sky): looking STARS_PITCH up at 15 degrees east of north, the sky
+# shows no star at civil dusk (the sun STARS_DUSK_EL_DEG down, its upper limb about on the horizon) and at least
+# STARS_NIGHT_MIN at true night (the sun NIGHT_EL_DEG down). A star is a sky pixel of the shading pass's image brighter
+# in every channel than the mean of its four neighbours by STARS_CONTRAST. The civil-dusk sky showed its stars at
+# seven-tenths of their night strength.
+STARS_PITCH, STARS_YAW = 0.7, math.radians(15.0)
+STARS_DUSK_EL_DEG = -0.5
+STARS_CONTRAST = 0.05
+STARS_NIGHT_MIN = 20
+
+
+class NightSkyTests(RenderTestCase):
+    async def stars(self, test):
+        hour = await self.light_at(test)
+        x, z = SUNLIT
+        frames = await self.page.evaluate("([h, p, y, q]) => { __hog.tod(h); __hog.camera(p, y, q); return __hog.frames; }",
+                                          [hour, [x, await self.ground(x, z) + 30.0, z], STARS_YAW, STARS_PITCH])
+        await self.page.wait_for_function(f"__hog.frames >= {frames + 4}", timeout=FRAME_TIMEOUT_S * 1000)
+        w, h, mats, c = await self.page.evaluate("""() => { const [w, h] = __hog.probe(0, 0).res;
+            return [w, h, __hog.probeRect(0, 0, w, h).map((p) => p[0]), Array.from(__hog.probeColorRect(0, 0, w, h))]; }""")
+        sky = np.array(mats).reshape(h, w) == MAT_SKY
+        c = np.array(c, float).reshape(h, w, 4)[..., :3]
+        around = (c[:-2, 1:-1] + c[2:, 1:-1] + c[1:-1, :-2] + c[1:-1, 2:]) / 4
+        inner = sky[1:-1, 1:-1] & sky[:-2, 1:-1] & sky[2:, 1:-1] & sky[1:-1, :-2] & sky[1:-1, 2:]
+        self.assertGreater(inner.sum(), 0.5 * w * h, "too little sky in view")
+        return int((inner & ((c[1:-1, 1:-1] - around).min(axis=-1) > STARS_CONTRAST)).sum())
+
+    async def test_stars_come_out_only_as_the_twilight_fades(self):
+        with self.subTest(at="civil dusk"):
+            self.assertEqual(await self.stars(lambda L: L["el"] < STARS_DUSK_EL_DEG), 0)
+        with self.subTest(at="night"):
+            self.assertGreaterEqual(await self.stars(lambda L: L["el"] < NIGHT_EL_DEG), STARS_NIGHT_MIN)
+
+
+# a burn reads as running water (frag5.glsl shade: its riffles mirror the sky, as the lake's water does, and glint):
+# seen from STREAM_EYE, STREAM_UP_M over the ground, at 15:00 looking at STREAM_TARGET on the ground, the burn's pixels
+# (whose ground lies STREAM_IN_M or more inside its edge by the local layer's stream distance) have a mean display
+# luminance at least STREAM_LIGHT of the open ground's (STREAM_OUT_M or more outside it) and vary like rippled water,
+# their local contrast (mean absolute difference from the four neighbours, over the mean) at least STREAM_CONTRAST. The
+# painted bed measured 0.54 of the open ground and 0.003, the rippled water 0.81 and 0.077.
+STREAM_EYE, STREAM_UP_M, STREAM_TARGET = (-1163.4, -1353.5), 15.5, (-1135.4, -1307.9)
+STREAM_IN_M, STREAM_OUT_M = 0.5, 3.0
+STREAM_LIGHT, STREAM_CONTRAST = 0.7, 0.03
+
+
+class BurnTests(RenderTestCase):
+    async def test_a_burn_mirrors_the_sky_through_its_riffles(self):
+        (ex, ez), (tx, tz) = STREAM_EYE, STREAM_TARGET
+        eye = [ex, await self.ground(ex, ez) + STREAM_UP_M, ez]
+        yaw, pitch = aim(eye, [tx, await self.ground(tx, tz), tz])
+        frames = await self.page.evaluate("([p, y, q]) => { __hog.tod(15); __hog.camera(p, y, q); return __hog.frames; }", [eye, yaw, pitch])
+        await self.page.wait_for_function(f"__hog.frames >= {frames + 4}", timeout=FRAME_TIMEOUT_S * 1000)
+        view, g, c = await self.page.evaluate("""() => { const v = __hog.probe(0, 0), [w, h] = v.res;
+            return [v, __hog.probeRect(0, 0, w, h).map((p) => [p[0], p[5]]), Array.from(__hog.probeColorRect(0, 0, w, h))]; }""")
+        w, h = view["res"]
+        g = np.array(g, float).reshape(h, w, 2)
+        y = np.array(c, float).reshape(h, w, 4)[..., :3] @ [0.2126, 0.7152, 0.0722]
+        ys, xs = np.nonzero(g[..., 0] == MAT_GROUND)
+        hits = np.array([o + d * g[py, px, 1] for px, py in zip(xs, ys) for o, d in [ray(view, px, py)]])
+        data = load_data()
+        stream = decode(data["tex"]["locB"])[..., CHANNELS["locB"].index("stream")].astype(float) * 0.1 - 12.8
+        sd = np.full((h, w), np.nan)
+        sd[ys, xs] = sample(stream, Grid(data["meta"]["local"]), hits[:, 0], hits[:, 2])
+        burn, open_ = sd <= -STREAM_IN_M, sd >= STREAM_OUT_M
+        inner = burn[1:-1, 1:-1] & burn[:-2, 1:-1] & burn[2:, 1:-1] & burn[1:-1, :-2] & burn[1:-1, 2:]
+        self.assertGreater(inner.sum(), 500, "too little of the burn in view")
+        around = (y[:-2, 1:-1] + y[2:, 1:-1] + y[1:-1, :-2] + y[1:-1, 2:]) / 4
+        light = float(y[burn].mean() / y[open_].mean())
+        contrast = float(np.abs(y[1:-1, 1:-1] - around)[inner].mean() / y[burn].mean())
+        self.assertGreater(light, STREAM_LIGHT)
+        self.assertGreater(contrast, STREAM_CONTRAST)
+
+
+
+class LiteDetailTests(RenderTestCase):
+    QUERY = "?t=60&pause=1&scale=0.35&hud=0&detail=0"
+
+    async def test_the_near_canopy_sheet_stays_smooth(self):
+        x, z = CANOPY_EYE
+        frames = await self.page.evaluate("([p, q]) => { __hog.tod(15); __hog.camera(p, 0, q); return __hog.frames; }",
+                                          [[x, await self.ground(x, z) + LITE_UP_M, z], LITE_PITCH])
+        await self.page.wait_for_function(f"__hog.frames >= {frames + 4}", timeout=FRAME_TIMEOUT_S * 1000)
+        w, h, g, c = await self.page.evaluate("""() => { const [w, h] = __hog.probe(0, 0).res;
+            return [w, h, __hog.probeRect(0, 0, w, h).map((p) => [p[0], p[5]]), Array.from(__hog.probeColorRect(0, 0, w, h))]; }""")
+        g = np.array(g, float).reshape(h, w, 2)
+        y = np.array(c, float).reshape(h, w, 4)[..., :3] @ [0.2126, 0.7152, 0.0722]
+        band = (g[..., 0] == MAT_TREE) & (g[..., 1] > LITE_NEAR_M) & (g[..., 1] < LITE_FAR_M)
+        inner = band[1:-1, 1:-1] & band[:-2, 1:-1] & band[2:, 1:-1] & band[1:-1, :-2] & band[1:-1, 2:]
+        self.assertGreater(inner.sum(), 1000, "too little canopy in view")
+        around = (y[:-2, 1:-1] + y[2:, 1:-1] + y[1:-1, :-2] + y[1:-1, 2:]) / 4
+        self.assertLess(float(np.abs(y[1:-1, 1:-1] - around)[inner].mean() / y[band].mean()), LITE_CONTRAST)
+
+
+def centre_columns(centres, n):
+    return [centres[i * n:(i + 1) * n] for i in range(n)]

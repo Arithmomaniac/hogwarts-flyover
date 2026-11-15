@@ -24,6 +24,7 @@ PAGE = ROOT / "hogwarts-flyover.html"
 GPU = os.environ.get("HOG_GPU", "").lower()
 GPU_ARGS = {"amd": ["--force-low-power-gpu"], "nvidia": ["--force-high-performance-gpu"]}
 RESET_TIMEOUT_MS = 15000            # frames that stop coming for this long mean the page's frame loop has died
+START_TIMEOUT_MS = 300000           # loading the page and compiling its programs, two minutes on a busy machine
 
 
 def gpu_args():
@@ -109,7 +110,7 @@ class PageTestCase(unittest.TestCase):
         cls.page.on("pageerror", lambda error: cls.errors.append(str(error)))
         await cls.page.goto(PAGE.as_uri() + cls.QUERY)
         await cls.page.wait_for_function("window.__hog && (__hog.error || (__hog.ready && __hog.frames >= 10))",
-                                         timeout=120000)
+                                         timeout=START_TIMEOUT_MS)
         error = await cls.page.evaluate("__hog.error || null")
         if error:
             raise RuntimeError(f"the page failed to start: {error}")

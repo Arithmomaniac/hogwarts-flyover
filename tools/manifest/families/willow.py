@@ -21,8 +21,8 @@ def assets(ctx):
             dimensions={"fork_height_m": 2.4, "trunk_radius_m": 0.95, "crown_reach_m": 11.0, "mouth_width_m": 0.75,
                         "mouth_height_m": 0.55, "knot_height_m": 0.4, "branch_clearance_m": 1.0},
             parts=["short thick trunk", "six or seven low sinuous limbs", "knuckles", "flared roots with a gap",
-                   "finer asymmetric growth", "an arching root", "the knot", "leaves"],
-            materials=["grey-brown ridged bark", "dark knot", "earthy tunnel mouth", "grey-green willow leaves"],
+                   "finer asymmetric growth", "an arching root", "the knot in its burl", "leaves"],
+            materials=["grey-brown bark with deep fissures along the wood", "a dark knot-hole in a burl", "earthy tunnel mouth", "grey-green willow leaves"],
             decisions=["willow-root-gap", "willow-limbs", "willow-root-gap-size", "willow-arching-root", "willow-knot",
                        "willow-branch-clearance", "willow-crown", "willow-in-leaf", "willow-generator", "willow-levels"]),
     ]
@@ -53,8 +53,10 @@ def decisions(ctx):
             q(G, "The roots are so gnarled that at least one evidently curls right out of the ground"),
             inferred=True),
         "willow-knot": decision(
-            "The knot sits 0.4 m up the trunk, a little round from the gap.",
+            "The knot sits 0.4 m up the trunk, a little round from the gap: a dark knot-hole sunk in the middle of a "
+            "burl that the trunk's own wood, bark and all, swells into, as an old branch scar heals.",
             q(G, "On the lower part of the trunk, at a height accessible to a large domestic cat or an agile rat"),
+            q(G, "trying to see the single knot in the bark of the old tree"), q(G, "prod the knot on the trunk"),
             inferred=True),
         "willow-branch-clearance": decision(
             "Beyond its roots no branch or leaf comes within 1 m of the ground.",

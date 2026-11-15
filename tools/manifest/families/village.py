@@ -105,20 +105,24 @@ def assets(ctx):
             materials=["harl", "whitewash", "rubble stone", "thatch", "slate"],
             decisions=["village-roof-mix", "no-half-timbering", "thatch-straw-animals-optional",
                        "village-footprints-regularized", "village-units", "village-style-families",
-                       "village-detail-where-seen", "village-levels", "village-ancillary", "shack-above-the-village"]),
+                       "village-detail-where-seen", "village-levels", "village-ancillary", "shack-above-the-village",
+                       "village-night-windows"]),
         asset("village-wing", "village", "Wings and outshots of village buildings", [
             note("data", "footprints of 16 m² or less that touch a larger footprint")],
             inputs=FOOTPRINT, rule={"region": "hogs", "kinds": ["thatch", "slate"], "max_area": 16},
             parents={str(k): v for k, v in sorted(WING_PARENTS.items())}, decisions=["village-wings-join-parents"]),
-        asset("street-furniture", "village", "High Street lamps", [
+        asset("street-furniture", "village", "High Street lamps and footway", [
             q(H, "There are at least some streetlamps, which will probably be ornate Victorian cast-iron jobs rather"
-                 " than modern."), q(H, "In DH the side-road to the Hog's Head is not lit")],
-            labels=labels(HM, "1h"), images=["Brechin_lamp.jpg"], parts=["cast-iron lamps on stone plinths"],
+                 " than modern."), q(H, "In DH the side-road to the Hog's Head is not lit"),
+            q(H, "fancy shop signs hanging above the pavements")],
+            labels=labels(HM, "1h"), images=["Brechin_lamp.jpg"],
+            parts=["cast-iron lamps on stone plinths", "a kerbed flagstone footway"],
             traced=[{"id": "high-street", "frame": HM, "feature": "the High Street (1h): two points on its line, one"
                                                                   " at each end; the road layer gives its centreline"
                                                                   " between them",
                      "plan_px": traced["high-street"]}],
-            decisions=["hogsmeade-lamps-high-street-only", "village-high-street", "village-ancillary"]),
+            decisions=["hogsmeade-lamps-high-street-only", "high-street-footway", "village-high-street",
+                       "village-ancillary"]),
     ]
     return out
 
@@ -142,8 +146,10 @@ def decisions(ctx):
             images=["Balquhidder_kirk.jpg", "Balquhidder_kirk_old.jpg"]),
         "hogsmeade-lamps-high-street-only": decision(
             "Ornate Victorian cast-iron lamps stand on the High Street only, about every 30 m, alternately on either"
-            " side: each on the pavement 1.6 m in front of the end of a building's front, clear of its door, a glass"
-            " lantern on a tapering iron post over a stone plinth. The Hog's Head side road is unlit.",
+            " side: each on the pavement 1.6 m in front of the end of a building's front, clear of its door, squared to"
+            " the front: a lantern of dark glass framed in iron at its corners under an iron cap and finial, on a"
+            " tapering iron post with a flared foot and a ladder bar, over a stone plinth. The Hog's Head side road is"
+            " unlit.",
             q(H, "the darkness complete but for a few streetlamps and lit upper windows"),
             q(H, "There are at least some streetlamps, which will probably be ornate Victorian cast-iron jobs rather"
                  " than modern."), q(H, "In DH the side-road to the Hog's Head is not lit"),
@@ -151,6 +157,17 @@ def decisions(ctx):
         "hogsmeade-hanging-signs": decision(
             "Shops have signs hanging over the pavement.", q(H, "fancy shop signs hanging above the pavements"),
             images=["St_Mary_Street.jpg"]),
+        "high-street-footway": decision(
+            "A footway of grey flagstones runs along the High Street's fronts, 2 m out from their walls, and its lamps"
+            " stand on it. It is draped over the ground a 0.12 m kerb above it, but where it meets a front, before its"
+            " doors, it stays under that building's floor, so no door opens below it; it stops at the buildings and at"
+            " the side roads, leaving the carriageway between.",
+            q(H, "fancy shop signs hanging above the pavements"),
+            q(H, "There are at least some streetlamps, which will probably be ornate Victorian cast-iron jobs rather"
+                 " than modern."),
+            note("data", "at site X it covers 1,164 m² in 1,235 triangles; without it the lamps stood on the grass verge"
+                         " (inspection round 1)"),
+            inferred=True),
         "thatch-straw-animals-optional": decision(
             "A few thatched roofs may carry straw animals.",
             q(H, "decorative straw animals woven into the thatch"), images=["straw_owl.jpg"]),
@@ -174,8 +191,16 @@ def decisions(ctx):
             choice(ctx.choices["village_ancillary"]), q(H, "fancy shop signs hanging above the pavements"),
             inferred=True),
         "village-wings-join-parents": decision(
-            "Village footprints of 16 m² or less are wings or outshots of the building they touch.",
+            "Village footprints of 16 m² or less are wings or outshots of the building they touch. One whose traced plan"
+            " is only specks, a single texel of the map cut off from its building by the 2 m grid, is left out: the"
+            " building it touches stands for it.",
             note("data", "no village footprint lies between 16 and 20 m²")),
+        "village-night-windows": decision(
+            "At night no glass on a High Street building's ground floor is lit: its shops are shut, and so is the Three"
+            " Broomsticks. A quarter of its upper windows are lit and 15% dimly, as are the windows of the houses off"
+            " the High Street.",
+            q(H, "the darkness complete but for a few streetlamps and lit upper windows"),
+            q(H, "Lights twinkled from windows over shops")),
         "hogs-head-slate": decision(
             "The Hog's Head is slated, not thatched.",
             q(H, "The presence of bay windows and the general state of delapidation suggest to me that the Hog's Head"
@@ -196,9 +221,9 @@ def decisions(ctx):
             images=["Hogs_Head.gif"]),
         "shack-character": decision(
             "The Shrieking Shack is two storeys of unpainted weatherboard on a rubble footing under corrugated iron,"
-            " with one rubble gable stack. Its door is shut and every window is boarded over but one, on the ground"
-            " floor of the wall that faces the castle; a low fence rings its garden a few metres out, open where the"
-            " path comes up to it.",
+            " with one rubble gable stack. Its door is shut, a leaf of planks with boards nailed across it, and every"
+            " window is boarded over but one, on the ground floor of the wall that faces the castle; a low fence of two"
+            " dark timber rails on posts rings its garden a few metres out, open where the path comes up to it.",
             q(H, "even in daylight was slightly creepy, with its boarded windows and dank overgrown garden"),
             q(H, "all the windows boarded except for one"),
             q(H, "The single unblocked window revealed distant bursts of light where the castle stood"),
@@ -230,7 +255,7 @@ def decisions(ctx):
         "honeydukes-mullions": decision(
             "Honeydukes' windows are mullioned: every window in its front, the shop's and those of the owners' rooms"
             " over it, is divided into lights at most 0.8 m wide by upright bars, painted like its shopfront in the"
-            " shop windows and of stone above.",
+            " shop windows and of stone above. The shop windows' lights are plain glass.",
             q(H, "nodding through the mullioned windows at the thick, swirling snow"),
             q(H, "It has mullioned windows (that is, divided by a narrow vertical bar)"),
             q(H, "The owners live over the shop.")),
@@ -243,9 +268,9 @@ def decisions(ctx):
             q(H, "in a few minutes were entering the tiny inn"),
             q(H, "I saw you Apparate as I was pulling my bedroom curtains!"), inferred=True),
         "post-office-owl-loft": decision(
-            "The post office carries an owl loft along the middle of its ridge: a weatherboarded box under a hipped"
-            " slate cap, with a row of flight holes over a perching ledge along each long side, for the owls that fly"
-            " from it.",
+            "The post office carries an owl loft along its highest ridge, as near the middle of its front as that"
+            " ridge allows: a weatherboarded box under a hipped slate cap, with a row of flight holes over a perching"
+            " ledge along each long side, for the owls that fly from it.",
             q(H, "the post office, from which owls issued at regular intervals"),
             q(H, "The owls sat hooting softly down at him, at least three hundred of them"), inferred=True),
         "scrivenshafts-crow-steps": decision(
@@ -256,8 +281,8 @@ def decisions(ctx):
             q(H, "A sort of Mediaeval-style stationers"), q(H, "probably sixteenth to eighteenth century in style"),
             q(H, "a handsome display of pheasant feather quills in the window"), inferred=True),
         "puddifoots-steamed-windows": decision(
-            "Madam Puddifoot's is harled pink, and its shop windows are steamed up from inside, misted panes that glow"
-            " with lamplight at dusk.",
+            "Madam Puddifoot's is harled pink, and its shop windows are steamed up from inside: misted panes, unlit at"
+            " night when the teashop is shut.",
             q(H, "a small teashop that Harry had never noticed before"),
             q(H, "It was a cramped, steamy little place where everything seemed to have been decorated with frills or"
                  " bows."), q(H, "Harry was reminded unpleasantly of Umbridge's office."), inferred=True),
@@ -273,7 +298,7 @@ def decisions(ctx):
         "dervish-and-banges-clock": decision(
             "Dervish & Banges, which sells magical instruments, hangs an instrument maker's bracket clock out over the"
             " pavement from the pier nearest the middle of its front: a drum with a white face on either side, on an"
-            " iron bar.",
+            " iron bar, each face's iron hands at ten past ten over iron marks at the quarters.",
             q(H, "They sell that sort of thing in Dervish and Banges, magical instruments and stuff"),
             q(H, "Dervish and Banges, the wizarding equipment shop"), inferred=True),
         "village-public-buildings": decision(
@@ -284,7 +309,7 @@ def decisions(ctx):
             " distillery is white-harled under slate: a still house beside a square kiln under a steep pyramid roof"
             " crowned by a louvred ventilator, the pagoda of a Highland distillery; the kiln has no chimney of its own."
             " The carriage hangar is one long weatherboarded shed under slate, kept for the carriages, its long front a"
-            " row of carriage doors.",
+            " row of carriage doors reaching down to the ground.",
             q(H, "the existence and position of a village hall, a hangar to store the Thestral-drawn carriages, a whisky"
                  " distillery"),
             q(H, "probably some sort of garage where the Thestral-drawn carriages are kept"),
@@ -339,17 +364,19 @@ def decisions(ctx):
             " walls under its filled-in skin, which keeps the eaves that the flyover sees from above; the shadow caster,"
             " which the page draws again only when the sun moves, is its walls and attic, the cheapest, with what stands"
             " out beyond the eaves and casts a shadow of its own: Gladrags' blind and the Shack's fence as built, the"
-            " kirkyard's wall, and each garden's wall and gate as one slab along them. Seen from above it leaves no"
-            " patch of more than a square metre of the full village farther than 0.75 m from it. They are"
+            " High Street's lamps, the kirkyard's wall, and each garden's wall and gate as a slab along each of its"
+            " runs. Seen from above it"
+            " leaves no patch of more than a square metre of the full village farther than 0.75 m from it. Every level"
+            " keeps the High Street's footway as built, which would pop out of view where a level left it out. They are"
             " designed for frame time, none cut to fit the payload's room. The payload carries each level that passes"
             " its guards and saves enough triangles, and the page chooses among them for each view.",
             note("user", "approved plan: levels of detail and the triangle budget are among the village's design"
                          " categories"),
             note("user", "live frame time ranks above page load"),
-            note("data", "at site X, of the full village's 171k triangles lod1 takes 68k, lod2 32k and the shadow caster"
-                         " 21k; packed alone, they take 0.64, 0.31 and 0.23 MB. Without its eaves lod2 would take"
-                         " about 21k, but its roofs seen from above would cover a sixth less (intersection over union"
-                         " 0.84)"),
+            note("data", "at site X, of the full village's 178k triangles lod1 takes 70k, lod2 33k and the shadow caster"
+                         " 25k; packed alone in payload format 4, they take 1.74, 0.80 and 0.44 MB. Without its eaves"
+                         " lod2 would take about 22k, but its roofs seen from above would cover a sixth less"
+                         " (intersection over union 0.84)"),
             note("data", "integration found that the walls and attic alone cast no shadow for the kirkyard's wall, the"
                          " blind or the fence: seen from above, they left the kirkyard's wall (56 m²), the blind (9 m²),"
                          " the fence (4.5 m²) and the gardens' walls (up to 3.6 m² each) farther than 0.75 m from the"

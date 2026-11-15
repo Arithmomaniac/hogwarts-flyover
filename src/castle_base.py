@@ -25,6 +25,8 @@ LAWN_GRADE = {"toward": 1 / 4.0, "away": 1 / 2.6}   # the mound's lawns: towards
 TOWARD_HALF_DEG = {"mound": 75.0, "crag": 40.0}     # the bearings round the cabin, pitch and gates that count as "toward"
 PATH_GRADE = 0.4                       # the cliff's upper part, the foot-path's slope (2f): 22 degrees
 FACE_GRADE = 6.5                       # the cliff's lower part, below the lip (2e): 81 degrees
+HOLD_M = 2.0                           # the ground under the castle's walls, and this far beyond them, holds its level:
+                                       # where they stand too near the lake for the face, it drops sheer below them
 SHORE_GRADE = 0.45                     # elsewhere the lake's shores rise no faster than this (build_final's lake shaping)
 CLIFF_BLEND_M = 20.0                   # where the castle's cliff gives way to lawns falling to the lake
 FRONT_WALL_M = 12.0                    # thin castle walls this near the lake are the cliff-edge wall (2e), not the castle
@@ -83,12 +85,16 @@ def crag_fall(d, height, rim):
 
 def shape(kind, ground, E, N, castle, lake_sd, platform, lake, toward, garden=None, dry=None, glass=None):
     """The ground with the castle's base `kind` ("mound" or "crag") built on it, where the lake's shore may rise as the
-    cliff's face, and the vegetable patch's hollow: (ground, cliff, hollow). `castle`: the castle's mass; `lake_sd`:
-    metres from the lake's shore, negative in it; `platform`: the castle's base level (a number or the base field);
-    `toward`: unit (east, north) from the castle towards Hagrid's cabin and the pitch; `garden`: White Hound's vegetable
-    patch and greenhouses, whose ground between GARDEN_GAP_M and GARDEN_REACH_M from the platform is laid level, a
-    little hollow that floods in heavy rain, but for `dry` ground in it (the greenhouses, their pads and the paths);
-    `glass`: the greenhouses' footprints, those in the patch standing wholly on its level ground."""
+    cliff's face, and the vegetable patch's hollow: (ground, cliff, hollow, held). `castle`: the castle's mass;
+    `lake_sd`: metres from the lake's shore, negative in it; `platform`: the castle's base level (a number or the base
+    field); `toward`: unit (east, north) from the castle towards Hagrid's cabin and the pitch; `garden`: White Hound's
+    vegetable patch and greenhouses, whose ground between GARDEN_GAP_M and GARDEN_REACH_M from the platform is laid
+    level, a little hollow that floods in heavy rain, but for `dry` ground in it (the greenhouses, their pads and the
+    paths); `glass`: the greenhouses' footprints, those in the patch standing wholly on its level ground. `held`: the
+    ground under the castle's walls, the cliff-edge wall's (2e) among them, and HOLD_M beyond them, which keeps the
+    platform's or the foot-path's level: the lake's shaping (build_final) does not cut it back to the face, which drops
+    sheer from its edge where the walls stand nearer the water than the face has room for, and where it meets the lake
+    lays a ledge one texel wide at the shore's level between them."""
     if kind not in ("mound", "crag"):
         raise ValueError(f"unknown castle base {kind!r}")
     # the platform carries the castle's main body and its courts; its detached pieces (the vegetable patch's old wall,
@@ -97,6 +103,7 @@ def shape(kind, ground, E, N, castle, lake_sd, platform, lake, toward, garden=No
     main = pieces == np.bincount(pieces[pieces > 0]).argmax()
     body = main & ~front_walls(castle, lake_sd)
     flat = ndi.binary_fill_holes(ndi.binary_dilation(body, iterations=2))     # the platform, its courts included
+    held = ndi.binary_fill_holes(ndi.binary_dilation(main, np.ones((3, 3), bool), iterations=round(HOLD_M / TEXEL_M)))
     d = ndi.distance_transform_edt(~flat) * TEXEL_M
     bearing = np.degrees(np.arccos(np.clip((E * toward[0] + N * toward[1]) / np.maximum(np.hypot(E, N), 1e-6), -1, 1)))
     t = np.clip((TOWARD_HALF_DEG[kind] + 20.0 - bearing) / 40.0, 0.0, 1.0)
@@ -140,5 +147,6 @@ def shape(kind, ground, E, N, castle, lake_sd, platform, lake, toward, garden=No
         top = np.clip(top, level - bank, level + bank)
         inside = ndi.distance_transform_edt(hollow) * TEXEL_M          # a rim two texels wide: no diagonal leaks
         top = top - GARDEN_HOLLOW_M * np.clip((inside - 2 * TEXEL_M) / (GARDEN_RIM_M - 2 * TEXEL_M), 0.0, 1.0)
+    top = np.where(held, platform - PATH_GRADE * d, top)      # under the castle's walls: the foot-path's level, no face
     out = smooth_max(ground, top, TOE_M)
-    return np.where(flat, platform, out).astype(np.float32), c > 0, hollow
+    return np.where(flat, platform, out).astype(np.float32), c > 0, hollow, held

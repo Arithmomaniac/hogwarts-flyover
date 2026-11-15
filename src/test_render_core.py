@@ -475,10 +475,13 @@ class MeshOcclusionTests(RenderTestCase):
             looks[name] = await self.converged(boxes, panes)
         self.assertEqual(looks["two"][0]["mat"], looks["bare"][0]["mat"])   # glazing never enters the G-buffer
         self.assertAlmostEqual(looks["two"][0]["t"], looks["bare"][0]["t"], delta=0.1)
+        # each pane tints what it covers and veils it with its sheen: overlapping panes both count
+        change = {k: float(np.abs(np.subtract(looks[k][1], looks["bare"][1])).mean()) for k in ("one", "two")}
+        self.assertGreater(change["one"], 6.0)
+        self.assertGreater(change["two"], change["one"])
         brightness = {k: float(np.mean(v[1])) for k, v in looks.items()}
-        self.assertLess(brightness["two"], brightness["one"])            # overlapping panes both tint
-        self.assertLess(brightness["one"], brightness["bare"])
         self.assertGreater(brightness["two"], 0.5 * brightness["bare"])  # and the plant still shows through
+        self.assertLess(brightness["two"], 1.5 * brightness["bare"])
         difference = lambda a, b: max(abs(x - y) for x, y in zip(looks[a][1], looks[b][1]))
         self.assertLessEqual(difference("masonry+glass", "masonry"), 2)  # nearer masonry hides the panes
         self.assertLessEqual(difference("bare again", "bare"), 2)        # removing the panes leaves no ghost

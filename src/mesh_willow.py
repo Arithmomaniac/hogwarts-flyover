@@ -13,6 +13,7 @@ from typing import NamedTuple
 import numpy as np
 
 from materials import code
+from materials.willow import BARK_AXES
 from mesh_geometry import Mesh, concat
 
 FAMILY = "willow"
@@ -39,7 +40,12 @@ GAP_HALF_DEG, RECESS = 65.0, 0.88   # the hollow's half-width round the trunk, a
 ROOT_GAP_DEG = 105.0                # the roots leave the front clear for the hollow and the knot beside it
 MOUTH_W, MOUTH_H, MOUTH_M = 0.75, 0.55, 0.3   # the tunnel mouth's width and height, its centre over the ground
 MOUTH_RIM_M, MOUTH_DIVE = 0.5, 1.0  # the mouth's rim from the trunk's axis; the tunnel's fall per metre inwards
-KNOT_M, KNOT_DEG = 0.4, 75.0        # the knot's height over the ground and its bearing from the gap
+KNOT_M, KNOT_DEG = 0.4, 68.0        # the knot's height over the ground and its bearing from the gap
+BURL_H, BURL_R = 0.18, 0.17         # the burl the knot sits in: how far it swells out of the trunk, and its reach
+EYE_D, EYE_R = 0.07, 0.065          # the knot's eye, sunk in the middle of the burl: its depth and reach
+KNOT_EYE_M, KNOT_LIP_M, KNOT_RISE_M = 0.05, 0.006, 0.012   # the dark knot-hole: its radius, the width of its lip, and how
+                                    # far it stands proud of the eye's floor (and then sinks under it past the lip)
+BURL_STEP_M, BURL_SPAN_M = 0.033, 0.3    # the trunk's finer rings and columns over the burl, this far each way
 CLUMP_M = (0.45, 0.85)              # leaf clump radius
 MASS_M, MASS_LUMPS = (1.0, 2.2), 0.22   # leaf mass radius round a branch's twig ends, and how lumpy it is
 Y = np.array([0.0, 1.0, 0.0])
@@ -120,12 +126,37 @@ def gap_cut(theta, y, gap):
     return smoothstep(np.clip((1 - off) / 0.3, 0, 1)) * smoothstep(np.clip((0.95 - y) / 0.5, 0, 1))
 
 
-def trunk_radius(theta, y, gap):
+def trunk_radius(theta, y, gap, knot=None):
     """The trunk's radius at bearing `theta` (radians from +x towards +z) and height y over its base: flared, ridged and
-    undercut by the root gap."""
+    undercut by the root gap, and swollen into a burl round the knot at `knot` (bearing, height)."""
     base = TRUNK_R + (FORK_R - TRUNK_R) * np.clip(y / FORK_M, 0, 1)
-    r = base * (1 + FLARE * np.exp(-np.maximum(y, 0) / FLARE_M)) * (1 + RIDGE_DEPTH * np.sin(RIDGES * theta + 2.0 * y))
-    return r * (1 - RECESS * gap_cut(theta, y, gap))
+    d, lobe = burl_reach(theta, y, knot) if knot is not None else (np.inf, 0.0)
+    swell = np.exp(-(d / BURL_R) ** 2)                  # the burl's wood grows smooth over the ridges
+    ridges = 1 + RIDGE_DEPTH * (1 - swell) * np.sin(RIDGES * theta + 2.0 * y)
+    r = base * (1 + FLARE * np.exp(-np.maximum(y, 0) / FLARE_M)) * ridges * (1 - RECESS * gap_cut(theta, y, gap))
+    eye = np.exp(-(d / EYE_R) ** 2)                    # the lobes fade out into the eye, which is a smooth dish
+    return r + BURL_H * swell * (1 + 0.3 * (1 - eye) ** 2 * np.sin(3 * lobe + 1.0)) - EYE_D * eye
+
+
+def burl_reach(theta, y, knot):
+    """(distance over the trunk's surface from the knot's eye, bearing round the eye) at bearing `theta` and height y."""
+    bearing, height = knot
+    s = (np.asarray(theta) - bearing + np.pi) % (2 * np.pi) - np.pi
+    s, v = s * TRUNK_R * (1 + FLARE * math.exp(-max(height, 0.0) / FLARE_M)), np.asarray(y) - height
+    return np.hypot(s, v), np.arctan2(v, s)
+
+
+def knot_site(ground, gap):
+    """The knot's eye: (bearing, height over the trunk's base), KNOT_M over the ground beside the gap."""
+    b = gap + math.radians(KNOT_DEG)
+    return b, float(ground(np.array([math.cos(b) * TRUNK_R]), np.array([math.sin(b) * TRUNK_R]))[0]) + KNOT_M
+
+
+def bark_code(direction):
+    """The bark code whose furrows run nearest along `direction`, either way."""
+    d = unit(np.asarray(direction, float))
+    aux = max(BARK_AXES, key=lambda a: (abs(float(d @ BARK_AXES[a])), -a))
+    return (BARK[0], aux)
 
 
 def smoothstep(x):
@@ -224,8 +255,9 @@ def segments_of(r):
     return int(np.clip(round(r * 28) + 4, 5, 16))
 
 
-def tube(pts, r, attr, segments, radius=None, cap=True):
-    """A swept tube with outward normals; `radius(theta, i)` overrides r per ring vertex (theta about the frame)."""
+def tube(pts, r, attr, segments, radius=None, cap=True, angles=None):
+    """A swept tube with outward normals; `radius(radial, i)` overrides r per ring vertex, and `angles` (about the
+    first ring's frame, increasing) the even spacing of `segments` round each ring."""
     n = len(pts)
     t = np.gradient(pts, axis=0)
     t /= np.linalg.norm(t, axis=1, keepdims=True)
@@ -235,7 +267,8 @@ def tube(pts, r, attr, segments, radius=None, cap=True):
         v = nx[i - 1] - (nx[i - 1] @ t[i]) * t[i]
         nx[i] = v / np.linalg.norm(v)
     bx = np.cross(t, nx)
-    a = 2 * np.pi * np.arange(segments) / segments
+    a = 2 * np.pi * np.arange(segments) / segments if angles is None else np.asarray(angles)
+    segments = len(a)
     radial = np.cos(a)[None, :, None] * nx[:, None] + np.sin(a)[None, :, None] * bx[:, None]
     rr = radius(radial, np.arange(n)) if radius else np.broadcast_to(r[:, None], (n, segments))
     pos = pts[:, None] + rr[..., None] * radial
@@ -325,20 +358,69 @@ def coarse(b, every):
     return Branch(b.pts[keep], b.r[keep], b.level)
 
 
-def trunk_mesh(trunk, gap, segments=TRUNK_SEGMENTS):
+def trunk_mesh(trunk, gap, segments=TRUNK_SEGMENTS, knot=None, fine=False):
+    """The trunk with its hollow and, at `knot` (bearing, height), its burl and knot; `fine` adds rings and columns
+    over the burl, so its swell and sunken eye are built rather than hinted."""
+    pts, angles = trunk.pts, None
+    if knot is not None and fine:
+        lean = trunk.pts[-1] / trunk.pts[-1][1]
+        ys = trunk.pts[:, 1]
+        ys = np.union1d(ys[np.abs(ys - knot[1]) > BURL_SPAN_M],
+                        knot[1] + np.arange(-BURL_SPAN_M, BURL_SPAN_M + 1e-9, BURL_STEP_M))
+        pts = ys[:, None] * lean
+        t0 = unit(lean)
+        nx = perpendicular(t0)
+        u = np.array([math.cos(knot[0]), 0.0, math.sin(knot[0])])
+        centre = math.atan2(u @ np.cross(t0, nx), u @ nx)       # the knot's angle about the tube's own frame
+        reach = float(trunk_radius(np.array([knot[0]]), np.array([knot[1]]), gap)[0])
+        span, step = BURL_SPAN_M / reach, BURL_STEP_M / reach
+        even = 2 * np.pi * np.arange(segments) / segments
+        angles = np.sort(np.concatenate([even[np.abs((even - centre + np.pi) % (2 * np.pi) - np.pi) > span],
+                                         (centre + np.arange(-span, span + 1e-9, step)) % (2 * np.pi)]))
+
     def radius(radial, rows):
         theta = np.arctan2(radial[..., 2], radial[..., 0])
-        return trunk_radius(theta, trunk.pts[rows, 1][:, None], gap)
-    body = tube(trunk.pts, trunk.r, BARK, segments, radius, cap=False)
+        return trunk_radius(theta, pts[rows, 1][:, None], gap, knot)
+    body = tube(pts, np.interp(pts[:, 1], trunk.pts[:, 1], trunk.r), BARK, segments, radius, cap=False, angles=angles)
     # what is left of the trunk deep in the hollow is the dark earth beyond the tunnel's mouth
     lean = trunk.pts[-1][[0, 2]] / trunk.pts[-1][1]
     off = body.pos[:, [0, 2]] - body.pos[:, 1:2] * lean
-    deep = (gap_cut(np.arctan2(off[:, 1], off[:, 0]), body.pos[:, 1], gap) > 0.9) & (body.pos[:, 1] < 0.5)
-    body = body._replace(attr=np.where(deep[:, None], np.asarray(HOLE, np.uint8), body.attr))
+    theta = np.arctan2(off[:, 1], off[:, 0])
+    deep = (gap_cut(theta, body.pos[:, 1], gap) > 0.9) & (body.pos[:, 1] < 0.5)
+    attr = np.where(deep[:, None], np.asarray(HOLE, np.uint8), body.attr)
+    body = body._replace(attr=attr)
     top = trunk.pts[-1]
     dome = tube(np.array([top, top + 0.25 * Y, top + 0.45 * Y]), np.array([FORK_R, 0.6 * FORK_R, 0.15]), BARK,
                 segments)
     return concat([body, dome])
+
+
+def knot_eye(trunk, gap, knot, segments=32):
+    """The dark knot-hole in the burl's eye: a disc finely divided round its middle that follows the eye's floor a
+    little proud of it and sinks under it past its lip, so where it shows its edge is a smooth circle, whatever cells
+    the trunk is meshed in."""
+    lean = trunk.pts[-1] / trunk.pts[-1][1]
+    bearing, height = knot
+    reach = float(trunk_radius(np.array([bearing]), np.array([height]), gap, knot)[0])   # the eye's own radius: round
+    ds = np.concatenate([[0.0], KNOT_EYE_M * np.array([0.35, 0.65, 0.88]), [KNOT_EYE_M - KNOT_LIP_M / 2,
+                                                                          KNOT_EYE_M + KNOT_LIP_M / 2]])
+    rise = np.where(ds < KNOT_EYE_M, KNOT_RISE_M, -KNOT_RISE_M)
+    a = 2 * np.pi * np.arange(segments) / segments
+    d, ang = ds[1:, None], a[None, :]
+    theta = np.concatenate([[bearing], (bearing + d * np.cos(ang) / reach).ravel()])
+    y = np.concatenate([[height], (height + d * np.sin(ang)).ravel()])
+    off = np.concatenate([[rise[0]], np.repeat(rise[1:], segments)])
+    # the unit vector across the leaning axis whose bearing is theta (as the trunk's rings are built)
+    radial = np.stack([np.cos(theta), -(np.cos(theta) * lean[0] + np.sin(theta) * lean[2]) / lean[1], np.sin(theta)], 1)
+    radial /= np.linalg.norm(radial, axis=1, keepdims=True)
+    pos = y[:, None] * lean + (trunk_radius(theta, y, gap, knot) + off)[:, None] * radial
+    j = np.arange(segments)
+    idx = [np.stack([np.zeros(segments, int), 1 + j, 1 + (j + 1) % segments], -1)]
+    for k in range(len(ds) - 2):
+        a0, b0 = 1 + k * segments + j, 1 + k * segments + (j + 1) % segments
+        idx += [np.stack([a0, a0 + segments, b0], -1), np.stack([b0, a0 + segments, b0 + segments], -1)]
+    idx, nrm = faces_out(pos, np.concatenate(idx).astype(np.uint32), height * lean)
+    return Mesh(pos, nrm, np.tile(np.asarray(KNOT, np.uint8), (len(pos), 1)), idx)
 
 
 def mouth(ground, gap):
@@ -383,14 +465,6 @@ def oriented_by(m):
     return m._replace(idx=idx)
 
 
-def knot(ground, gap, seed):
-    b = gap + math.radians(KNOT_DEG)
-    u = np.array([math.cos(b), 0.0, math.sin(b)])
-    y = float(ground(u[:1] * TRUNK_R, u[2:] * TRUNK_R)[0]) + KNOT_M
-    r = float(trunk_radius(np.array([b]), np.array([y]), gap)[0])
-    return blob(u * r + y * Y, (0.2, 0.15, 0.2), KNOT, np.random.default_rng([seed, 0]), subdivisions=1, lumps=0.1)
-
-
 def foliage(branches, seed, subdivisions=2, clumps=True, grow=1.0):
     """Leaves: a lumpy mass round each branch's twig ends (grown by `grow` where coarser levels drop the clumps), and
     small clumps on twigs that reach out of it, their normals leaning out from the crown's middle so the canopy lights
@@ -427,7 +501,7 @@ class Level(NamedTuple):
     clumps: bool        # the small clumps on the twigs
     grow: float         # the leaf masses' growth, standing in for dropped twigs and clumps
     roots: bool
-    details: bool       # the knot and the tunnel mouth
+    details: bool       # the tunnel mouth
 
 
 LEVELS = {
@@ -439,23 +513,28 @@ LEVELS = {
 
 
 def meshes(branches, ground, gap, seed=SEED, level=LEVELS["lod0"]):
-    """The Willow's pieces in its local frame at one level of detail: trunk and roots with the knot and mouth, each
-    limb's wood, the leaves."""
+    """The Willow's pieces in its local frame at one level of detail: trunk (with its burl and knot) and roots with the
+    mouth, each limb's wood, the leaves. Each piece of wood takes the bark code that runs along it."""
     seg = lambda r: max(4, round(segments_of(r) * level.segments))
+    # roots run along the ground however steeply their buried ends dive, so their furrows lie along their run
+    run = lambda c: (c.pts[-1] - c.pts[0]) * (np.array([1.0, 0.0, 1.0]) if c.level == -1 else 1.0)
+    wood_of = lambda c: tube(c.pts, c.r, bark_code(run(c)), seg(c.r[0]))
     trunk = next(b for b in branches if b.level == 0)
-    base = [trunk_mesh(coarse(trunk, level.every), gap, level.trunk)]
+    fine, site = level.trunk == TRUNK_SEGMENTS, knot_site(ground, gap)
+    base = [trunk_mesh(coarse(trunk, level.every), gap, level.trunk, site, fine=fine)]
+    if fine:
+        base.append(knot_eye(trunk, gap, site))
     if level.details:
-        base += [mouth(ground, gap), knot(ground, gap, seed)]
+        base.append(mouth(ground, gap))
     if level.roots:
-        base += [tube(c.pts, c.r, BARK, seg(c.r[0])) for c in (coarse(b, level.every) for b in branches if b.level == -1)]
+        base += [wood_of(coarse(b, level.every)) for b in branches if b.level == -1]
     wood, piece = [], []
     for b in branches:
         if b.level == 1 and piece:
             wood.append(concat(piece))
             piece = []
         if 1 <= b.level <= level.depth:
-            c = coarse(b, level.every)
-            piece.append(tube(c.pts, c.r, BARK, seg(c.r[0])))
+            piece.append(wood_of(coarse(b, level.every)))
     wood.append(concat(piece))
     leaves = foliage(branches, seed, level.leaves, level.clumps, level.grow)
     half = len(leaves) // 2

@@ -57,6 +57,27 @@ class HutTests(unittest.TestCase):
         cls.tris, cls.attr, cls.normal = payload_part("hut")
         cls.centre, cls.width, cls.depth, cls.front, cls.right, cls.floor = hut_frame(cls.tris, cls.attr, cls.normal)
 
+    def test_the_openings_are_cased_and_the_windows_silled(self):
+        # casings proud of the boards at both edges of the door and each window, front and back, not decals on them
+        timber = self.of(mesh_grounds.TIMBER)[0]
+        c = timber.mean(axis=1)
+        u_, w_ = (c[:, [0, 2]] - self.centre) @ self.right, (c[:, [0, 2]] - self.centre) @ self.front
+        y = c[:, 1] - self.floor
+        proud = np.abs(np.abs(w_) - self.depth / 2 - mesh_grounds.CASING_PROUD_M) < 0.02   # their faces, proud of the boards
+        facing = np.abs(self.of(mesh_grounds.TIMBER)[1][:, [0, 2]] @ self.front) > 0.9
+        openings = [(0.0, mesh_grounds.DOOR_W / 2)] + [(a, mesh_grounds.WINDOW_W / 2)
+                                                       for a in (-mesh_grounds.WINDOW_AT, mesh_grounds.WINDOW_AT)]
+        for face in (1.0, -1.0):
+            for a, hw in openings:
+                for s in (-1.0, 1.0):
+                    with self.subTest(face=face, opening=a, side=s):
+                        out = s * (u_ - a) - hw                                    # beyond the opening's edge
+                        near = proud & facing & (np.sign(w_) == face) & (out > 0.0) & (out < mesh_grounds.CASING_M)
+                        self.assertTrue((near & (y > 0.5) & (y < 3.0)).any())
+            sill = (np.sign(w_) == face) & (np.abs(np.abs(w_) - self.depth / 2) < 0.12) \
+                & (np.abs(y - mesh_grounds.SILL_M) < 0.1)
+            self.assertGreater(int(sill.sum()), 4)
+
     def of(self, attr):
         keep = np.all(self.attr == attr, axis=1)
         return self.tris[keep], self.normal[keep]
@@ -207,6 +228,27 @@ class HutGardenTests(unittest.TestCase):
         near = np.hypot(crown[:, 0] - foot[0], crown[:, 2] - foot[2]) < 8.0
         self.assertGreater(float(crown[near][:, 1].max() - foot[1]), 6.0)
 
+    def fence_runs(self):
+        """The fence's timber in plan, as connected runs (posts, rails and the gate's leaf: thin bars, not the hen-coop)."""
+        timber = self.of(mesh_grounds.TIMBER)
+        timber = timber[0.5 * np.linalg.norm(np.cross(timber[:, 1] - timber[:, 0], timber[:, 2] - timber[:, 0]), axis=1) < 0.3]
+        near = np.array([self.outline.exterior.distance(Point(*t.mean(axis=0)[[0, 2]])) < 3.5 for t in timber])
+        plan = shapely.union_all([shapely.MultiPoint(t[:, [0, 2]]).convex_hull.buffer(0.15) for t in timber[near]])
+        return list(getattr(plan, "geoms", [plan]))
+
+    def test_the_back_door_opens_onto_the_garden_not_onto_rails(self):
+        _, _, _, front, _, _ = self.hut
+        step = self.back_door - front * 1.2                                         # just outside the back door
+        for run in self.fence_runs():
+            self.assertGreater(run.distance(Point(*step)), 1.5)
+
+    def test_no_fence_section_stands_loose(self):
+        for run in self.fence_runs():
+            e = np.asarray(run.minimum_rotated_rectangle.exterior.coords)
+            with self.subTest(at=np.round(run.centroid.coords[0], 1).tolist()):
+                self.assertTrue(max(np.hypot(*(e[1] - e[0])), np.hypot(*(e[2] - e[1]))) > 3.0
+                                or run.distance(self.house) < 0.5)
+
     def test_the_fence_line_carries_no_hedge(self):
         # the map's thin line round the garden is the fence White Hound describes; the hedge heuristic had read it as a
         # hedge and planted one beside the fence
@@ -230,6 +272,57 @@ class HutGardenTests(unittest.TestCase):
                 self.assertTrue(self.outline.contains(Point(*p[:, [0, 2]].mean(axis=0))))
                 self.assertLess(float(np.hypot(*(p[:, [0, 2]].mean(axis=0) - self.back_door))), 0.65 * far)
 
+    def pumpkins(self):
+        """Each pumpkin's points, grouped by the nearness of its faces."""
+        from scipy.spatial import cKDTree
+        pumpkins = self.of(mesh_grounds.PUMPKIN)
+        centres = pumpkins.mean(axis=1)
+        pairs = np.array(sorted(cKDTree(centres).query_pairs(0.6)))
+        graph = coo_matrix((np.ones(len(pairs)), (pairs[:, 0], pairs[:, 1])), shape=(len(centres),) * 2)
+        count, label = connected_components(graph, directed=False)
+        return [pumpkins[label == k].reshape(-1, 3) for k in range(count)]
+
+    def test_the_pumpkins_are_ribbed_and_lie_among_their_leaves(self):
+        foliage = self.of(mesh_grounds.FOLIAGE)
+        n = np.cross(foliage[:, 1] - foliage[:, 0], foliage[:, 2] - foliage[:, 0])
+        area = 0.5 * np.linalg.norm(n, axis=1)
+        broad = (n[:, 1] > 0.7 * np.maximum(2 * area, 1e-12)) & (area > 0.01)  # leaves' faces, not the runners' bars
+        leaves = foliage[broad].reshape(-1, 3)
+        low = leaves[leaves[:, 1] - self.ground(leaves[:, [0, 2]]) < 0.6]
+        for k, p in enumerate(self.pumpkins()):
+            with self.subTest(pumpkin=k):
+                c = p[:, [0, 2]].mean(axis=0)
+                y0, y1 = p[:, 1].min(), p[:, 1].max()
+                belt = p[np.abs(p[:, 1] - (y0 + 0.45 * (y1 - y0))) < 0.08 * (y1 - y0)]
+                r = np.hypot(*(belt[:, [0, 2]] - c).T)
+                self.assertGreater(float(np.ptp(r) / r.mean()), 0.12)                # deeply ribbed, not a smooth ball
+                reach = np.hypot(*(low[:, [0, 2]] - c).T)
+                self.assertGreater(int((reach < np.ptp(p[:, 0]) / 2 + 1.2).sum()), 12)   # leaves round its foot
+
+    def test_the_pumpkins_sprawl_rather_than_stand_in_a_grid(self):
+        from scipy.spatial import cKDTree
+        centres = np.array([p[:, [0, 2]].mean(axis=0) for p in self.pumpkins()])
+        d = cKDTree(centres).query(centres, k=2)[0][:, 1]
+        self.assertGreater(float(d.std() / d.mean()), 0.12)
+
+    def test_the_pumpkin_patch_has_a_ragged_edge(self):
+        earth = self.of(mesh_grounds.EARTH)
+        flat = earth[(np.ptp(earth[:, :, 1], axis=1) < 0.15)
+                     & (earth[:, :, 1].mean(axis=1) - self.ground(earth.mean(axis=1)[:, [0, 2]]) < 0.15)]
+        plan = shapely.union_all([Polygon(t[:, [0, 2]]).buffer(0.01) for t in flat])
+        patch = max(getattr(plan, "geoms", [plan]), key=lambda g: g.area)
+        self.assertLess(patch.area / patch.convex_hull.area, 0.93)                # lobed, not a cut polygon
+
+    def test_the_potato_ridges_carry_their_plants(self):
+        earth = self.of(mesh_grounds.EARTH)
+        sloped = earth[np.abs(np.cross(earth[:, 1] - earth[:, 0], earth[:, 2] - earth[:, 0])[:, 1]) <
+                       0.95 * np.linalg.norm(np.cross(earth[:, 1] - earth[:, 0], earth[:, 2] - earth[:, 0]), axis=1)]
+        ridges = sloped[(sloped[:, :, 1].max(axis=1) - self.ground(sloped.mean(axis=1)[:, [0, 2]])) < 0.45]
+        bed = shapely.union_all([shapely.MultiPoint(t[:, [0, 2]]).convex_hull.buffer(0.1) for t in ridges])
+        leaves = self.of(mesh_grounds.FOLIAGE).reshape(-1, 3)
+        on = shapely.contains_xy(bed, leaves[:, 0], leaves[:, 2])
+        self.assertGreater(int(on.sum()), 40)
+
     def test_runner_beans_a_potato_bed_and_a_compost_heap_fill_the_rest(self):
         earth = self.of(mesh_grounds.EARTH).reshape(-1, 3)
         inside = np.array([self.outline.contains(Point(x, z)) for x, _, z in earth])
@@ -241,6 +334,36 @@ class HutGardenTests(unittest.TestCase):
         rows = low[[self.outline.contains(Point(x, z)) for x, _, z in low]]
         self.assertGreater(len(rows), 0)
         self.assertGreater(float((rows[:, 1] - self.ground(rows[:, [0, 2]])).max()), 1.8)   # beans up their poles
+
+
+class PitchStairTests(unittest.TestCase):
+    """Each stair's handrails end on newel posts, not in mid-air (inspection round 2, pitch-stair)."""
+
+    def test_the_handrails_end_on_newels(self):
+        p = mesh_grounds.pitch_layout(world.data()["meta"]["pitch"])
+        ground = lambda x, z: np.full(np.shape(x), p.level - 0.3)          # the lawn about the playing level
+        mesh = mesh_geometry.concat(mesh_grounds.stair(p, mesh_grounds.STAIRS_DEG[0], ground))
+        tris = mesh.pos[mesh.idx]
+        timber = tris[np.all(mesh.attr[mesh.idx[:, 0]] == mesh_grounds.TIMBER, axis=1)]
+        pts = timber.reshape(-1, 3)
+        key = np.round(pts[:, [0, 2]] / 0.2).astype(int)
+        posts = []                                                                 # upright posts: (x, z, bottom, top)
+        for k in np.unique(key, axis=0):
+            q = pts[np.all(key == k, axis=1)]
+            if np.ptp(q[:, 1]) > 1.0 and np.ptp(q[:, [0, 2]], axis=0).max() < 0.25:
+                posts.append((*q[:, [0, 2]].mean(axis=0), q[:, 1].min(), q[:, 1].max()))
+        posts = np.array(posts)
+        treads = tris[np.all(mesh.attr[mesh.idx[:, 0]] == mesh_grounds.PLANKS, axis=1)].reshape(-1, 3)
+        centre = p.c
+        lawn = treads[treads[:, 1] < treads[:, 1].min() + 0.05]                    # the outer flight's foot, on the lawn
+        reach = np.hypot(*(treads[:, [0, 2]] - centre).T)
+        walk = treads[reach < reach.min() + 0.3]                                   # the inner flight's foot, at the walkway
+        for name, foot in (("lawn", lawn), ("walkway", walk)):
+            with self.subTest(foot=name):
+                y = float(foot[:, 1].max())
+                d = np.min(np.hypot(*(posts[:, None, :2] - foot[None, :, [0, 2]]).transpose(2, 0, 1)), axis=1)
+                newel = (d < 1.2) & (posts[:, 2] < y + 0.1) & (posts[:, 3] > y + 0.75)
+                self.assertGreaterEqual(int(newel.sum()), 2)                      # one each side, rail high
 
 
 class PitchTests(unittest.TestCase):
@@ -524,10 +647,11 @@ class GatesTests(unittest.TestCase):
         return sample(self.bed, self.grid, xz[:, 0], xz[:, 1])
 
     def pillars(self):
-        """(centre (x, z), foot, top) of each pillar, ordered along the gap: the tall pale-stone shafts (not the walls'
-        coping), split where the way opens, each up to the top of its cornice."""
+        """(centre (x, z), foot, top) of each pillar, ordered along the gap: the pale cornices high over the ground (the
+        walls' coping is far lower), split where the way opens, each up to the top of its cornice."""
         stone = self.of(code("pale-stone"))
-        shafts = stone[np.ptp(stone[:, :, 1], axis=1) > 2.0].reshape(-1, 3)
+        pts = stone.reshape(-1, 3)
+        shafts = pts[pts[:, 1] - self.ground(pts[:, [0, 2]]) > 3.5]
         s = (shafts[:, [0, 2]] - self.A) @ self.d
         order = np.sort(np.unique(np.round(s, 1)))
         cut = order[np.argmax(np.diff(order))] + 0.05
@@ -564,10 +688,11 @@ class GatesTests(unittest.TestCase):
                 line = [Point(*(c + sign * u * t)) for t in np.arange(0.6, 12.0, 0.25)]
                 gaps = [round(float(t), 2) for t, q in zip(np.arange(0.6, 12.0, 0.25), line) if self.walls.distance(q) > 0.35]
                 self.assertEqual(gaps, [])                                        # nowhere to walk round the gates
-        wall = self.of(mesh_grounds.WALL_STONE).reshape(-1, 3)
-        s, _ = self.across(wall)
+        centre = self.tris.mean(axis=1)[:, [0, 2]]
+        pier = np.min([np.max(np.abs(centre - c), axis=1) for c, _, _ in self.pillars()], axis=0) < mesh_grounds.PIER_M
+        stone = np.all(self.attr == mesh_grounds.WALL_STONE, axis=1) & ~pier          # the walls, not the pillars
+        s, _ = self.across(self.tris[stone].reshape(-1, 3))
         self.assertFalse(((s > 0.6) & (s < width - 0.6)).any())                   # but not across the way
-        stone = np.all(self.attr == mesh_grounds.WALL_STONE, axis=1)
         self.assertEqual(int((stone & (self.normal[:, 1] > 0.95)).sum()), 0)       # and coped like the rest
 
     def test_a_winged_boar_tops_each_pillar_facing_out_of_the_grounds(self):
@@ -587,6 +712,15 @@ class GatesTests(unittest.TestCase):
                 head = mine[(h > 0.15 * h.max()) & (h < 0.45 * h.max())]
                 reach = (head[:, [0, 2]] - c) @ out
                 self.assertGreater(reach.max(), -reach.min() + 0.2)               # its snout towards the road outside
+
+    def test_the_boar_is_stocky_its_deep_body_low_on_short_legs(self):
+        boar = np.load(ROOT / "src" / "assets" / "grounds" / "boar.npz")
+        pos = boar["pos"].astype(np.float64)
+        tri = pos[boar["idx"]]
+        cen = tri.mean(axis=1)
+        mid = cen[(np.abs(cen[:, 0]) < 0.15) & (np.abs(cen[:, 2]) < 0.12)]       # across the middle of the body
+        self.assertLess(float(mid[:, 1].min()), 0.35)                            # the belly low over short legs
+        self.assertGreater(float(np.ptp(mid[mid[:, 1] < 1.3][:, 1])), 0.75)      # under a deep barrel of a body
 
     def test_high_paired_iron_gates_close_the_way_between_the_pillars(self):
         _, _, width = self.axis()
@@ -640,7 +774,17 @@ class WallsTests(unittest.TestCase):
         tree = cKDTree(cap[:, [0, 2]])
         near = tree.query_ball_point(body[:, [0, 2]], 1.0)
         over = np.array([cap[i, 1].max() - y if i else -1.0 for i, y in zip(near, body[:, 1])])
-        self.assertGreater(float(over.min()), 0.08)
+        self.assertGreater(float(over.min()), 0.05)                               # within 1 m, on slopes
+
+    def test_the_boundary_walls_run_on_across_breaks_narrower_than_a_gateway(self):
+        keep = self.boundary & ~self.near_patch & ~self.near_cliff & (self.normal[:, 1] > 0.7)   # their copings
+        plan = shapely.union_all([Polygon(t[:, [0, 2]]).buffer(0.05) for t in self.tris[keep]])
+        pieces = list(getattr(plan, "geoms", [plan]))
+        tree = shapely.STRtree(pieces)
+        for i, p in enumerate(pieces):
+            gap = min((p.distance(pieces[j]) for j in tree.query(p.buffer(4.0)) if j != i), default=np.inf)
+            with self.subTest(at=np.round(p.centroid.coords[0]).tolist()):     # walls-coped: breaks under 3.5 m closed
+                self.assertGreater(gap, 3.5 - 2 * mesh_grounds.COPING_OVER_M - 0.15)   # less the copings and buffer
 
     def test_the_vegetable_patch_wall_is_a_low_ruin(self):
         mine = self.near_patch & (self.normal[:, 1] > 0.95)
@@ -748,9 +892,28 @@ class WallsTests(unittest.TestCase):
         self.assertTrue(lo < -half + 0.1 and hi > half - 0.1, (lo, hi))           # right across the channel
         self.assertGreater(float(cap[hits][..., 1].min()) - float(meta["lake"]), mesh_grounds.CROWN_M + 1.0)   # on the roof
 
+    def test_the_cliff_wall_hangs_nowhere_down_the_cliff_face(self):
+        # away from the harbour's roof its stone is founded under the brink, not hung in teeth down the face below it
+        rec = world.data()["meta"]["extras"]["harbour"]
+        m, u = np.asarray(rec["mouth"], np.float64), np.asarray(rec["axis"], np.float64)
+        stone = self.tris[self.near_cliff & np.all(self.attr == mesh_grounds.WALL_STONE, axis=1)].reshape(-1, 3)
+        rel = stone[:, [0, 2]] - m
+        a, w = rel @ u, rel @ np.array([-u[1], u[0]])
+        roof = (a > mesh_grounds.PORTAL_M - 3.0) & (a < rec["depth"] + mesh_grounds.ROOF_PAST_M + 3.0) \
+            & (np.abs(w) < mesh_grounds.SHELL_HALF_M + 3.0)
+        below = stone[~roof, 1] - sample(self.bed, self.grid, stone[~roof, 0], stone[~roof, 2])
+        import build_meshes
+        self.assertGreater(float(below.min()), -build_meshes.SINK_M - 0.3)          # sunk as every wall is, no deeper
+        from scipy.spatial import cKDTree
+        cap = self.tris[self.near_cliff & np.all(self.attr == mesh_grounds.PALE_STONE, axis=1) & (self.normal[:, 1] > 0.7)]
+        cap = cap.reshape(-1, 3)
+        _, i = cKDTree(cap[:, [0, 2]]).query(stone[~roof][:, [0, 2]])
+        depth = cap[i, 1] - stone[~roof, 1]                                        # stone under its coping's top:
+        self.assertLess(float(depth.max()), mesh_grounds.SAFETY_WALL_M + 1.5)      # a low wall, no teeth down the face
+
     def test_the_cliff_wall_reaches_the_ground_beside_the_harbour_roof(self):
-        # off the roof, a ray across the wall just above the ground meets its stone: no slot under it where the cut's
-        # bank dips beside the shell
+        # beside the roof, a ray across the wall just above the ground meets its stone: no slot under it where the cut's
+        # bank dips beside the shell (further out the wall stands on the open cliff's brink, its foot under the path)
         rec = world.data()["meta"]["extras"]["harbour"]
         m, u = np.asarray(rec["mouth"], np.float64), np.asarray(rec["axis"], np.float64)
         side = np.array([-u[1], u[0]])
@@ -761,7 +924,8 @@ class WallsTests(unittest.TestCase):
         near = (np.abs(local[..., 1]).min(axis=1) < 16.0) & (local[..., 0].min(axis=1) < rec["depth"] + 10.0)
         plan = shapely.union_all([Polygon(t).buffer(0.01) for t in local[near]])
         starts = []
-        for w in np.arange(-15.0, 15.0, 0.25):
+        reach = mesh_grounds.SHELL_HALF_M + 2.0
+        for w in np.arange(-reach, reach, 0.25):
             if abs(w) <= mesh_grounds.SHELL_HALF_M:
                 continue                                                           # on the roof, over the channel
             cut = plan.intersection(LineString([(-5.0, w), (rec["depth"] + 10.0, w)]))
@@ -772,7 +936,7 @@ class WallsTests(unittest.TestCase):
             ground = float(sample(self.bed, self.grid, np.array([m[0] + a * u[0] + w * side[0]]),
                                   np.array([m[1] + a * u[1] + w * side[1]]))[0])
             starts.append([p[0], ground + 0.3, p[1]])
-        self.assertGreater(len(starts), 20)
+        self.assertGreater(len(starts), 8)
         starts = np.array(starts)
         hits = world.segment_hits(starts, np.tile([u[0], 0.0, u[1]], (len(starts), 1)), 3.0, stone)
         self.assertTrue(hits.all(), starts[~hits][:4])
@@ -796,6 +960,13 @@ class WallsTests(unittest.TestCase):
         self.assertTrue(np.allclose(on[:, 1], expect, atol=0.15), (on[:, 1].min(), on[:, 1].max()))
         self.assertTrue(np.allclose(by[:, 1], expect - mesh_grounds.SAFETY_PATH_M, atol=0.15))
 
+    def test_the_cliff_wall_s_outer_face_stands_on_the_brink(self):
+        # seen from the lake, its coping marks the brink itself: not set back on the cliff top behind it
+        scene, p, n = self.cliff(lambda x: 0.5 + 0 * x)
+        on, _ = mesh_grounds.brink(scene, p, n)
+        outer = on[:, 1] + mesh_grounds.SAFETY_THICK_M / 2
+        self.assertTrue(np.allclose(outer, 0.5, atol=0.3), (outer.min(), outer.max()))
+
     def test_the_cliff_wall_eases_round_steps_in_the_brink(self):
         step = lambda x: np.where((np.asarray(x) // 16.0) % 2 == 0, 0.5, -1.5)     # the brink jogs 2 m every 16 m
         scene, p, n = self.cliff(step)
@@ -810,15 +981,75 @@ class WallsTests(unittest.TestCase):
 
 
 class HedgesTests(unittest.TestCase):
-    """The field hedges, trimmed to about 1.5 m with irregular crowns (hedge-crowns)."""
+    """The field hedges: continuous rows trimmed to about 1.5 m, rounded over the top with irregular crowns, joined across
+    the breaks narrower than a gateway that the map's ink leaves at bends and along the rows (hedge-crowns)."""
+
+    @classmethod
+    def setUpClass(cls):
+        cls.tris, cls.attr, cls.normal = payload_part("field-boundaries")
+        data = world.data()
+        cls.grid, cls.bed = Grid(data["meta"]["local"]), decode(data["tex"]["locBed"])
+        leaves = cls.tris[np.all(cls.attr == mesh_grounds.FOLIAGE, axis=1)]
+        cls.plan = shapely.union_all([shapely.MultiPoint(t[:, [0, 2]]).convex_hull.buffer(0.05) for t in leaves])
+        cls.pieces = list(getattr(cls.plan, "geoms", [cls.plan]))
+
+    @classmethod
+    def ink(cls):
+        if not hasattr(cls, "_ink"):
+            data = world.data()
+            road = decode(data["tex"]["locA"])[..., 0] / 255.0
+            cls._ink = shapely.union_all(mesh_source.field_polygons(-road, cls.grid, -0.5))
+        return cls._ink
+
+    @staticmethod
+    def row(p):
+        e = np.asarray(p.minimum_rotated_rectangle.exterior.coords)
+        return max(np.hypot(*(e[1] - e[0])), np.hypot(*(e[2] - e[1]))) > 4.0
+
+    def gateway(self, a, b):
+        """Whether a road or path runs through the break between two pieces."""
+        from shapely.ops import nearest_points
+        return LineString(nearest_points(a, b)).buffer(0.5).intersects(self.ink())
+
+    def above_ground(self, pts):
+        return pts[:, 1] - sample(self.bed, self.grid, pts[:, 0], pts[:, 2])
+
+    def crest(self):
+        """The top's points along the crest, more than 0.42 m in from the hedge's sides, and those within 0.15 m of
+        them (the plan is buffered 0.05 m)."""
+        up = self.tris[np.all(self.attr == mesh_grounds.FOLIAGE, axis=1) & (self.normal[:, 1] > 0.3)].reshape(-1, 3)
+        edge = shapely.distance(self.plan.boundary, shapely.points(up[:, [0, 2]]))
+        return up[edge > 0.42], up[edge < 0.15]
 
     def test_the_hedges_have_irregular_crowns(self):
-        tris, attr, normal = payload_part("field-boundaries")
-        top = tris[np.all(attr == mesh_grounds.FOLIAGE, axis=1) & (normal[:, 1] > 0.8)].reshape(-1, 3)
-        data = world.data()
-        h = top[:, 1] - sample(decode(data["tex"]["locBed"]), Grid(data["meta"]["local"]), top[:, 0], top[:, 2])
-        self.assertTrue(1.1 < float(np.percentile(h, 5)) and float(np.percentile(h, 95)) < 1.9)
+        mid, _ = self.crest()
+        h = self.above_ground(mid)
+        self.assertTrue(1.2 < float(np.percentile(h, 5)) and float(np.percentile(h, 95)) < 1.9)
         self.assertGreater(float(np.percentile(h, 90) - np.percentile(h, 10)), 0.15)   # not trimmed flat
+
+    def test_the_hedges_are_rounded_over_the_top(self):
+        mid, side = self.crest()
+        self.assertGreater(float(np.median(self.above_ground(mid)) - np.median(self.above_ground(side))), 0.2)
+        up = self.normal[np.all(self.attr == mesh_grounds.FOLIAGE, axis=1) & (self.normal[:, 1] > 0.3)]
+        self.assertLess(float((up[:, 1] > 0.995).mean()), 0.25)                    # no flat lids
+
+    def test_the_rows_run_on_across_breaks_narrower_than_a_gateway(self):
+        tree = shapely.STRtree(self.pieces)
+        for i, p in enumerate(self.pieces):
+            if not self.row(p):
+                continue                                                           # a round shrub, not a row
+            near = [j for j in tree.query(p.buffer(4.5)) if j != i and self.row(self.pieces[j])
+                    and not self.gateway(p, self.pieces[j])]
+            gap = min((p.distance(self.pieces[j]) for j in near), default=np.inf)
+            with self.subTest(at=np.round(p.centroid.coords[0]).tolist()):     # hedge-crowns: breaks under 4 m closed
+                self.assertGreater(gap, 4.0 - 0.15)                                # no dashed rows (plans buffered)
+
+    def test_no_hedge_stands_alone_as_a_block(self):
+        for p in self.pieces:                                                      # a row, or else a round shrub
+            rect = p.minimum_rotated_rectangle
+            e = np.asarray(rect.exterior.coords)
+            with self.subTest(at=np.round(p.centroid.coords[0]).tolist()):
+                self.assertTrue(max(np.hypot(*(e[1] - e[0])), np.hypot(*(e[2] - e[1]))) > 4.0 or p.area / rect.area < 0.85)
 
 
 class TombTests(unittest.TestCase):
@@ -904,6 +1135,21 @@ class HarbourMouthTests(unittest.TestCase):
         rel = np.asarray(pts)[..., [0, 2]] - m
         return rel @ u, rel @ side, np.asarray(pts)[..., 1] - lake
 
+    def test_the_channel_runs_square_into_the_cliff(self):
+        """Its axis is square to the lake's edge beside the mouth, so the portal faces the lake across the cliff's line
+        whatever stands on the cliff above it (the castle's walls hold the cliff top's level: castle_base.HOLD_M)."""
+        from scipy import ndimage as ndi
+
+        rec, m, u, _, _ = self.mouth()
+        data = world.data()
+        grid = Grid(data["meta"]["local"])
+        e, n = grid.to_world(*np.mgrid[0:grid.ny, 0:grid.nx])
+        wet = decode(data["tex"]["locW"]) > 0
+        recess = shapely.contains_xy(Polygon(rec["bounds"]).buffer(2.0), e, n)       # cut since: left out
+        shore = np.stack([e, n], -1)[wet & ~ndi.binary_erosion(wet) & (np.hypot(e - m[0], n - m[1]) < 15.0) & ~recess]
+        along = np.linalg.svd(shore - shore.mean(axis=0), full_matrices=False)[2][0]
+        self.assertLess(float(np.degrees(np.arcsin(abs(float(u @ along))))), 6.0)
+
     def test_the_shell_is_rock_and_ivy_inside_its_bounds_not_a_boathouse(self):
         tris, attr, _ = self.shell()
         kinds = {tuple(a) for a in np.unique(attr, axis=0)}
@@ -958,15 +1204,52 @@ class HarbourMouthTests(unittest.TestCase):
             hits = world.segment_hits(starts, ray, reach, tris)
             self.assertFalse(hits.any(), (asset, [l for l, h in zip(labels, hits) if h][:5]))
 
+    def test_the_mouth_rock_takes_the_terrain_cliffs_colour(self):
+        # the cut is filled back to the cliff's surface in mesh: it must not read as a column of other stone
+        # it calls the terrain's own rock function, so the two cannot drift apart
+        import materials
+        mat = next(m for m in materials.materials() if m.name == "harbour-rock")
+        self.assertIsNotNone(mat.p3)
+        self.assertRegex(mat.p3, r"\balb = rockAlb\(p, n\);")
+        frag4 = (ROOT / "src" / "frag4.glsl").read_text(encoding="utf-8")
+        self.assertIn("vec3 rockAlb(vec3 p, vec3 n) {", frag4)
+        self.assertRegex(frag4.split("vec3 groundAlb(", 1)[1], r"mix\(a, rockAlb\(p, n\), rock \* 0\.9\)")
+
+    def test_the_roof_is_shaded_smoothly_as_the_cliff(self):
+        found = [c for c in world.chunks("harbour-mouth")]
+        flat = []
+        for c in found:
+            rock = np.all(c["attr"][c["idx"][:, 0]] == mesh_grounds.HARBOUR_ROCK, axis=1)
+            t = c["pos"][c["idx"]]
+            n = np.cross(t[:, 1] - t[:, 0], t[:, 2] - t[:, 0])
+            n /= np.maximum(np.linalg.norm(n, axis=1, keepdims=True), 1e-12)
+            up = rock & (n[:, 1] > 0.3)
+            vn = c["nrm"][c["idx"][up]]
+            vn = vn / np.maximum(np.linalg.norm(vn, axis=2, keepdims=True), 1e-12)
+            flat.append(np.all(np.einsum("tvk,tk->tv", vn, n[up]) > 0.9998, axis=1))
+        flat = np.concatenate(flat)
+        self.assertLess(float(flat.mean()), 0.5)                                   # not faceted, spike by spike
+
+    def test_ivy_curtains_the_whole_opening_and_drapes_the_face(self):
+        tris, attr, _ = self.shell()
+        ivy = tris[np.all(attr == mesh_grounds.IVY, axis=1)].reshape(-1, 3)
+        a, w, h = self.local(ivy)
+        self.assertGreater(float(np.ptp(w)), 2 * mesh_grounds.CHANNEL_HALF_M + 1.0)   # wider than the opening
+        self.assertGreater(float(h.max()), mesh_grounds.CROWN_M + 1.5)               # over the face above it
+        hanging = np.abs(w) < mesh_grounds.CHANNEL_HALF_M - 0.3
+        self.assertLess(float(h[hanging].min()), 1.0)                                # and low across the opening
+
     def test_the_recess_is_roofed_over_and_closed_at_the_back(self):
         tris, attr, _ = self.shell()
         rock = tris[np.all(attr == mesh_grounds.HARBOUR_ROCK, axis=1)]
         rec, m, u, side, lake = self.mouth()
-        for a in (3.0, 6.0, 9.0):                                                  # no open slot seen from above
-            for w in (-2.5, 0.0, 2.5):
+        for a in (0.5, 3.0, 6.0, 9.0):                                             # no open slot seen from above,
+            for w in (-2.5, 0.0, 2.5):                                             # from the waterline in
                 p = m + a * u + w * side
                 start = np.array([p[0], lake + 0.5, p[1]])
                 self.assertTrue(world.segment_hits(start[None], np.array([[0.0, 1.0, 0.0]]), 60.0, rock)[0], (a, w))
+                if a < 2.0:                                                        # the lintel: low over the water
+                    continue
                 above = np.array([p[0], lake + 80.0, p[1]])                        # the cliff's surface closes over it
                 self.assertTrue(world.segment_hits(above[None], np.array([[0.0, -1.0, 0.0]]), 72.0, rock)[0], (a, w))
         start = np.array([*(m + 2.0 * u)[:1], lake + 0.5, *(m + 2.0 * u)[1:]])
@@ -1022,6 +1305,14 @@ class HarbourMouthTests(unittest.TestCase):
         self.assertGreater(float(axis @ np.array([1.0, 0.0])), 0.95)              # running into it
         cut = (w2 > 0) & (wd <= 0)
         self.assertGreater(float(e[cut].max()), 10.0 + 8.0)                        # deep into the cliff
+
+    def test_a_taller_bank_beside_the_mouth_does_not_turn_the_cut(self):
+        # as where the castle's walls hold the cliff's top level beside the mouth: the bed's slope at the foot turns
+        # towards the taller bank, the lake's edge not
+        meta, grid, bed, wd, surface, e, n = self.synthetic()
+        bed = np.where((e > 10.0) & (n < 5.0), meta["lake"] + 16.0, bed)
+        _, _, record = self.check_bounded_and_idempotent(meta, grid, bed, wd, surface, np.array([-20.0, 5.0]))
+        self.assertGreater(float(np.asarray(record["axis"]) @ np.array([1.0, 0.0])), 0.995)   # square to the shore
 
     def test_without_a_cliff_near_the_mapped_mouth_nothing_is_cut(self):
         meta, grid, bed, wd, surface, *_ = self.synthetic(cliff=False)
@@ -1105,31 +1396,201 @@ class BridgesTests(unittest.TestCase):
             with self.subTest(at=np.round(c).tolist()):
                 self.assertGreater(int((np.hypot(*(centre - c).T) < 8.0).sum()), 20)
 
+    def near(self, c, reach=30.0):
+        return np.hypot(*(self.tris.mean(axis=1)[:, [0, 2]] - c).T) < reach
+
+    def of(self, name, up=False):
+        keep = np.all(self.attr == code(name), axis=1)
+        return keep & (self.normal[:, 1] > 0.8) if up else keep
+
+    def deck_level(self, c):
+        """The walkable level at c: the bridge's deck where it has one over the road, else the ground."""
+        deck = self.tris[self.of("bridge-deck", up=True) & self.near(c, 12.0)]
+        hit = [t for t in deck if Polygon(t[:, [0, 2]]).buffer(1e-6).contains(Point(*c))]
+        ground = float(sample(self.bed, self.grid, c[:1], c[1:])[0])
+        return max(ground, float(np.mean([t[:, 1].mean() for t in hit]))) if hit else ground
+
+    def test_each_bridge_is_one_rubble_stone_structure_carrying_the_road(self):
+        kinds = {tuple(a) for a in np.unique(self.attr, axis=0)}
+        self.assertEqual(kinds, {code("grounds-rubble"), code("pale-stone"), code("arch-shadow"), code("bridge-deck")})
+        for c in self.crossings:
+            with self.subTest(at=np.round(c).tolist()):
+                plan = shapely.union_all([shapely.MultiPoint(t[:, [0, 2]]).convex_hull.buffer(0.05)
+                                          for t in self.tris[self.near(c)]])
+                self.assertEqual(len(getattr(plan, "geoms", [plan])), 1)            # one structure, not pieces
+                self.assertTrue(plan.contains(Point(*c)))                          # over the road
+
     def test_coped_parapets_either_side_leave_the_road_clear(self):
-        stone = np.all(self.attr == mesh_grounds.WALL_STONE, axis=1) | np.all(self.attr == mesh_grounds.PALE_STONE, axis=1)
+        stone = self.of("grounds-rubble") | self.of("pale-stone")
         for c in self.crossings:
             with self.subTest(at=np.round(c).tolist()):
                 ax = self.road_axis(c)
                 side = np.array([-ax[1], ax[0]])
-                mine = stone & (np.hypot(*(self.tris.mean(axis=1)[:, [0, 2]] - c).T) < 8.0)
-                cap = self.tris[mine & np.all(self.attr == mesh_grounds.PALE_STONE, axis=1) & (self.normal[:, 1] > 0.8)]   # it climbs
-                pts = cap.reshape(-1, 3)
-                ground = float(sample(self.bed, self.grid, c[:1], c[1:])[0])
-                height = pts[:, 1] - ground
-                self.assertTrue(0.7 < float(np.median(height)) < 1.4, np.median(height))
+                mine = stone & self.near(c, 12.0)
+                pts = self.tris[mine & self.of("pale-stone", up=True)].reshape(-1, 3)
+                level = self.deck_level(c)
+                over = np.abs((pts[:, [0, 2]] - c) @ ax) < 3.0
+                self.assertTrue(0.8 < float(np.median(pts[over, 1] - level)) < 1.4, np.median(pts[over, 1] - level))
                 across = (pts[:, [0, 2]] - c) @ side
                 self.assertTrue((across > 0.5).any() and (across < -0.5).any())     # on both sides of the road
                 tall = self.tris[mine].reshape(-1, 3)
                 lane = np.abs((tall[:, [0, 2]] - c) @ side) < max(0.6, float(np.abs(across).min()) - 0.4)
-                self.assertFalse(np.any(lane & (tall[:, 1] > ground + 0.3)))        # the road itself kept clear
+                deck = self.tris[self.of("bridge-deck", up=True) & self.near(c)].reshape(-1, 3)
+                da = np.round((deck[:, [0, 2]] - c) @ ax, 1)
+                cols = np.unique(da)
+                walk = np.interp((tall[:, [0, 2]] - c) @ ax, cols, [deck[da == v, 1].max() for v in cols])
+                walk = np.maximum(walk, sample(self.bed, self.grid, tall[:, 0], tall[:, 2]))
+                self.assertFalse(np.any(lane & (tall[:, 1] > walk + 0.3)))          # the road itself kept clear
 
-    def test_an_arched_opening_in_each_face_lets_the_water_through(self):
-        dark = np.all(self.attr == mesh_grounds.ARCH_SHADOW, axis=1)
+    def test_the_arch_stands_in_each_face_beneath_its_parapet(self):
+        dark = self.of("arch-shadow")
+        for c in self.crossings:
+            ax = self.road_axis(c)
+            side = np.array([-ax[1], ax[0]])
+            cap = self.tris[self.near(c) & self.of("pale-stone", up=True)].reshape(-1, 3)
+            capA, capS = (cap[:, [0, 2]] - c) @ ax, (cap[:, [0, 2]] - c) @ side
+            void = self.tris[self.near(c) & dark].reshape(-1, 3)
+            vA, vS = (void[:, [0, 2]] - c) @ ax, (void[:, [0, 2]] - c) @ side
+            for s in (1.0, -1.0):
+                with self.subTest(at=np.round(c).tolist(), side=s):
+                    mine, rail = vS * s > 0, capS * s > 0
+                    self.assertTrue(mine.any() and rail.any())
+                    self.assertLess(abs(float(np.max(s * vS[mine]) - np.max(s * capS[rail]))), 0.6)   # in the face
+                    self.assertTrue(capA[rail].min() < vA[mine].min() and vA[mine].max() < capA[rail].max())
+
+    def test_each_arch_rises_beneath_its_coping_not_through_it(self):
+        ring = self.of("pale-stone") & (np.abs(self.normal[:, 1]) < 0.2)
+        for c in self.crossings:
+            ax = self.road_axis(c)
+            side = np.array([-ax[1], ax[0]])
+            cap = self.tris[self.near(c) & self.of("pale-stone") & (self.normal[:, 1] < -0.8)].reshape(-1, 3)   # undersides
+            arc = self.tris[self.near(c) & ring]
+            for s in (1.0, -1.0):
+                with self.subTest(at=np.round(c).tolist(), side=s):
+                    rail = cap[((cap[:, [0, 2]] - c) @ side) * s > 0]
+                    ca = (rail[:, [0, 2]] - c) @ ax
+                    level = lambda p: np.interp((p[..., [0, 2]] - c) @ ax, *zip(*sorted(zip(ca, rail[:, 1]))))
+                    mine = arc[(((arc.mean(axis=1)[:, [0, 2]] - c) @ side) * s > 0)
+                               & ((arc[..., 1] - level(arc)).min(axis=1) < -0.05)]   # the ring, not the coping's edge
+                    self.assertGreater(len(mine), 0)
+                    self.assertGreater(float((level(mine) - mine[..., 1]).min()), 0.5)   # with stone over the ring
+
+    def test_each_face_stands_where_its_burn_leaves_the_road(self):
+        # not at the road's edge with the burn coming out of the grass metres off: where the burn's water ends within
+        # FACE_REACH_M of the road's edge, the face stands at it
+        data = world.data()
+        stream = mesh_source.sd_bytes(decode(data["tex"]["locB"])[..., 1])
+        road = decode(data["tex"]["locA"])[..., 0] / 255.0
+        e, n = self.grid.to_world(*np.mgrid[0:self.grid.ny, 0:self.grid.nx])
+        wet = np.column_stack([e[stream < 0], n[stream < 0]])
+        dark = self.of("arch-shadow")
+        checked = 0
+        for c in self.crossings:
+            ax = self.road_axis(c)
+            side = np.array([-ax[1], ax[0]])
+            void = self.tris[self.near(c) & dark].reshape(-1, 3)
+            vS = (void[:, [0, 2]] - c) @ side
+            near = wet[np.hypot(*(wet - c).T) < 30.0]
+            wa, ws = (near - c) @ ax, (near - c) @ side
+            for s in (1.0, -1.0):
+                zs = np.arange(0.0, 8.0, 0.25)
+                ink = sample(road, self.grid, *(c + s * zs[:, None] * side).T) >= 0.5
+                edge = float(zs[np.argmax(~ink)]) if (~ink).any() else 8.0
+                mine = (ws * s > 0) & (np.abs(wa) < 6.0)
+                if not mine.any():
+                    continue
+                end = float(np.min(np.abs(ws[mine])))
+                if end > edge + mesh_grounds.FACE_REACH_M:
+                    continue
+                checked += 1
+                with self.subTest(at=np.round(c).tolist(), side=s):
+                    self.assertGreater(float(np.max(s * vS[vS * s > 0])), end - 1.0)
+        self.assertGreater(checked, len(self.crossings))
+
+    def test_each_arch_spans_its_burn(self):
+        data = world.data()
+        stream = mesh_source.sd_bytes(decode(data["tex"]["locB"])[..., 1])
+        dark = self.of("arch-shadow")
+        checked = 0
+        for c in self.crossings:
+            ax = self.road_axis(c)
+            side = np.array([-ax[1], ax[0]])
+            void = self.tris[self.near(c) & dark].reshape(-1, 3)
+            vA, vS = (void[:, [0, 2]] - c) @ ax, (void[:, [0, 2]] - c) @ side
+            for s in (1.0, -1.0):
+                mine = vS * s > 0
+                outer = float(np.max(s * vS[mine]))
+                xs = np.arange(-10.0, 10.0, 0.25)
+                wet = np.zeros_like(xs, bool)
+                for off in (0.75, 1.5):
+                    pts = c + xs[:, None] * ax + s * (outer + off) * side
+                    wet |= sample(stream, self.grid, pts[:, 0], pts[:, 1]) < 0
+                if not wet.any():
+                    continue
+                checked += 1
+                with self.subTest(at=np.round(c).tolist(), side=s):            # the water comes out of the arch
+                    self.assertTrue(vA[mine].min() - 0.5 <= xs[wet].min() and xs[wet].max() <= vA[mine].max() + 0.5,
+                                    (xs[wet].min(), xs[wet].max(), vA[mine].min(), vA[mine].max()))
+        self.assertGreater(checked, len(self.crossings))
+
+    def test_the_parapets_run_unbroken_either_side(self):
+        for c in self.crossings:
+            ax = self.road_axis(c)
+            side = np.array([-ax[1], ax[0]])
+            cap = self.tris[self.near(c) & self.of("pale-stone", up=True)]
+            s_ = (cap.mean(axis=1)[:, [0, 2]] - c) @ side
+            reach = []
+            for s in (1.0, -1.0):
+                with self.subTest(at=np.round(c).tolist(), side=s):
+                    plan = shapely.union_all([Polygon(t[:, [0, 2]]).buffer(0.02) for t in cap[s_ * s > 0]])
+                    self.assertEqual(len(getattr(plan, "geoms", [plan])), 1)          # no gaps, no offsets
+                    a = (cap[s_ * s > 0].reshape(-1, 3)[:, [0, 2]] - c) @ ax
+                    reach.append((float(a.min()), float(a.max())))
+            self.assertLess(float(np.abs(np.subtract(*reach)).max()), 0.5)           # the two sides alike
+
+    def test_a_raised_deck_ramps_gently_down_to_the_road(self):
+        deck = self.of("bridge-deck", up=True)
         for c in self.crossings:
             with self.subTest(at=np.round(c).tolist()):
                 ax = self.road_axis(c)
                 side = np.array([-ax[1], ax[0]])
-                mine = dark & (np.hypot(*(self.tris.mean(axis=1)[:, [0, 2]] - c).T) < mesh_grounds.CROSSING_GAP_M)
+                pts = self.tris[deck & self.near(c)].reshape(-1, 3)
+                self.assertGreater(len(pts), 0)
+                a = np.round((pts[:, [0, 2]] - c) @ ax, 1)
+                order = np.unique(a)
+                lift = pts[:, 1] - sample(self.bed, self.grid, pts[:, 0], pts[:, 2])
+                w = np.abs((pts[:, [0, 2]] - c) @ side)
+                rise = np.array([lift[a == v][np.argmin(w[a == v])] for v in order])   # along the road's middle
+                self.assertLess(float(np.max(np.abs(np.diff(rise) / np.diff(order)))), 0.2)   # no steeper than 1 in 5
+                for v in (a.min(), a.max()):
+                    end = pts[a == v]
+                    ground = sample(self.bed, self.grid, end[:, 0], end[:, 2])
+                    self.assertLess(float(np.max(np.abs(end[:, 1] - ground))), 0.3)   # meeting the road at its ends
+
+    def test_a_raised_deck_is_walled_both_sides(self):
+        # wherever the deck stands more than 0.3 m over the ground there is coping on both sides of it
+        deck = self.tris[self.of("bridge-deck", up=True)].reshape(-1, 3)
+        cap = self.tris[self.of("pale-stone", up=True)].mean(axis=1)
+        for c in self.crossings:
+            ax = self.road_axis(c)
+            side = np.array([-ax[1], ax[0]])
+            pts = deck[np.hypot(*(deck[:, [0, 2]] - c).T) < 30.0]
+            lift = pts[:, 1] - sample(self.bed, self.grid, pts[:, 0], pts[:, 2])
+            a = np.round((pts[:, [0, 2]] - c) @ ax, 1)
+            mine = cap[np.hypot(*(cap[:, [0, 2]] - c).T) < 30.0]
+            ca, cs = (mine[:, [0, 2]] - c) @ ax, (mine[:, [0, 2]] - c) @ side
+            for v in np.unique(a[lift > 0.3]):
+                with self.subTest(at=np.round(c).tolist(), station=float(v)):
+                    near = np.abs(ca - v) < 0.6
+                    self.assertTrue((near & (cs > 0)).any() and (near & (cs < 0)).any())
+
+    def test_an_arched_opening_in_each_face_lets_the_water_through(self):
+        dark = self.of("arch-shadow")
+        for c in self.crossings:
+            with self.subTest(at=np.round(c).tolist()):
+                ax = self.road_axis(c)
+                side = np.array([-ax[1], ax[0]])
+                mine = dark & self.near(c, mesh_grounds.CROSSING_GAP_M)
                 facing = self.normal[mine][:, [0, 2]] @ side
                 self.assertTrue((facing > 0.9).any() and (facing < -0.9).any())     # both faces, across the road
                 t = self.tris[mine]
@@ -1139,20 +1600,26 @@ class BridgesTests(unittest.TestCase):
                 self.assertGreater(float(area[above].sum()), 0.4 * float(area.sum()))   # open, not buried
 
     def test_the_parapets_keep_off_the_road_ink(self):
+        # except where the deck stands proud, which must be walled (a path meeting a raised ramp meets its parapet)
         data = world.data()
         road = decode(data["tex"]["locA"])[..., 0] / 255.0
-        stone = np.all(self.attr == mesh_grounds.WALL_STONE, axis=1) | np.all(self.attr == mesh_grounds.PALE_STONE, axis=1)
-        tops = self.tris[stone & (self.normal[:, 1] > 0.8)].mean(axis=1)
+        tops = self.tris[(self.of("grounds-rubble") | self.of("pale-stone")) & (self.normal[:, 1] > 0.8)].mean(axis=1)
+        deck = self.tris[self.of("bridge-deck", up=True)].reshape(-1, 3)
+        lift = deck[:, 1] - sample(self.bed, self.grid, deck[:, 0], deck[:, 2])
+        from scipy.spatial import cKDTree
+        raised = lift[cKDTree(deck[:, [0, 2]]).query(tops[:, [0, 2]])[1]] > 0.3
         ink = sample(road, self.grid, tops[:, 0], tops[:, 2])
-        self.assertLess(float((ink >= 0.65).mean()), 0.02)                         # no parapet across a road or path
+        self.assertLess(float(((ink >= 0.65) & ~raised).mean()), 0.02)            # no parapet across a road or path
 
-    def test_a_parapet_stops_where_a_path_leaves_the_road(self):
-        # synthetic: a road along x over a burn 3 m below, and a path leaving it northwards (+z) at x = 3..7
+    @staticmethod
+    def synthetic_bridge(extra):
+        """The copings' plan of a bridge on a synthetic road along x (|z| < 2.5) over a burn 3 m below at x = 0, with
+        `extra(e, n)` more road ink, and that ink."""
         grid = world.rotated_grid(40)
         e, n = grid.to_world(*np.mgrid[0:grid.ny, 0:grid.nx])
-        branch = ((e > 3.0) & (e < 7.0) & (n > 2.5)).astype(np.float64)
+        more = extra(e, n).astype(np.float64)
         locA = np.zeros((grid.ny, grid.nx, len(mesh_source.CHANNELS["locA"])), np.uint8)
-        locA[..., mesh_source.CHANNELS["locA"].index("road")] = 255 * np.maximum(np.abs(n) < 2.5, branch)
+        locA[..., mesh_source.CHANNELS["locA"].index("road")] = 255 * np.maximum(np.abs(n) < 2.5, more)
         ground = lambda x, z: np.where(np.abs(np.asarray(z)) > 6.0, -3.0, 0.0) + 0.0 * np.asarray(x)
         scene = types.SimpleNamespace(locA=locA, local=grid, ground=ground, sunk=lambda x, z: ground(x, z) - 0.5,
                                       meta={"extras": {}})
@@ -1162,15 +1629,75 @@ class BridgesTests(unittest.TestCase):
         attr = mesh.attr[mesh.idx[:, 0]]
         normal = np.cross(tris[:, 1] - tris[:, 0], tris[:, 2] - tris[:, 0])
         up = normal[:, 1] > 0.8 * np.maximum(np.linalg.norm(normal, axis=1), 1e-12)
-        stone = np.all(attr == mesh_grounds.WALL_STONE, axis=1) | np.all(attr == mesh_grounds.PALE_STONE, axis=1)
-        plan = shapely.union_all([Polygon(t[:, [0, 2]]).buffer(0.01) for t in tris[stone & up]])
-        x0, z0, x1, z1 = plan.bounds
-        gx, gz = np.meshgrid(np.arange(x0, x1, 0.1), np.arange(z0, z1, 0.1))
-        inside = shapely.contains_xy(plan, gx, gz)
-        px, pz = gx[inside], gz[inside]
-        self.assertTrue(((pz > 0.0) & (px < 0.0)).any() and ((pz < 0.0) & (px > 4.0)).any())   # parapets both sides
-        on_path = sample(branch, grid, px, pz) >= 0.65
-        self.assertFalse(on_path.any(), np.column_stack([px, pz])[on_path][:3])   # but none across the path
+        return tris[np.all(attr == code("pale-stone"), axis=1) & up], (grid, more)
+
+    def test_a_parapet_stops_where_a_path_leaves_the_road(self):
+        # a path leaving northwards (+z) from x = 1.8 m, within the walls' reach over the arch's abutment
+        cap, (grid, branch) = self.synthetic_bridge(lambda e, n: (e > 1.8) & (e < 5.8) & (n > 2.5))
+        for s in (1.0, -1.0):
+            plan = shapely.union_all([Polygon(t[:, [0, 2]]).buffer(0.01) for t in cap[cap.mean(axis=1)[:, 2] * s > 0]])
+            self.assertEqual(len(getattr(plan, "geoms", [plan])), 1)                 # a parapet each side, unbroken
+            x0, z0, x1, z1 = plan.bounds
+            gx, gz = np.meshgrid(np.arange(x0, x1, 0.1), np.arange(z0, z1, 0.1))
+            inside = shapely.contains_xy(plan, gx, gz)
+            on_path = sample(branch, grid, gx[inside], gz[inside]) >= 0.65
+            self.assertFalse(on_path.any(), np.column_stack([gx[inside], gz[inside]])[on_path][:3])   # off the path
+        self.assertLess(float(cap[..., 0].max()), 1.8)                             # both walls stop short of it
+
+    def test_the_roads_ragged_edge_is_no_path(self):
+        # a texel-sized bump on the road's edge, reaching nowhere near the faces, leaves the walls their full reach
+        full, _ = self.synthetic_bridge(lambda e, n: np.zeros_like(e, bool))
+        cap, _ = self.synthetic_bridge(lambda e, n: (e > 1.6) & (e < 2.6) & (n > 2.5) & (n < 4.0))
+        self.assertAlmostEqual(float(cap[..., 0].max()), float(full[..., 0].max()), delta=0.05)
+
+
+class ArchOpeningTests(unittest.TestCase):
+    """The opening beneath a bridge's arch is one simple outline, so the dark beneath it can be triangulated wherever
+    the burn's bed meets the arch's springing: the grounds failed to build 140 m down, at the bridges near (-256, 314)
+    and (377, -9), when the arch's computed ends missed their springing by an ulp and crossed the bed lying there."""
+
+    def test_the_arch_meets_a_bed_lying_at_its_springing(self):
+        x0, half, rise = -1.25, 1.25, 0.55                                 # the arch near (-256, 314)
+        radius = (half ** 2 + rise ** 2) / (2 * rise)
+        xs = np.linspace(x0 - half, x0 + half, 9)
+        drop = np.array([0.0, 0.0, 0.0, 0.0, 0.2, 0.6, 1.0, 0.97, 0.73])  # its bed beneath the springing, along the face
+        for end, below in (("left", drop), ("right", drop[::-1])):
+            crossed = []
+            for spring in 114.43250644458794 + 0.0137 * np.arange(50):   # its springing 140 m down, and more levels
+                opening = mesh_grounds.arch_opening(x0, half, spring, radius, spring + rise - radius, (xs, spring - below))
+                if not opening.is_valid:
+                    crossed.append((float(spring), shapely.is_valid_reason(opening)))
+            with self.subTest(bed_at_springing=end):
+                self.assertEqual(crossed, [])
+
+
+class GroundsStoneTests(unittest.TestCase):
+    """The grounds' walls, gate pillars and bridges are rubble stone in rough courses (the village's rubble, so one
+    shading branch), not the smooth shared boundary-wall stone, which read as render or concrete close up."""
+
+    def test_the_stonework_is_coursed_rubble(self):
+        import materials
+        mats = {m.name: m for m in materials.materials()}
+        self.assertEqual(mats["grounds-rubble"].p3, mats["rubble"].p3)            # the village's body, shared
+        for asset in ("grounds-walls", "gates", "bridges"):
+            with self.subTest(asset=asset):
+                attr = payload_part(asset)[1]
+                self.assertFalse(np.all(attr == code("wall-stone"), axis=1).any())
+                self.assertTrue(np.all(attr == code("grounds-rubble"), axis=1).any())
+
+    def test_the_gate_pillars_shafts_are_rubble_under_pale_caps(self):
+        tris, attr, normal = payload_part("gates")
+        side = np.abs(normal[:, 1]) < 0.2
+        rubble, pale = np.all(attr == code("grounds-rubble"), axis=1), np.all(attr == code("pale-stone"), axis=1)
+        gates = GatesTests()
+        GatesTests.setUpClass()
+        for c, foot, top in gates.pillars():
+            mine = np.max(np.abs(tris.mean(axis=1)[:, [0, 2]] - c), axis=1) < mesh_grounds.PIER_M / 2 + 0.15
+            with self.subTest(pillar=np.round(c, 1).tolist()):
+                self.assertGreater(float(tris[mine & side & rubble][..., 1].max()), foot + mesh_grounds.PIER_H_M - 0.5)
+                low_pale = tris[mine & side & pale][..., 1].min(axis=1)
+                shaft = (low_pale > foot + mesh_grounds.WALL_HEIGHT_M + 0.3) & (low_pale < foot + mesh_grounds.PIER_H_M - 0.1)
+                self.assertFalse(shaft.any())                                     # pale only at the cornice, over the walls
 
 
 class GroundsMeshOracleTests(unittest.TestCase):

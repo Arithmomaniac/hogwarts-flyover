@@ -29,7 +29,8 @@ PASSES = r"""
   const passNames = new Map();
   for (const [n, p] of Object.entries({ p1: prog, up, taa, tree: treeP, cone: coneP, sun: sunP, far: farP, classify: clsP,
       shadow: shP, shade: p3P, ...(typeof meshP === "undefined" ? {} : { mesh: meshP, meshDepth: meshDP, resolve: resP,
-      meshShadow: shDepthP, refl: reflP, glass: glassP }), ...(typeof lakeP === "undefined" ? {} : { lake: lakeP }) }))
+      meshShadow: shDepthP, refl: reflP, glass: glassP }), ...(typeof lakeP === "undefined" ? {} : { lake: lakeP }),
+      ...(typeof lightP === "undefined" ? {} : { light: lightP }) }))
     passNames.set(p, n);
   let passOn = false, passActive = null, passFrame = [];
   const passRows = [], passUse = gl.useProgram.bind(gl);

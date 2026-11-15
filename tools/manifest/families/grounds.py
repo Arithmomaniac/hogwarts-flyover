@@ -77,7 +77,7 @@ def assets(ctx):
             labels=labels(GM, "3g") + labels(HM, "1a"), inputs=["meta.extras.gates", "locA.road"],
             dimensions={"opening_m": ft(18), "pillar_height_m": 4.5, "pillar_width_m": 1.0, "gate_height_m": 3.0},
             parts=["paired gates", "tall stone pillars", "winged-boar figures", "wall up to the pillars"],
-            materials=["wrought iron", "pale stone", "weathered stone (the boars)"],
+            materials=["wrought iron", "rubble stone", "pale stone cornices", "weathered stone (the boars)"],
             decisions=["gates-pillars-boars", "gates-closed"]),
         asset("grounds-walls", "grounds", "Boundary, cliff-edge and vegetable-patch walls", [
             q(G, "There is a low wall along part of the edge of the vegetable patch"),
@@ -94,7 +94,7 @@ def assets(ctx):
             materials=["rubble stone", "pale stone coping"],
             decisions=["walls-coped", "cliff-edge-safety-wall", "vegetable-patch-wall-ruin"]),
         asset("field-boundaries", "grounds", "Field hedges", [note("data", "decoded hedge lines")],
-              inputs=["locA.hedge"], parts=["trimmed hedges with irregular crowns"],
+              inputs=["locA.hedge"], parts=["continuous trimmed hedges, rounded, with irregular crowns"],
               decisions=["hedge-heuristic", "hedge-crowns"]),
         asset("tomb", "grounds", "Dumbledore's tomb", [
             q(G, "The white marble tomb"), q(G, "so tall and/or so close to the water that it reflects in the lake")],
@@ -214,8 +214,9 @@ def decisions(ctx):
         "harbour-local-cutout": decision(
             "Only a tightly bounded exterior recess with a closed-back shell is cut into the cliff; there is no"
             " boathouse or navigable tunnel. src/fix_harbour.py cuts the water-filled recess, 8 m wide and 12 m into"
-            " the cliff at the cliff foot nearest the mapped mouth (1f), and the mesh roofs it with rock back to the"
-            " cliff's surface, spans the cut's 4.5 m of open water with a low arch and closes it 10 m in.",
+            " the cliff, square to the lake's edge at the cliff foot nearest the mapped mouth (1f), and the mesh roofs it"
+            " with rock back to the cliff's surface, spans the cut's 4.5 m of open water with a low arch and closes it"
+            " 10 m in. The castle's walls over the recess stand on that roof, the channel running on under the castle.",
             q(G, "a wide, ivy-curtained opening which leads into a water-filled channel which penetrates the"
                  " cliff-face")),
         "harbour-heads-down": decision(
@@ -225,15 +226,19 @@ def decisions(ctx):
             q(G, "a curtain of ivy which hid a wide opening in the cliff face"), inferred=True),
         "bridges-stone-arch": decision(
             "Wherever a road or path runs between two pieces of a burn in the data, a small rubble-stone bridge carries"
-            " it over: coped parapets 1 m high either side of the road, and an arch ringed in pale stone over the"
-            " water's opening in each face. White Hound gives no construction; the stone arch is the Highland"
-            " vernacular, decided by lane A under the user's delegation of look choices.",
+            " it over as one structure: a spandrel wall at each face, where the burn leaves the road's bank, rising into"
+            " a coped parapet 1 m above the deck, unbroken and stopping short of any path that leaves the road; in each"
+            " face a segmental arch ringed in pale stone over the burn's water there (skewed where the burn crosses"
+            " obliquely); and a deck humped over the arches where the road lies too low over the water, eased back down"
+            " at 1 in 7. White Hound gives no construction; the humpbacked rubble arch is the Highland vernacular,"
+            " decided by lane A under the user's delegation of look choices.",
             DELEGATED, q(H, "it's quite possible that some of the streets include bridges over a water-course"),
             q(H, "it probably does pass under the High Street rather than alongside it"), inferred=True),
         "gates-pillars-boars": decision(
-            "Two tall pale-stone pillars stand either side of the road where the boundary wall, as drawn, opens at the"
-            " mapped gap, 18 ft apart, with the wall run on from them into the boundary wall; each carries a winged"
-            " boar of weathered stone, wings raised, facing out of the grounds. The leaves' bars follow the falling"
+            "Two tall stone pillars, rubble in rough courses under pale cornices, stand either side of the road where"
+            " the boundary wall, as drawn, opens at the mapped gap, 18 ft apart, with the wall run on from them into the"
+            " boundary wall; each carries a stocky winged boar of weathered, lichened stone, tusked, wings raised,"
+            " facing out of the grounds. The leaves' bars follow the falling"
             " road down to the ground. White Hound gives no width, stone or facing."
             "Decided by lane A under the user's delegation of look choices; not reviewed by the user.",
             DELEGATED,
@@ -246,7 +251,8 @@ def decisions(ctx):
             DELEGATED,
             q(G, "high, paired gates of wrought iron"), q(G, "he found them chained shut"), inferred=True),
         "walls-coped": decision(
-            "The boundary walls stand 2.2 m high, as the raymarched walls do, in rubble stone under a pale stone coping"
+            "The boundary walls stand 2.2 m high, as the raymarched walls do, run on across the map's breaks narrower"
+            " than 3.5 m (open where a road crosses), in rubble stone under a pale stone coping"
             " that overhangs them a little. White Hound gives no height or construction."
             "Decided by lane A under the user's delegation of look choices; not reviewed by the user.",
             DELEGATED,
@@ -267,8 +273,10 @@ def decisions(ctx):
             q(G, "There is a low wall along part of the edge of the vegetable patch"),
             q(GM, "part of former curtain wall which once ran from the North Tower to Gryffindor Tower"), inferred=True),
         "hedge-crowns": decision(
-            "The field hedges are trimmed to about 1.5 m with irregular crowns rather than flat tops, for a more"
-            " natural look."
+            "The field hedges run as continuous rows, the map's breaks narrower than 4 m (its ink breaks up at bends"
+            " and along thin rows) closed and opened again only where a road or path crosses, with stray fragments"
+            " dropped; each row is trimmed to about 1.5 m, its sides all but upright to shoulders that round over"
+            " the top, under an irregular crown, for a more natural look."
             "Decided by lane A under the user's delegation of look choices; not reviewed by the user.",
             DELEGATED, note("data", "locA hedge channel"), inferred=True),
         "tomb-chest": decision(

@@ -2,11 +2,13 @@
 record with straight-skeleton roofs and manifold3d openings.
 
 The village is built once per test process and shared, read-only, by every class that needs it (shared()): every
-footprint, or with VILLAGE_SAMPLE=high-street only the footprints along the High Street, the named buildings and the
-houses with garden walls, as the village's quick mutation runs ask (tools/mutate/village.py)."""
+footprint, or with VILLAGE_SAMPLE=high-street only the footprints along the High Street, the named buildings, the
+houses with garden walls and a few where a neighbour decides a stack (STACK_CASES), as the village's quick mutation
+runs ask (tools/mutate/village.py)."""
 import math
 import os
 from pathlib import Path
+import re
 import sys
 import unittest
 
@@ -28,17 +30,22 @@ from mesh_source import Grid, field_polygons, load_georef, map_region  # noqa: E
 MESH_FAULTS = {"winding": {}, "collapsed": {}}
 WALL_LEVEL = -0.3     # build_meshes.BUILDING_WALL_LEVEL: walls stand 0.3 m inside the footprint distance
 HIGH_STREET_M = 14.0  # the High Street's footprints: those within this of its centreline
+# footprints off the High Street where a neighbour decides a stack (site X): at a T-junction, where the stack on a party
+# wall falls to the building whose end meets the other's side (50, 295, 399, 414, 564; mesh_village's _served), and
+# where a neighbour's eaves overhang a stack's clearance circle by more than the clearance test's margin (399, 475,
+# 560; Village.roof_near). The sample builds them too, so that the quick mutation runs catch those rules' mutations.
+STACK_CASES = {50, 295, 399, 414, 475, 560, 564}
 SAMPLE = os.environ.get("VILLAGE_SAMPLE") == "high-street"
 _SHARED = {}
 
 
 def high_street(v, mv):
-    """The High Street's footprints, the named buildings' and those of the houses with garden walls."""
+    """The High Street's footprints, the named buildings', those of the houses with garden walls and STACK_CASES."""
     import mesh_village_small as small
     gardens = {min(v.outlines, key=lambda cid: v.outlines[cid].distance(Point(m.pos[:, [0, 2]].mean(axis=0))))
                for m in small.garden_walls(v)}
-    return gardens | {cid for cid in v.built
-                      if v.outlines[cid].distance(v.streets.high) < HIGH_STREET_M or v.scene.owners[cid] in mv.NAMED}
+    return gardens | (STACK_CASES & v.built) | {cid for cid in v.built if v.outlines[cid].distance(v.streets.high)
+                                                < HIGH_STREET_M or v.scene.owners[cid] in mv.NAMED}
 
 
 def shared():
@@ -75,9 +82,35 @@ def shared():
 
 class VillageMeshOracleTests(unittest.TestCase):
     """trimesh, as an independent oracle on the decoded payload."""
+    STREAK_M = 1.0 / 9.0    # materials/village.py: the thatch's finest straw streaks, vnoise(vec2(u * 9., ...))
 
     def test_the_decoded_meshes_have_only_the_known_faults(self):
         self.assertEqual(world.mesh_faults("village"), MESH_FAULTS)
+
+    def test_the_thatch_streaks_run_straight_across_every_triangle(self):
+        """The thatch's straw streaks (materials/village.py) run along the coordinate frag4.glsl's faceCoord measures
+        across each fragment's normal, from the world's origin, some 1.5 km off. Corners of one facet whose normals
+        differ in tilt decode from the payload's int8 octahedral normals to azimuths up to a degree apart, which swings
+        that coordinate through dozens of streaks across a triangle: the straw curls into swirls and herringbones and
+        folds along the triangles' diagonals. So at each corner of every thatch triangle, the streak coordinate its own
+        decoded normal gives is within a tenth of a streak of the one its first corner's normal gives."""
+        from materials import code
+        thatch = np.array([code(m) for m in ("village-thatch", "village-thatch-new")])
+        across = lambda a: np.stack([-np.sin(a), np.cos(a)], axis=-1)        # faceCoord's axis for an azimuth
+        tested = 0
+        for chunk in world.payload()["chunks"]:
+            attr = chunk["attr"][chunk["idx"][:, 0]]
+            corners = chunk["idx"][(attr[:, None, :] == thatch[None]).all(axis=2).any(axis=1)]
+            if not len(corners):
+                continue
+            xz, n = chunk["pos"][corners][..., [0, 2]], chunk["nrm"][corners]
+            azimuth = np.arctan2(n[..., 2], n[..., 0])
+            shift = np.abs((xz * across(azimuth)).sum(axis=-1) - (xz * across(azimuth[:, :1])).sum(axis=-1))
+            tested += len(corners)
+            with self.subTest(asset=chunk["asset"], box=chunk["box"]):
+                self.assertLessEqual(float(shift.max()), self.STREAK_M / 10,
+                                     f"{int((shift.max(axis=1) > self.STREAK_M / 10).sum())} of {len(corners)}")
+        self.assertGreater(tested, 0)
 
     def test_nothing_stands_on_the_hamlet_left_unbuilt_for_the_shack(self):
         """The four footprints of the hamlet that the manifest leaves unbuilt, so that the Shrieking Shack stands above
@@ -355,6 +388,8 @@ class VillageBuildTests(unittest.TestCase):
     MOVED_GARDEN_M = 14.0   # a cottage moved for the Shack stands this far from any other, as the stile lane's do
     FACING_DEG = 20.0       # ...its front within this of facing the nearest road straight on, as along its lane
     TREE_OFF_M = 2.5        # frag1.glsl's vegMask grows no tree centred nearer than this to a mapped footprint
+    FREE_M = 1.6            # a stack's top stands at most this far above the roof it rises out of
+    SIDE_M = 7.0            # a house's free side wall under its eaves this long, with room before it, has a window
 
     @classmethod
     def setUpClass(cls):
@@ -387,14 +422,36 @@ class VillageBuildTests(unittest.TestCase):
         return mesh.pos[mesh.idx[sel]]
 
     def test_every_footprint_is_built_but_the_specks(self):
-        """Every village footprint is built, the named shops among them, but one whose plan is only specks (a sliver of
-        a wing), which keeps the generic massing."""
+        """Every village footprint is built, the named shops among them, but one whose plan is only specks (a single
+        texel of a wing), which the village leaves out."""
         owners = self.scene.owners
         for cid in self.v.outlines:
             specks = max((fp.outline.area for fp in self.v.parts[cid]), default=0.0) < plan.MIN_PART_M2
             with self.subTest(component=cid):
                 self.assertEqual(cid in self.v.built, not specks)
         self.assertEqual({owners[c] for c in self.v.built} & set(self.mv.SHOPS), set(self.mv.SHOPS))
+
+    def test_nothing_stands_on_a_footprint_whose_plan_is_only_specks(self):
+        """A footprint whose plan is only specks is a single texel of the map, touching the building it belongs to but
+        cut off from it by the 2 m grid (the decision "village-wings-join-parents"). The village's hook gives it no
+        pieces, where None would give it the generic massing, a flat-topped pier as tall as the house's eaves: no
+        triangle of the payload stands within a hand's breadth of its traced outline."""
+        from unittest import mock
+        found = {c["id"]: c for c in self.scene.labelled[1]}
+        specks = sorted(set(self.v.outlines) - self.v.built)
+        self.assertTrue(specks)
+        with mock.patch.object(self.mv, "_village", return_value=self.v):
+            for cid in specks:
+                pieces = self.mv.build_footprint(self.scene, self.scene.owners[cid], found[cid],
+                                                 self.scene.footprint(found[cid]))
+                self.assertEqual(pieces, {}, cid)
+        mapped = shapely.union_all([p for cid in specks for p in self.scene.footprint(found[cid])]).buffer(0.1)
+        x0, z0, x1, z1 = mapped.bounds
+        for chunk in world.payload()["chunks"]:
+            xz = chunk["pos"][chunk["idx"]].mean(axis=1)[:, [0, 2]]
+            near = (xz[:, 0] > x0) & (xz[:, 0] < x1) & (xz[:, 1] > z0) & (xz[:, 1] < z1)
+            with self.subTest(asset=chunk["asset"]):
+                self.assertFalse(shapely.contains_xy(mapped, xz[near, 0], xz[near, 1]).any())
 
     def test_the_shack_stands_a_little_way_above_the_rest_of_the_village(self):
         """PoA 14: "It stood a little way above the rest of the village". The Shrieking Shack's floor stands at least
@@ -624,6 +681,74 @@ class VillageBuildTests(unittest.TestCase):
             found["lamps"] = small.lamps(self.v)
         return found["lamps"]
 
+    def footway(self):
+        """The High Street's footway (mesh_village_small), built once per test process."""
+        import mesh_village_small as small
+        found = shared()
+        if "footway" not in found:
+            found["footway"] = small.footway(self.v)
+        return found["footway"]
+
+    def test_a_kerbed_flagstone_footway_runs_along_the_high_streets_fronts_under_its_lamps(self):
+        """White Hound: "fancy shop signs hanging above the pavements". A footway of flagstones runs along the High
+        Street's fronts, from their walls out past the lamps that stand on it (without it the lamps stood on the grass
+        verge: inspection round 1), leaving the carriageway clear. It runs a little way into the walls and no further,
+        and is draped over the ground a kerb's height above it, the ground never showing through it, its kerb running
+        down into the ground, and no side of it in a wall or within FOOTWAY['clear'] of one, whose face it would fight.
+        But where it meets a front, before the doors, it stands under the floor of the building it fronts, its corners
+        within a metre of the front at least 5 cm under it, so that no door opens below it. It is in a piece for each of
+        the payload's tiles."""
+        import mesh_village_small as small
+        from build_meshes import TILE_M
+        from materials import code
+        way = self.footway()
+        self.assertTrue(way and all((m.attr == code("flagstone")).all() for m in way))
+        for m in way:                                       # a piece in each of the payload's tiles, culled apart
+            xz = m.pos[:, [0, 2]]
+            self.assertTrue(np.array_equal(np.floor(xz.min(axis=0) / TILE_M), np.floor((xz.max(axis=0) - 1e-6) / TILE_M)))
+        tris = np.concatenate([m.pos[m.idx] for m in way])
+        normal = np.cross(tris[:, 1] - tris[:, 0], tris[:, 2] - tris[:, 0])
+        up = normal[:, 1] > 0.5 * np.linalg.norm(normal, axis=1)
+        tops, sides = tris[up].reshape(-1, 3), tris[np.abs(normal[:, 1]) < 0.1 * np.linalg.norm(normal, axis=1)]
+        self.assertTrue(len(sides))
+        paved = shapely.union_all(plan_triangles(way))
+        for m in self.lamps():
+            c = m.pos[:, [0, 2]].mean(axis=0)
+            with self.subTest(lamp=tuple(np.round(c, 1))):
+                self.assertTrue(paved.contains(Point(c).buffer(small.LAMP["plinth"] / 2)))
+        fronts = [(LineString(self.front(u)[2]), self.front(u)[1], self.eave(u) - u.style.eaves)
+                  for u in self.units() if u.high]
+        before = [paved.contains(Point(np.asarray(line.interpolate(s, normalized=True).coords[0]) + n * d))
+                  for line, n, _ in fronts for s in np.linspace(0.05, 0.95, 10) for d in (0.3, 1.9)]
+        self.assertGreater(float(np.mean(before)), 0.95)
+        points = shapely.points(tops[:, [0, 2]])
+        lines = shapely.STRtree([line for line, _, _ in fronts])
+        self.assertLess(float(shapely.distance(shapely.union_all([line for line, _, _ in fronts]), points).max()),
+                        small.FOOTWAY["wide"] + 0.01)                           # the carriageway is left clear
+        walls = shapely.union_all([o.buffer(-small.FOOTWAY["into"] - 0.01) for o in self.v.outlines.values()])
+        self.assertFalse(shapely.contains(walls, points).any())
+        above = tops[:, 1] - self.scene.ground(tops[:, 0], tops[:, 2])
+        self.assertTrue(0.08 < float(np.median(above)) < 0.15, float(np.median(above)))
+        x0, z0, x1, z1 = paved.bounds                                           # and the ground never shows through
+        grid = np.stack(np.meshgrid(np.arange(x0, x1, 0.4), np.arange(z0, z1, 0.4)), -1).reshape(-1, 2)
+        grid = grid[shapely.contains_xy(paved, grid[:, 0], grid[:, 1])]
+        over = surface(tris[up], grid) - self.scene.ground(grid[:, 0], grid[:, 1])
+        self.assertGreater(float(np.nanmin(over)), 0.0)
+        nearest = lines.query_nearest(points, all_matches=False)
+        floor, reach = np.full(len(tops), np.inf), np.full(len(tops), np.inf)
+        floor[nearest[0]] = np.array([f for _, _, f in fronts])[nearest[1]]
+        reach[nearest[0]] = shapely.distance(np.array([line for line, _, _ in fronts], dtype=object)[nearest[1]],
+                                             points[nearest[0]])
+        door = reach <= small.FOOTWAY["door"]                                   # before the doors, under the floor
+        self.assertTrue(door.any())
+        self.assertLessEqual(float((tops[door, 1] - floor[door]).max()), -small.FOOTWAY["under"] + 1e-6)
+        kerb = sides.reshape(-1, 3)
+        self.assertLess(float((kerb[:, 1] - self.scene.ground(kerb[:, 0], kerb[:, 2])).min()), -0.1)
+        outlines = shapely.union_all(list(self.v.outlines.values()))
+        corners = sides.reshape(-1, 3)
+        near = shapely.dwithin(outlines, shapely.points(corners[:, [0, 2]]), small.FOOTWAY["clear"] - 0.001)
+        self.assertFalse(near.any(), corners[near][:3].round(2).tolist())
+
     @staticmethod
     def material(mesh, name):
         from materials import code
@@ -658,9 +783,40 @@ class VillageBuildTests(unittest.TestCase):
         gaps = np.linalg.norm(np.asarray(centres)[:, None] - np.asarray(centres)[None], axis=2)
         self.assertGreaterEqual(float((gaps + np.eye(len(centres)) * 1e9).min()), 15.0)
 
+    def test_at_night_the_high_street_shows_only_lit_upper_windows(self):
+        """HBP 27, as White Hound quotes it: "the darkness complete but for a few streetlamps and lit upper windows";
+        HBP 25: "Lights twinkled from windows over shops". No glass on a High Street building's ground floor glows at
+        dusk, neither its shop windows nor the Three Broomsticks', and some of its upper windows do."""
+        from materials import materials
+        glowing = np.array([m.code for m in materials() if m.glow])
+        upper_lit = 0
+        for (cid, part, asset), (group, shell, fittings) in self.shells.items():
+            pieces = [shell] + fittings
+            tris = np.concatenate([m.pos[m.idx] for m in pieces])
+            attr = np.concatenate([m.attr[m.idx[:, 0]] for m in pieces])
+            glows = (attr[:, None, :] == glowing[None]).all(axis=2).any(axis=1)
+            c = tris.mean(axis=1)
+            for u in (u for u in group if u.high):
+                walls = u.fp.frame.to_world(u.outline)
+                near = shapely.contains_xy(walls.buffer(0.6), c[:, 0], c[:, 2]) \
+                    & ~shapely.contains_xy(walls.buffer(-0.6), c[:, 0], c[:, 2])
+                ground = tris[:, :, 1].min(axis=1) < self.eave(u) - u.style.eaves + self.mv.STOREY_M
+                with self.subTest(component=cid, part=u.part, unit=u.k):
+                    self.assertFalse((glows & near & ground).any(), int((glows & near & ground).sum()))
+                upper_lit += int((glows & near & ~ground).sum())
+        self.assertGreater(upper_lit, 0)
+
     def test_streetlamps_are_cast_iron_on_stone_plinths_clear_of_the_buildings(self):
         """White Hound: "ornate Victorian cast-iron jobs". Each lamp's glass lantern stands on a cast-iron post over a
-        stone plinth sunk in the ground, clear of every building."""
+        stone plinth sunk in the ground, clear of every building; its lantern is framed in iron at its four corners, a
+        ladder bar runs across its post under the lantern, and a finial crowns its cap. Its glass is dark and shows the
+        sky at grazing angles, like the windows': as a pale, matt box it did not read as glass."""
+        import mesh_village_small as small
+        from materials import code, materials
+        glass = next(m for m in materials() if m.name == "lamp-glass").p3
+        alb = re.search(r"alb = vec3\(([^)]*)\)", glass).group(1)
+        self.assertLess(max(float(x) for x in re.findall(r"[\d.]+", alb)), 0.1)
+        self.assertIn("uSkyCol", glass)
         for m in self.lamps():
             c = m.pos[:, [0, 2]].mean(axis=0)
             g = float(self.scene.ground(*c))
@@ -671,6 +827,16 @@ class VillageBuildTests(unittest.TestCase):
                 self.assertGreater(len(iron), 0)
                 self.assertTrue(3.0 < float(glass[:, 1].min()) - g and float(glass[:, 1].max()) - g < 4.6)
                 self.assertGreater(min(o.distance(Point(c)) for o in self.v.outlines.values()), 0.5)
+                lo, hi = float(glass[:, 1].min()), float(glass[:, 1].max())
+                tris = m.pos[m.idx][(m.attr[m.idx] == code("black-iron")).all(axis=(1, 2))]
+                off = tris[:, :, [0, 2]] - c
+                framing = ((tris[:, :, 1].min(axis=1) < lo + 0.05) & (tris[:, :, 1].max(axis=1) > hi - 0.05)
+                           & (np.linalg.norm(off, axis=2).min(axis=1) > small.LAMP["lantern"] / math.sqrt(2) - 0.03))
+                turns = np.degrees(np.arctan2(*off[framing].mean(axis=1).T[::-1]))
+                self.assertEqual(len({round(float(x - turns[0]) / 90.0) % 4 for x in turns}), 4)    # all 4 corners
+                below = (iron[:, 1] < lo) & (iron[:, 1] > lo - 1.0)
+                self.assertGreater(float(np.linalg.norm(iron[below][:, [0, 2]] - c, axis=1).max()), 0.25)  # the bar
+                self.assertGreater(float(iron[:, 1].max()), hi + small.LAMP["cap_h"] + 0.05)   # a finial over the cap
 
     def test_the_shack_is_two_storeys_of_weatherboard_under_corrugated_iron(self):
         """White Hound's Shack: "a timber frame clad with weatherboarding", "possible that it has a corrugated-iron
@@ -698,13 +864,44 @@ class VillageBuildTests(unittest.TestCase):
         self.assertGreaterEqual(len(boards) // 2, 6)
         self.assertGreaterEqual(len(walls), 2)
 
+    def test_the_shacks_door_is_shut_and_boarded_across(self):
+        """White Hound: "all the entrances are sealed shut" (the decision "shack-character": its door is shut). The
+        Shack's door is no dark doorway: its leaf is planks, shaded as the boards over its windows are, standing in its
+        frame from the floor, and boards nailed across it stand proud of the front, reaching past the doorway on either
+        side."""
+        from materials import materials
+        u, shell, fittings = self.shack()
+        shading = {m.name: m.p3 for m in materials()}
+        self.assertEqual(shading[u.style.door], shading["boarding"])
+        for door in self.mv.DOORS:
+            self.assertEqual(len(self.faces(shell, door)), 0, door)
+        mid, out, (a, b) = self.front(u)
+        t = (b - a) / np.linalg.norm(b - a)
+        floor = self.mv.floor_level(self.scene, u) + self.mv.FLOOR_OVER_M
+        planks = self.faces(shell, u.style.door)
+        depth = (planks.mean(axis=1)[:, [0, 2]] - a) @ out
+        leaf = planks[(self.plan_normals(planks) @ out > 0.9) & (depth < 0.0) & (depth > -0.15)]
+        (lo, hi, bottom, top), = self.panes(leaf, a, t)
+        self.assertAlmostEqual(bottom, floor, delta=0.05)
+        self.assertGreater(top - bottom, 1.8)
+        nailed = 0
+        for m in fittings:
+            rel = m.pos[:, [0, 2]] - a
+            proud, along = rel @ out, rel @ t
+            nailed += bool(proud.min() > -0.01 and proud.max() < 0.12 and along.min() < lo - 0.1
+                           and along.max() > hi + 0.1 and m.pos[:, 1].min() > bottom and m.pos[:, 1].max() < top)
+        self.assertGreaterEqual(nailed, 2)
+
     def test_a_low_fence_rings_the_shacks_garden(self):
         """PoA 14: "as they leaned on the fence, looking up at it": a fence about a metre high rings the Shack's garden
-        a few metres out from its walls, broken only where a path runs through it."""
-        from materials import code
+        a few metres out from its walls, broken only where a path runs through it. It is two rails of dark, weathered
+        timber on posts: as one rail of pale boards it read from the tour as a wireframe box."""
+        from materials import materials
         u, _, fittings = self.shack()
-        fence = [m for m in fittings if (m.attr[0] == code("boarding")).all()]
+        fence = self.made_of(fittings, "fence-timber")
         self.assertTrue(fence)
+        alb = dict(next(m for m in materials() if m.name == "fence-timber").values)["alb"]
+        self.assertLess(max(float(x) for x in re.findall(r"[\d.]+", re.search(r"vec3\(([^)]*)\)", alb).group(1))), 0.1)
         pts = np.concatenate([m.pos for m in fence])
         house = u.fp.frame.to_world(u.outline)
         away = shapely.distance(house, shapely.points(pts[:, [0, 2]]))
@@ -715,6 +912,8 @@ class VillageBuildTests(unittest.TestCase):
         above = pts[:, 1] - self.scene.ground(pts[:, 0], pts[:, 2])
         self.assertLess(float(above.max()), 1.3)
         self.assertGreater(float(np.percentile(above, 90)), 0.8)
+        for low, high in ((0.3, 0.6), (0.85, 1.05)):                 # a rail at knee height and one at the top
+            self.assertTrue(((above > low) & (above < high)).any(), (low, high))
         for m in fence:
             tris = m.pos[m.idx]
             self.assertEqual(self.v.streets.road_share(tris.mean(axis=1)[:, [0, 2]]), 0.0)
@@ -869,7 +1068,10 @@ class VillageBuildTests(unittest.TestCase):
 
     def test_a_few_headstones_stand_in_the_kirkyard(self):
         """The user's choice also gives the kirkyard a few headstones: upright stone slabs in rows between the kirk and
-        its wall, on the nave's side away from its porch, clear of the kirk and of the paths."""
+        its wall, on the nave's side away from its porch, clear of the kirk and of the paths. They are old stones, no
+        two alike: they vary in height, width and facing, some lean, and they stand off their rows' lines and even
+        spacing, with gaps where a place has none (as twelve like slabs in even rows they read as placeholders)."""
+        import mesh_village_small as small
         from materials import code
         nave, porch, _, _ = self.kirk()
         kirk = shapely.union_all([u.fp.frame.to_world(u.outline) for u in (nave, porch)])
@@ -877,6 +1079,10 @@ class VillageBuildTests(unittest.TestCase):
         self.assertTrue(4 <= len(stones) <= 16, len(stones))
         middle = np.asarray(nave.fp.frame.to_world(nave.outline).centroid.coords[0])
         towards_porch = np.asarray(porch.fp.frame.to_world(porch.outline).centroid.coords[0]) - middle
+        a, b = max(plan.edges(nave.outline), key=lambda e: float(np.linalg.norm(e[1] - e[0])))
+        axis = nave.fp.frame.world(b) - nave.fp.frame.world(a)
+        axis /= np.linalg.norm(axis)
+        heights, widths, facings, outs, alongs, leans = [], [], [], [], [], []
         for m in stones:
             c = m.pos[:, [0, 2]].mean(axis=0)
             g = float(self.scene.ground(*c))
@@ -886,6 +1092,25 @@ class VillageBuildTests(unittest.TestCase):
                 self.assertTrue(0.5 < float(m.pos[:, 1].max()) - g < 1.3 and float(m.pos[:, 1].min()) < g)
                 self.assertLess(min(np.ptp(m.pos[:, 0]), np.ptp(m.pos[:, 2])), 0.8)
                 self.assertEqual(self.v.streets.road_share([c]), 0.0)
+            foot = m.pos[m.pos[:, 1] < g, :][:, [0, 2]]
+            top = m.pos[m.pos[:, 1] > float(m.pos[:, 1].max()) - 1e-6, :][:, [0, 2]]
+            along = np.linalg.svd(foot - foot.mean(axis=0), full_matrices=False)[2][0]     # its face's width
+            heights.append(float(m.pos[:, 1].max()) - g)
+            widths.append(float(np.ptp(foot @ along)))
+            facings.append(math.degrees(math.atan2(along[1], along[0])))
+            outs.append(kirk.distance(Point(foot.mean(axis=0))))
+            alongs.append(float((foot.mean(axis=0) - middle) @ axis))
+            leans.append(float(np.linalg.norm(top.mean(axis=0) - foot.mean(axis=0))))
+        turn = (np.asarray(facings) - facings[0] + 90.0) % 180.0 - 90.0
+        rows = np.abs(np.asarray(outs)[:, None] - np.asarray(small.HEADSTONE["out"])[None]).min(axis=1)
+        pitch = (np.asarray(alongs) - alongs[0]) % small.HEADSTONE["every"]
+        self.assertGreater(float(np.std(heights)), 0.08)
+        self.assertGreater(float(np.std(widths)), 0.05)
+        self.assertGreater(float(np.std(turn)), 3.0)
+        self.assertGreater(max(leans), 0.03)
+        self.assertGreater(float(np.mean(rows)), 0.05)                                  # off their rows' lines
+        self.assertGreater(float(np.mean(np.minimum(pitch, small.HEADSTONE["every"] - pitch))), 0.05)   # and spacing
+        self.assertLess(len(stones), small.HEADSTONE["rows"] * len(small.HEADSTONE["out"]))              # with gaps
 
     def gardens(self):
         """The garden walls and gates near the High Street (mesh_village_small), built once per test process."""
@@ -899,12 +1124,14 @@ class VillageBuildTests(unittest.TestCase):
         """The user's choice of Hogsmeade's small structures includes garden walls and gates near the High Street: in
         front of houses near it that stand back from their road, a low rubble wall runs along the road, clear of it and
         of every building, with a painted gate between stone piers straight in front of the house's door, a garden's
-        depth (GARDEN 'deep' less 'back') out from it."""
+        depth (GARDEN 'deep' less 'back') out from it. From both its ends the wall turns back to the house's front
+        corners, enclosing the garden: on its own, it stood on the lawn as a gate to nowhere."""
         import mesh_village_small as small
         gardens = self.gardens()
         self.assertGreaterEqual(len(gardens), 8)
         doors = np.concatenate([self.faces(shell, d) for _, shell, _ in self.shells.values() for d in self.mv.DOORS])
         doors = doors.mean(axis=1)[:, [0, 2]]
+        houses = [u for u in self.units() if not u.high and not u.party]
         for m in gardens:
             wall, gate, piers = (self.material(m, n) for n in ("rubble", "door-green", "pale-stone"))
             c = gate[:, [0, 2]].mean(axis=0)
@@ -916,12 +1143,15 @@ class VillageBuildTests(unittest.TestCase):
                 self.assertEqual(self.v.streets.road_share(m.pos[m.idx].mean(axis=1)[:, [0, 2]]), 0.0)
                 self.assertGreater(min(o.distance(Point(p)) for o in self.v.outlines.values()
                                        for p in m.pos[:, [0, 2]][::4]), 0.2)
-                along = wall[:, [0, 2]] - c
-                t = np.linalg.svd(along - along.mean(axis=0))[2][0]            # the wall's direction
+                along = gate[:, [0, 2]] - c
+                t = np.linalg.svd(along - along.mean(axis=0))[2][0]            # the wall's direction, along the gate
                 door = doors[np.argmin(np.linalg.norm(doors - c, axis=1))]
                 self.assertLess(float(np.linalg.norm(door - c)), 10.0)
                 self.assertGreater(float(np.linalg.norm(door - c)), small.GARDEN["deep"] - small.GARDEN["back"])
                 self.assertLess(abs(float((door - c) @ t)), 0.6)
+                house = min(houses, key=lambda u: LineString(self.front(u)[2]).distance(Point(door)))
+                for corner in self.front(house)[2]:
+                    self.assertLess(float(np.linalg.norm(wall[:, [0, 2]] - corner, axis=1).min()), 0.8)
 
     def named_units(self, asset):
         return [u for u in self.units() if u.asset == asset]
@@ -941,10 +1171,21 @@ class VillageBuildTests(unittest.TestCase):
                 and m.pos[:, 1].max() > above and np.ptp(m.pos[:, 0]) < 0.3 and np.ptp(m.pos[:, 2]) < 0.3
                 and np.ptp(m.pos[:, 1]) > 0.6]
 
+    def door_amid_windows(self, u, shell):
+        """(how far its front door's middle stands from its front's, the windows in its front left of the door, those
+        right of it)."""
+        _, a, b, n, length = self.walls(u)[u.front]
+        t = (b - a) / length
+        doors = np.concatenate([self.faces(shell, d) for d in self.mv.DOORS])
+        c = doors.mean(axis=1)[:, [0, 2]] - a
+        ((lo, hi, _, _),) = self.panes(doors[(c @ n < -0.05) & (c @ n > -0.3) & (c @ t > 0) & (c @ t < length)], a, t)
+        windows = self.tall_windows(u, shell)
+        return abs((lo + hi) / 2 - length / 2), sum(w[1] <= lo for w in windows), sum(w[0] >= hi for w in windows)
+
     def test_the_school_is_a_tall_schoolroom_with_a_bell_beside_its_schoolhouse(self):
         """White Hound's map has a primary school but no design of it (inferred): a tall one-storey schoolroom of rubble
         under slate, lit by tall windows, a bell turret on its free gable, where no chimney stands, beside a two-storey
-        schoolhouse."""
+        schoolhouse. The schoolroom's front is symmetrical: its door stands in its middle, as many windows either side."""
         units = self.named_units("school")
         room = max(units, key=lambda u: u.outline.area)
         self.assertEqual((room.style.storeys, room.style.wall, room.style.roof), (1.0, "rubble", "slate"))
@@ -953,6 +1194,9 @@ class VillageBuildTests(unittest.TestCase):
         windows = self.tall_windows(room, shell)
         self.assertGreaterEqual(len(windows), 3)
         self.assertTrue(all(top - bottom > 2.0 for _, _, bottom, top in windows))
+        off, left, right = self.door_amid_windows(room, shell)
+        self.assertLess(off, 0.2)
+        self.assertEqual(left, right)
         gables = [w for w in self.walls(room) if self.mv.roof_angles(room)[w[0]] >= 89.999 and w[0] not in room.party]
         bells = [(a + b) / 2 for _, a, b, _, _ in gables
                  if len(self.lantern_posts(fittings, (a + b) / 2, self.v.ridge(room))) >= 4]
@@ -961,7 +1205,9 @@ class VillageBuildTests(unittest.TestCase):
 
     def test_the_distillery_dries_its_malt_in_a_kiln_under_a_pagoda_roof(self):
         """White Hound's map has a whisky distillery but no design of it (inferred): whitewashed buildings under slate,
-        one a kiln under a steep pyramid roof crowned with a ventilator, the pagoda of a Highland distillery."""
+        one a kiln under a steep pyramid roof crowned with a ventilator, the pagoda of a Highland distillery. The
+        ventilator is louvred: on each of its sides slats stand one over another before its dark inside, under a slate
+        cap."""
         units = self.named_units("distillery")
         (kiln,) = [u for u in units if u.style.family == "kiln"]
         for u in units:
@@ -975,21 +1221,37 @@ class VillageBuildTests(unittest.TestCase):
         inside = kiln.fp.frame.to_world(kiln.outline).buffer(-0.3)
         self.assertFalse([c for c, _, _ in self.stacks(shell) if inside.contains(Point(c))])   # its smoke is vented
         top, ridge = kiln.fp.frame.world(np.asarray(kiln.outline.centroid.coords[0])), self.v.ridge(kiln)
-        (vent,) = [m for m in self.made_of(fittings, "boarding") if np.linalg.norm(m.pos[:, [0, 2]].mean(axis=0) - top)
-                   < 2.5 and m.pos[:, 1].max() > ridge + 0.5]
+        vent = [m for m in fittings if np.linalg.norm(m.pos[:, [0, 2]].mean(axis=0) - top) < 2.5
+                and m.pos[:, 1].max() > ridge]
+        (core,) = [m for m in vent if len(self.material(m, "plinth-dark")) == len(m.pos)]
         _, a, b, n, length = self.walls(kiln)[kiln.front]
-        across = np.ptp(vent.pos[:, [0, 2]] @ n)
-        self.assertLess(float(vent.pos[:, 1].min()), ridge - across / 2 * math.tan(math.radians(kiln.style.pitch)))
+        across = np.ptp(core.pos[:, [0, 2]] @ n)
+        self.assertLess(float(core.pos[:, 1].min()), ridge - across / 2 * math.tan(math.radians(kiln.style.pitch)))
+        middle, t = core.pos[:, [0, 2]].mean(axis=0), (b - a) / length
+        slats = {}
+        for m in self.made_of(vent, "boarding"):
+            d = m.pos[:, [0, 2]].mean(axis=0) - middle
+            if np.ptp(m.pos[:, 1]) < 0.2 and np.linalg.norm(d) > across / 2:     # a slat out on one of its sides
+                side = int(round(math.degrees(math.atan2(float(d @ t), float(d @ n))) / 90.0)) % 4
+                slats.setdefault(side, set()).add(round(float(m.pos[:, 1].mean()), 2))
+        self.assertEqual(len(slats), 4)
+        self.assertTrue(all(len(heights) >= 3 for heights in slats.values()), slats)
+        (cap,) = [m for m in vent if len(self.material(m, "village-slate")) == len(m.pos)]      # under a slate cap
+        self.assertGreaterEqual(float(cap.pos[:, 1].min()), float(core.pos[:, 1].max()) - 0.01)
+        self.assertGreater(float(np.ptp(cap.pos[:, [0, 2]] @ n)), across)
 
     def test_the_village_hall_is_lit_by_tall_windows(self):
         """White Hound's map has a village hall but no design of it (inferred): a tall one-storey hall under slate, its
-        door in the middle of its front between tall windows, and tall windows along its back."""
+        door in the middle of its front between tall windows, as many either side, and tall windows along its back."""
         hall = max(self.named_units("village-hall"), key=lambda u: u.outline.area)
         self.assertEqual((hall.style.storeys, hall.style.roof), (1.0, "slate"))
         _, shell, _ = self.shells[(hall.cid, hall.part, "village-hall")]
         windows = self.tall_windows(hall, shell)
         self.assertGreaterEqual(len(windows), 2)
         self.assertTrue(all(top - bottom > 2.0 for _, _, bottom, top in windows))
+        off, left, right = self.door_amid_windows(hall, shell)
+        self.assertLess(off, 0.2)
+        self.assertEqual(left, right)
         _, a, b, n, length = self.walls(hall)[hall.front]
         doors = np.concatenate([self.faces(shell, d) for d in self.mv.DOORS])
         depth, along = (doors.mean(axis=1)[:, [0, 2]] - a) @ n, (doors.mean(axis=1)[:, [0, 2]] - a) @ (b - a) / length
@@ -1003,7 +1265,8 @@ class VillageBuildTests(unittest.TestCase):
 
     def test_the_carriage_hangar_is_one_long_shed_with_carriage_doors(self):
         """White Hound's map has a hangar for the Thestral-drawn carriages but no design of it (inferred): one long
-        weatherboarded shed under slate, its front a row of doors wide and high enough for a carriage."""
+        weatherboarded shed under slate, its front a row of doors wide and high enough for a carriage, each reaching
+        down to the ground before it, with no band of wall under it for a carriage to clear."""
         (shed,) = self.named_units("carriage-hangar")
         self.assertEqual((shed.style.wall, shed.style.roof), ("weatherboard", "slate"))
         _, shell, _ = self.shells[(shed.cid, shed.part, "carriage-hangar")]
@@ -1013,9 +1276,10 @@ class VillageBuildTests(unittest.TestCase):
         wide = self.panes(doors[(depth < -0.05) & (depth > -0.3)], a, (b - a) / length)
         self.assertGreaterEqual(len(wide), 4)
         self.assertTrue(all(hi - lo > 2.8 and top - bottom > 3.0 for lo, hi, bottom, top in wide))
-        for lo, hi, bottom, _ in wide:                       # a carriage rolls in: each opens at the ground before it
-            p = a + (b - a) / length * (lo + hi) / 2 + n * 0.6
-            self.assertLess(bottom - float(self.scene.ground(*p)), 0.35)
+        for lo, hi, bottom, _ in wide:                       # a carriage rolls in: each reaches the ground before it
+            t = (b - a) / length
+            ground = [float(self.scene.ground(*(a + t * s + n * 0.3))) for s in np.linspace(lo, hi, 5)]
+            self.assertLessEqual(bottom, min(ground) + 0.01)
         self.assertEqual(self.stacks(shell), [])
 
     def shop(self, asset):
@@ -1030,8 +1294,10 @@ class VillageBuildTests(unittest.TestCase):
 
     def test_the_post_office_has_an_owl_loft_astride_its_ridge(self):
         """OotP 16: "the post office, from which owls issued at regular intervals". A weatherboarded owl loft stands
-        along the middle of the post office's longest ridge, reaching down to meet the roof's slopes, with a row of
-        flight holes over the roof along each of its long sides."""
+        along the post office's highest ridge, as near the middle of its front as that ridge lets it stand, reaching
+        down to meet the roof's slopes, with a row of flight holes over the roof along each of its long sides. The
+        post office's plan is an L, and its highest ridge covers only the deep part of its front: in that ridge's
+        middle, the loft stood by the gable it shares, 3.4 m off its front's middle."""
         u, shell, fittings = self.shop("post-office")
         ridge = self.v.ridge(u)
         (loft,) = [m for m in self.made_of(fittings, "weatherboard") if m.pos[:, 1].max() > ridge + 1.0]
@@ -1044,8 +1310,10 @@ class VillageBuildTests(unittest.TestCase):
         across = np.array([-d[1], d[0]])
         xz = loft.pos[:, [0, 2]]
         mid = xz.mean(axis=0)
+        half, span = float(np.ptp(xz @ d)) / 2, float(np.linalg.norm(q - p))
+        front = float((self.front(u)[0] - p) @ d)                              # the front's middle, along the ridge
         self.assertLess(LineString([p, q]).distance(Point(mid)), 0.3)
-        self.assertLess(abs(float((mid - (p + q) / 2) @ d)), 0.5)
+        self.assertLess(abs(float((mid - p) @ d) - min(max(front, half), span - half)), 0.1)
         self.assertGreater(np.ptp(xz @ d), np.ptp(xz @ across))
         reach = ridge - np.ptp(xz @ across) / 2 * math.tan(math.radians(u.style.pitch))
         self.assertLess(float(loft.pos[:, 1].min()), reach)
@@ -1085,7 +1353,11 @@ class VillageBuildTests(unittest.TestCase):
         """OotP 25: "a small teashop that Harry had never noticed before. It was a cramped, steamy little place where
         everything seemed to have been decorated with frills or bows. Harry was reminded unpleasantly of Umbridge's
         office." Its front is harled pink, and a misted pane stands in front of the glass of each of its shop windows,
-        and of nothing else."""
+        and of nothing else. Shut at night like the High Street's shops, it is dark: neither its misted panes nor the
+        shop glass behind them glows."""
+        from materials import materials
+        glow = {m.name: m.glow for m in materials()}
+        self.assertEqual((glow["glass-steamed"], glow["glass-shop"]), (None, None))
         u, shell, fittings = self.shop("puddifoots")
         self.assertEqual(u.style.wall, "harl-pink")
         _, a, b, n, length = self.walls(u)[u.front]
@@ -1128,7 +1400,8 @@ class VillageBuildTests(unittest.TestCase):
     def test_dervish_and_banges_hangs_out_a_bracket_clock(self):
         """PoA 5: "They sell that sort of thing in Dervish and Banges, magical instruments and stuff". Like an
         instrument maker's, it hangs a clock out over the pavement on an iron bracket, over its shopfront and under its
-        eaves: a white face on either side of a drum, looking up and down the street."""
+        eaves: a white face on either side of a drum, looking up and down the street, each with iron hands and hour
+        marks, and each reading ten past (ten) as seen from its own side."""
         u, shell, fittings = self.shop("dervish-and-banges")
         _, a, b, n, length = self.walls(u)[u.front]
         t = (b - a) / length
@@ -1148,13 +1421,37 @@ class VillageBuildTests(unittest.TestCase):
                    if ((m.pos[:, [0, 2]] - a) @ n).min() < 0.05 and ((m.pos[:, [0, 2]] - a) @ n).max() > 0.3
                    and abs(float(m.pos[:, 1].mean()) - (c[0][1] + c[1][1]) / 2) < 0.3]
         self.assertTrue(bracket)
+        planes = [float(((m.pos[:, [0, 2]] - a) @ t).mean()) for m in faces]
+        for m, plane in zip(faces, planes):                    # its hands and hour marks, in iron on the face
+            outward = np.sign(plane - sum(planes) / 2)
+            centre = np.array([float(((m.pos[:, [0, 2]] - a) @ n).mean()), float(m.pos[:, 1].mean())])
+            radius = float(np.ptp(m.pos[:, 1])) / 2
+            marks = []
+            for piece in self.made_of(fittings, "black-iron"):
+                x = piece.pos[:, [0, 2]] - a
+                lies = np.hypot(x @ n - centre[0], piece.pos[:, 1] - centre[1])
+                over = (x @ t - plane) * outward
+                if lies.max() < radius and over.min() > -0.001 and over.max() < 0.02:
+                    marks.append(piece)
+            size = lambda piece: max(np.ptp((piece.pos[:, [0, 2]] - a) @ n), np.ptp(piece.pos[:, 1]))
+            with self.subTest(face=round(plane, 2)):
+                self.assertGreaterEqual(len(marks), 6)                       # two hands and four hour marks
+                self.assertGreater(max(map(size, marks)), 0.2)
+                hand = max(marks, key=size)                                  # the minute hand reads ten past...
+                x = hand.pos[:, [0, 2]] - m.pos[:, [0, 2]].mean(axis=0)
+                tip = int(np.argmax(np.hypot(np.linalg.norm(x, axis=1), hand.pos[:, 1] - centre[1])))
+                looks = -outward * t                                         # ...as seen from this face's side: the
+                right = float(x[tip] @ np.array([looks[1], -looks[0]]))      # world (x east, z north) is left-handed
+                turn = math.degrees(math.atan2(right, float(hand.pos[tip, 1]) - centre[1])) % 360.0
+                self.assertLess(abs(turn - 60.0), 20.0)
 
     def test_every_door_opens_on_its_buildings_front_at_its_floor(self):
         """Every building but an outshot has a door in its front wall, at its floor; each of its front doors stands
         clear of the ground before it, and if raised has steps up to it: a block that rises from the ground before the
-        door to its sill. The kirk's nave is entered through its porch."""
+        door to its sill. The kirk's nave is entered through its porch; the carriage hangar's doors reach down into the
+        ground instead, so a carriage can roll in (test_the_carriage_hangar_is_one_long_shed_with_carriage_doors)."""
         for (cid, part, asset), (group, shell, fittings) in self.shells.items():
-            doors = np.concatenate([self.faces(shell, d) for d in self.mv.DOORS])
+            doors = np.concatenate([self.faces(shell, d) for d in sorted(set(self.mv.DOORS) | {u.style.door for u in group})])
             blocks = [(shapely.convex_hull(shapely.multipoints(m.pos[:, [0, 2]])), float(m.pos[:, 1].min()),
                        float(m.pos[:, 1].max())) for m in fittings if len(m.pos)]
             for u in group:
@@ -1168,7 +1465,7 @@ class VillageBuildTests(unittest.TestCase):
                 on = (depth < -0.05) & (depth > -0.3) & (along > 0) & (along < length)
                 with self.subTest(component=cid, part=u.part, unit=u.k):
                     self.assertTrue(on.any(), "no door recessed in the front wall")
-                    for lo, hi, sill, _ in self.panes(doors[on], a, t):
+                    for lo, hi, sill, _ in self.panes(doors[on], a, t) if u.style.family != "hangar" else ():
                         p = a + t * (lo + hi) / 2 + out * 0.6
                         g = float(self.scene.ground(*p))
                         self.assertGreater(sill - g, 0.05)                                  # never buried
@@ -1311,6 +1608,40 @@ class VillageBuildTests(unittest.TestCase):
                     with self.subTest(component=cid, part=u.part, unit=u.k, edge=k):
                         self.assertLessEqual(len(self.spans(glass[on], wa, t)), 1)
 
+    def test_a_long_free_side_wall_has_a_window(self):
+        """A house's free side walls under its eaves, neither its front nor its back, are lit: one at least SIDE_M long
+        has a window on each storey under its eaves for about every SIDE_M of its length, as far as its bays with room
+        before them go. Inspection found a gable-fronted villa's long two-storey flank, the face the flyover sees most,
+        blank, which read as a barn rather than a house."""
+        for (cid, part, asset), (group, shell, _) in self.shells.items():
+            glass = np.concatenate([self.faces(shell, g) for g in self.mv.GLASS])
+            facing = self.plan_normals(glass) if len(glass) else np.zeros((0, 2))
+            c = glass.mean(axis=1)[:, [0, 2]] if len(glass) else np.zeros((0, 2))
+            for u in group:
+                if u.asset in self.mv.NAMED or u.style.family == "outshot":
+                    continue
+                f = u.fp.frame
+                edges, angles = plan.edges(u.outline), self.mv.roof_angles(u)
+                ahead = plan.outward(*edges[u.front])
+                is_open = self.v.opener(f, u.outline)
+                upper = self.mv.floor_level(self.scene, u) + self.mv.FLOOR_OVER_M + self.mv.STOREY_M
+                for k, (a, b) in enumerate(edges):
+                    length = float(np.linalg.norm(b - a))
+                    if (k in u.party or k == u.front or angles[k] >= 89.999 or length < self.SIDE_M
+                            or abs(float(plan.outward(a, b) @ ahead)) > 0.5):
+                        continue
+                    room = sum(is_open(k, s, 1.0) for s in self.mv.bays(length)[0])
+                    wa, wb = f.world(a), f.world(b)
+                    t = (wb - wa) / length
+                    out = f.world((a + b) / 2 + plan.outward(a, b)) - f.world((a + b) / 2)
+                    rel = c - wa
+                    on = (facing @ out > 0.9) & (np.abs(rel @ out) < 0.5) & (rel @ t > 0) & (rel @ t < length)
+                    high = glass[:, :, 1].min(axis=1) > upper
+                    for storey, sel in enumerate([on & ~high] + ([on & high] if u.style.storeys >= 2.0 else [])):
+                        with self.subTest(component=cid, part=u.part, unit=u.k, edge=k, storey=storey):
+                            self.assertGreaterEqual(len(self.spans(glass[sel], wa, t)),
+                                                    min(max(1, round(length / self.SIDE_M)), room))
+
     def neighbour_tris(self, cid, part, asset, reach=4.0):
         """The triangles of every other built shell within `reach` of this one."""
         if "_boxes" not in type(self).__dict__:
@@ -1344,13 +1675,23 @@ class VillageBuildTests(unittest.TestCase):
         self.assertLessEqual(flat, 0.0005 * total)
 
     def test_every_normal_is_a_unit_vector(self):
-        """Every corner of every shell and fitting carries a finite unit normal, thatch smoothed or not: a triangle
-        with no area has no normal to give its corners."""
+        """Every corner of every shell and fitting carries a finite unit normal: a triangle with no area has no normal
+        to give its corners."""
         for (cid, part, asset), (group, shell, fittings) in self.shells.items():
             for k, m in enumerate([shell] + fittings):
                 length = np.linalg.norm(m.nrm, axis=1)
                 with self.subTest(component=cid, asset=asset, piece=k):
                     self.assertTrue(np.all(np.abs(length - 1.0) < 1e-6), int((~(np.abs(length - 1.0) < 1e-6)).sum()))
+
+    def test_every_corner_of_a_shell_triangle_carries_its_one_normal(self):
+        """A shell is flat-shaded: its triangles' corners carry one normal each, exactly. The payload rounds normals to
+        int8, and corners differing at all may round apart, swinging the thatch's straw streaks, which run across its
+        normal from the world's origin (VillageMeshOracleTests)."""
+        for (cid, part, asset), (group, shell, _) in self.shells.items():
+            n = shell.nrm[shell.idx]
+            differ = ~np.all(n == n[:, :1], axis=(1, 2))
+            with self.subTest(component=cid, asset=asset):
+                self.assertFalse(differ.any(), int(differ.sum()))
 
     def test_no_shell_triangle_is_a_sliver(self):
         """No triangle of a building's shell is thinner than SLIVER_M, which 16-bit quantization could turn over."""
@@ -1592,7 +1933,11 @@ class VillageBuildTests(unittest.TestCase):
 
     def test_honeydukes_windows_are_mullioned(self):
         """PoA 10: "nodding through the mullioned windows". Every window in Honeydukes' front, the shop's and those of
-        the owners' rooms over it, is divided by a narrow upright bar standing in it from sill to head."""
+        the owners' rooms over it, is divided by a narrow upright bar standing in it from sill to head. Its shop
+        windows' lights are plain glass: a plain pane stands before each one's glass, behind the mullions, so no
+        painted glazing bar runs beside a mullion. The owners' windows keep their own glass, lit at dusk as the village's
+        upper windows are (village-night-windows): the plain panes are opaque, and before them kept those windows
+        dark."""
         (u,) = [u for u in self.units() if u.asset == "honeydukes"]
         _, shell, fittings = self.shells[(u.cid, u.part, "honeydukes")]
         _, out, (a, b) = self.front(u)
@@ -1606,10 +1951,16 @@ class VillageBuildTests(unittest.TestCase):
             along, inside = (m.pos[:, [0, 2]] - a) @ t, (m.pos[:, [0, 2]] - a) @ out
             if np.ptp(along) < 0.15 and inside.max() < 0.0 and inside.min() > -0.3:
                 bars.append((along.min(), along.max(), m.pos[:, 1].min(), m.pos[:, 1].max()))
+        panes = [((m.pos[:, [0, 2]] - a) @ t, m.pos[:, 1]) for m in self.made_of(fittings, "glass-plain")]
+        upstairs = self.eave(u) - u.style.eaves + self.mv.STOREY_M
+        self.assertTrue([w for w in windows if w[2] >= upstairs] and [w for w in windows if w[2] < upstairs])
         for lo, hi, bottom, top in windows:
             with self.subTest(window=(round((lo + hi) / 2, 1), round(bottom, 1))):
                 self.assertTrue(any(lo < b0 and b1 < hi and z0 <= bottom + 0.05 and z1 >= top - 0.05
                                     for b0, b1, z0, z1 in bars))
+                covered = any(s.min() <= lo + 0.02 and s.max() >= hi - 0.02 and y.min() <= bottom + 0.02
+                              and y.max() >= top - 0.02 for s, y in panes)
+                self.assertEqual(covered, bottom < upstairs)
 
     def test_no_opening_cuts_into_its_eaves(self):
         """An opening's cut stays inside its wall: no downward face of anything but roofing stands out from a wall
@@ -1764,16 +2115,107 @@ class VillageBuildTests(unittest.TestCase):
                     self.assertTrue(ok)
 
     def test_chimney_stacks_clear_the_roofs_round_them(self):
-        """Every stack's top stands at least 0.6 m above any roof within 2.3 m of it, so smoke clears the ridge beside
-        it."""
+        """Every stack's top stands at least 0.6 m above any roof within 2.3 m of it, its own buildings' or a
+        neighbour's, eaves and verges included, so smoke clears the ridge beside it."""
+        if "_roofs" not in type(self).__dict__:
+            found = np.concatenate([self.faces(s, r) for _, s, _ in self.shells.values() for r in self.mv.ROOFING])
+            type(self)._roofs = found, found[:, :, [0, 2]].min(axis=1), found[:, :, [0, 2]].max(axis=1)
+        roof, lo, hi = self._roofs
         for (cid, part, asset), (group, shell, _) in self.shells.items():
-            roof = np.concatenate([self.faces(shell, r) for r in self.mv.ROOFING])
-            rc = roof.mean(axis=1)
             for c, top, _ in self.stacks(shell):
-                near = roof[np.hypot(rc[:, 0] - c[0], rc[:, 2] - c[1]) < 2.3]
+                near = np.all((lo <= c + 2.3) & (hi >= c - 2.3), axis=1)
                 with self.subTest(component=cid, asset=asset, stack=tuple(np.round(c, 1))):
-                    if len(near):
-                        self.assertGreaterEqual(top, float(near[:, :, 1].max()) + 0.6)
+                    self.assertGreaterEqual(top, self.highest_within(roof[near], c, 2.3) + 0.6)
+
+    def test_every_house_has_a_chimney(self):
+        """Every dwelling of 20 m² or more that may carry stacks has one: on a gable, on a party wall it shares, or over
+        its ridge. At a T, where only the building whose end meets the other's side takes the wall for a party wall,
+        a house used to leave the stack to its neighbour, which built none."""
+        stacks = {}
+        for (cid, part, asset), (group, shell, _) in self.shells.items():
+            stacks.setdefault((cid, part), []).extend(c for c, _, _ in self.stacks(shell))
+        for u in self.units():
+            if u.outline.area < 20.0 or u.asset == "kirk" or u.style.family in ("outshot", "kiln", "hangar"):
+                continue
+            standing = u.fp.frame.to_world(u.outline).buffer(0.05)
+            with self.subTest(component=u.cid, part=u.part, unit=u.k):
+                self.assertTrue(any(standing.contains(Point(c)) for c in stacks.get((u.cid, u.part), [])))
+
+    @staticmethod
+    def highest_within(tris, c, r):
+        """The highest point of triangles `tris` (n, 3, 3, world) within r of the world point c (x, z), seen from
+        above, or -inf: a planar triangle's is one of its corners inside the circle or a point of the circle over it."""
+        corners = tris.reshape(-1, 3)
+        inside = np.hypot(corners[:, 0] - c[0], corners[:, 2] - c[1]) <= r
+        best = float(corners[inside, 1].max()) if inside.any() else -math.inf
+        a = np.linspace(0.0, 2.0 * math.pi, 1440, endpoint=False)
+        rim = np.asarray(c, np.float64) + r * np.column_stack([np.cos(a), np.sin(a)])
+        p0 = tris[:, 0, [0, 2]]
+        e1, e2 = tris[:, 1, [0, 2]] - p0, tris[:, 2, [0, 2]] - p0
+        den = e1[:, 0] * e2[:, 1] - e1[:, 1] * e2[:, 0]
+        keep = np.abs(den) > 1e-12                                  # upright faces have no plan area
+        d = rim[None] - p0[keep][:, None]
+        u = (d[..., 0] * e2[keep][:, None, 1] - d[..., 1] * e2[keep][:, None, 0]) / den[keep][:, None]
+        w = (e1[keep][:, None, 0] * d[..., 1] - e1[keep][:, None, 1] * d[..., 0]) / den[keep][:, None]
+        y = tris[keep][:, :, 1]
+        z = y[:, :1] + u * (y[:, 1:2] - y[:, :1]) + w * (y[:, 2:] - y[:, :1])
+        over = (u >= -1e-9) & (w >= -1e-9) & (u + w <= 1.0 + 1e-9)
+        return max(best, float(z[over].max())) if over.any() else best
+
+    def test_no_stack_stands_far_above_the_roof_it_rises_from(self):
+        """A stack rises out of its roof by little more than it clears its ridge: its top stands at most FREE_M above
+        the highest roof under its top (inset a tenth from its edges), of whichever buildings of its footprint part
+        stand there, so none reads as a pillar. Inspection found stacks carried up beside a taller neighbour's roof to
+        clear its ridge, up to three times their cottage's height, and Madam Puddifoot's carried up in front of her own
+        slope."""
+        for (cid, part, asset), (group, shell, _) in self.shells.items():
+            frame = group[0].fp.frame
+            mates = [u for u in self.v.units[cid] if u.part == part]
+            for c, top, corners in self.stacks(shell):
+                ends = list(corners) + [(p + q) / 2 for i, p in enumerate(corners) for q in corners[i + 1:]]
+                pts = frame.plan(np.array([c] + [c + 0.9 * (e - c) for e in ends]))
+                roof = np.full(len(pts), -np.inf)
+                for u in mates:
+                    roof = np.maximum(roof, self.v.attic(u)(pts) + self.eave(u))
+                with self.subTest(component=cid, asset=asset, stack=tuple(np.round(c, 1))):
+                    self.assertLessEqual(top - float(roof.max()), self.FREE_M)
+
+    def party_roof(self, mates, pts, across):
+        """The highest roof of the buildings `mates` 2 cm either side of a wall running across `across`, at plan points
+        `pts` along it."""
+        found = np.full(len(pts), -np.inf)
+        for side in (-0.02, 0.02):
+            for u in mates:
+                found = np.maximum(found, self.v.attic(u)(pts + side * across) + self.eave(u))
+        return found
+
+    def test_a_party_stack_stands_where_the_roofs_over_its_wall_rise_highest(self):
+        """A stack on a party wall straddles it where the roofs over the wall rise highest, of the places along the
+        stretch its two buildings share where a stack fits: on the taller one's apex, not in front of its slope (the
+        decision of where it stands is the same from either side, so it is built once). Nowhere it could stand do the
+        roofs over the wall rise more than a few centimetres higher."""
+        room = self.mv.STACK["along"] / 2 + self.mv.STACK["spare"] + 0.05
+        for (cid, part, asset), (group, shell, _) in self.shells.items():
+            mates = [u for u in self.v.units[cid] if u.part == part]
+            frame = group[0].fp.frame
+            for c, _, _ in self.stacks(shell):
+                p = frame.plan(np.asarray(c)[None])[0]
+                for u in mates:
+                    for e in sorted(u.party):
+                        a, b = plan.edges(u.outline)[e]
+                        others = shapely.union_all([w.outline for w in mates if w is not u]).buffer(0.05)
+                        stretch = LineString([a, b]).intersection(others)
+                        parts = [g for g in getattr(stretch, "geoms", [stretch])
+                                 if g.geom_type == "LineString" and g.distance(Point(p)) < 0.05 and g.length >= 2 * room]
+                        if LineString([a, b]).distance(Point(p)) > 0.05 or not parts:
+                            continue
+                        q0, q1 = (np.asarray(parts[0].coords[i]) for i in (0, -1))
+                        t = (q1 - q0) / np.linalg.norm(q1 - q0)
+                        across = np.array([-t[1], t[0]])
+                        s = np.arange(room, np.linalg.norm(q1 - q0) - room + 1e-9, 0.05)
+                        highest = float(self.party_roof(mates, q0 + np.outer(s, t), across).max())
+                        with self.subTest(component=cid, asset=asset, stack=tuple(np.round(c, 1)), wall=e):
+                            self.assertGreaterEqual(float(self.party_roof(mates, p[None], across)[0]), highest - 0.08)
 
     def test_the_baseline_roofer_builds_every_building(self):
         """With the in-repo roofer in place of CGAL, every building still builds, with its skin."""
@@ -1922,6 +2364,20 @@ def plan_triangles(meshes):
     return shapely.polygons(np.concatenate([tris, tris[:, :1]], axis=1))
 
 
+def surface(tris, xz):
+    """The height of the triangles `tris` (t, 3, 3) facing upward over each world (x, z) point of `xz`, interpolated in
+    the first one over it, or NaN where none is."""
+    tree = shapely.STRtree(shapely.polygons(np.concatenate([tris, tris[:, :1]], axis=1)[:, :, [0, 2]]))
+    found = tree.query(shapely.points(xz), predicate="intersects")
+    out = np.full(len(xz), np.nan)
+    for i, j in zip(*found):
+        if np.isnan(out[i]):
+            a, b, c = tris[j]
+            w = np.linalg.solve(np.column_stack([(b - a)[[0, 2]], (c - a)[[0, 2]]]), xz[i] - a[[0, 2]])
+            out[i] = a[1] + w[0] * (b - a)[1] + w[1] * (c - a)[1]
+    return out
+
+
 def areas(mesh, rows):
     """The areas of a mesh's triangles `rows` (a mask or indices)."""
     tris = mesh.pos[mesh.idx[rows]]
@@ -1990,13 +2446,17 @@ class VillageLodTests(unittest.TestCase):
 
     def test_each_level_costs_a_fraction_of_the_full_village(self):
         """With the small structures it keeps, lod1 costs at most 0.42 of the full village's triangles, lod2 0.2 and the
-        shadow caster 0.13."""
+        shadow caster 0.13, the High Street's footway aside, which every level keeps as built, and the caster's lamps,
+        which it keeps as built for their shadows: they thin nothing."""
+        import mesh_village_small as small
+        way = sum(len(m.idx) for m in small.footway(self.v))
+        lamps = sum(len(m.idx) for m in small.lamps(self.v))
         tris = {name: sum(len(m.idx) for m in self.whole[name])
-                + sum(len(m.idx) for ms in self.v.small(self.mv.LEVELS[name]).values() for m in ms)
+                + sum(len(m.idx) for ms in self.v.small(self.mv.LEVELS[name]).values() for m in ms) - way
                 for name in self.mv.LEVELS}
         self.assertLessEqual(tris["lod1"], 0.42 * tris["lod0"])
         self.assertLessEqual(tris["lod2"], 0.2 * tris["lod0"])
-        self.assertLessEqual(tris["shadow"], 0.13 * tris["lod0"])
+        self.assertLessEqual(tris["shadow"] - lamps, 0.13 * tris["lod0"])
 
     def test_coarser_levels_keep_each_buildings_silhouette(self):
         """Seen from the east, the north and above, each building group's lod1 and lod2 cover at least 0.8 of what they
@@ -2254,18 +2714,25 @@ class VillageLodTests(unittest.TestCase):
                     self.assertTrue(all(m.pos.tobytes() in full for m in pieces))
         self.assertEqual(casting, {"gladrags", "shrieking-shack"})
 
-    def test_lod1_and_the_shadow_caster_keep_the_kirkyard_and_garden_walls_and_lod2_no_small_structures(self):
+    def test_lod1_and_the_shadow_caster_keep_the_kirkyard_and_garden_walls_and_every_level_the_footway(self):
         """Of the small structures, lod1 keeps the kirkyard's wall and the gardens' walls and gates as built, but not the
-        lamps or the headstones; the shadow caster keeps the kirkyard's wall as built and, for each garden's wall and
-        gate, one slab along them (garden_walls(whole=True)), for they cast shadows of their own beyond the eaves;
-        lod2 keeps none."""
+        lamps or the headstones; the shadow caster keeps the lamps and the kirkyard's wall as built and, for each
+        garden's wall and gate, one slab along each of its three runs, before the house and back to either front corner
+        (garden_walls(whole=True)), for they cast shadows of their own beyond the eaves; lod2 keeps none of these. The
+        page's static shadow layers draw a group's caster wherever it has one, and the lamps share their groups with the
+        footway, so a lamp the caster left out would cast no shadow there: its post is a narrow part those layers draw
+        as lines. Every level keeps the High Street's footway as built: a pale strip along the street, it would pop out
+        of view where a level left it out, and in the shadow caster it keeps every part seen from above covered."""
         import mesh_village_small as small
         from materials import code
         full = self.v.small(self.mv.LEVELS["lod0"])
         kirkyard = [m for m in full["kirk"] if (m.attr == code("rubble")).all()]
         stand_ins = small.garden_walls(self.v, whole=True)
-        for name, expected in (("lod1", {"street-furniture": [], "kirk": kirkyard, self.mv.HOUSE: full[self.mv.HOUSE]}),
-                               ("shadow", {"street-furniture": [], "kirk": kirkyard, self.mv.HOUSE: stand_ins})):
+        way = small.footway(self.v)
+        for name, expected in (("lod1", {"street-furniture": way, "kirk": kirkyard, self.mv.HOUSE: full[self.mv.HOUSE]}),
+                               ("shadow", {"street-furniture": full["street-furniture"], "kirk": kirkyard,
+                                           self.mv.HOUSE: stand_ins}),
+                               ("lod2", {"street-furniture": way, "kirk": [], self.mv.HOUSE: []})):
             found = self.v.small(self.mv.LEVELS[name])
             self.assertEqual(set(found), set(expected))
             for asset, pieces in expected.items():
@@ -2274,10 +2741,10 @@ class VillageLodTests(unittest.TestCase):
                     for m, m2 in zip(found[asset], pieces):
                         self.assertEqual(m.pos.tobytes(), m2.pos.tobytes())
                         self.assertEqual(m.attr.tobytes(), m2.attr.tobytes())
-        self.assertTrue(kirkyard and len(kirkyard) < len(full["kirk"]))
+        self.assertTrue(kirkyard and len(kirkyard) < len(full["kirk"]) and way)
+        self.assertEqual(len(full["street-furniture"]), len(small.lamps(self.v)) + len(way))
         self.assertEqual(len(stand_ins), len(full[self.mv.HOUSE]))
-        self.assertTrue(all(len(m.idx) == 10 for m in stand_ins))
-        self.assertFalse([m for ms in self.v.small(self.mv.LEVELS["lod2"]).values() for m in ms])
+        self.assertTrue(all(len(m.idx) == 3 * 10 for m in stand_ins))
 
     def test_levels_gather_every_built_footprint_and_the_small_structures_at_each_level(self):
         """mesh_village.levels(village) holds, for each level, every built footprint's pieces at that level and the
@@ -2519,6 +2986,38 @@ class VillageSmallTests(unittest.TestCase):
         seen = lambda m: shapely.union_all(plan_triangles([m]))
         wider = 2 * (small.GARDEN["pier"] - small.GARDEN["thick"]) * small.GARDEN["pier"]     # the two piers' sides
         self.assertLess(seen(wall).difference(seen(slab)).area, wider + 1e-6)
+
+    def test_a_gardens_stand_in_has_a_slab_round_each_of_its_runs(self):
+        """With a return run back from beside the wall's end, on ground falling across both runs, the stand-in is a slab
+        along each run, from no higher than the lowest foot of that run's own lengths to no lower than their highest
+        top, and over all of the return seen from above."""
+        import mesh_village_small as small
+        from materials import code
+        t = np.array([math.cos(math.radians(23.0)), math.sin(math.radians(23.0))])
+        n = np.array([-t[1], t[0]])
+
+        class Slope:
+            @staticmethod
+            def ground(x, z):
+                return 0.2 * (np.asarray(x) * t[0] + np.asarray(z) * t[1]) + 0.15 * (np.asarray(x) * n[0] +
+                                                                                     np.asarray(z) * n[1])
+
+        p0 = np.array([5.0, -2.0])
+        args = (Slope, p0, p0 + 3.3 * t, p0 + 4.7 * t, p0 + 8.0 * t, t)
+        back = [(p0 + n * small.GARDEN["thick"] / 2, p0 - n * 3.0)]
+        rubble = lambda m: m.pos[(m.attr == code("rubble")).all(axis=1)]
+        before = len(rubble(small._garden(*args)))            # the lengths before the house come first
+        wall, slabs = small._garden(*args, returns=back), small._garden(*args, whole=True, returns=back)
+        self.assertEqual((len(slabs.idx), codes(slabs)), (20, {code("rubble")}))
+        for i, lengths in enumerate((rubble(wall)[:before], rubble(wall)[before:])):
+            slab = slabs.pos[np.unique(slabs.idx[10 * i:10 * (i + 1)])]
+            with self.subTest(run=i):
+                self.assertGreater(len(lengths), 0)
+                self.assertLessEqual(float(slab[:, 1].min()), float(lengths[:, 1].min()) + 1e-9)
+                self.assertGreaterEqual(float(slab[:, 1].max()), float(lengths[:, 1].max()) - 1e-9)
+        seen = lambda m: shapely.union_all(plan_triangles([m]))
+        wider = 2 * (small.GARDEN["pier"] - small.GARDEN["thick"]) * small.GARDEN["pier"]
+        self.assertLess(seen(wall).difference(seen(slabs)).area, wider + 1e-6)
 
 
 class VillageStyleTests(unittest.TestCase):

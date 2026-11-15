@@ -15,18 +15,90 @@ vec3 satAlb(vec2 xz, float pix) {
   return c * SATGAIN;
 }
 
-// surface classes of the 2 m layer (from the essay's grounds/Hogsmeade map colours)
-vec3 classCol(float c, vec2 xz) {
+// the vegetable beds: 1.2 m beds of crops between narrow paths of trodden soil and grass, plot by plot (6 m by 11 m) a
+// different crop or dug-over soil; the crops' rows fade where a pixel spans more than a few of them, and the beds where
+// it spans more than one
+vec3 bedsCol(vec2 xz, float pix) {
+  vec2 q = vec2(dot(xz, vec2(0.906, 0.423)), dot(xz, vec2(-0.423, 0.906)));       // across the beds, along them
+  float crop = hash12(floor(q / vec2(6., 11.)) + 0.5);
+  vec3 soil = mix(vec3(0.112, 0.082, 0.046), vec3(0.086, 0.065, 0.039), vnoise(xz * 1.7));
+  vec3 leaf = mix(vec3(0.046, 0.078, 0.024), vec3(0.078, 0.096, 0.034), fract(crop * 7.)) * (0.75 + 0.5 * vnoise(xz * 2.3 + crop * 37.));
+  vec2 d = abs(fract(q / vec2(1.5, 11.)) - 0.5) * vec2(1.5, 11.);                  // metres from a bed's middle, a plot's
+  float far = smoothstep(0.3, 1.2, pix);
+  float bed = mix(smoothstep(0.66, 0.54, d.x) * smoothstep(5.45, 5.2, d.y), 0.8, far);
+  float rows = mix(0.55 + 0.45 * sin(q.x * 15.7), 0.75, smoothstep(0.06, 0.2, pix));
+  vec3 grown = mix(soil, leaf, smoothstep(0.15, 0.3, crop) * rows);               // a fifth of the plots dug over
+  return mix(mix(soil, vec3(0.075, 0.08, 0.04), 0.6), grown, bed);
+}
+
+// surface classes of the 2 m layer (from the essay's grounds/Hogsmeade map colours), pix the pixel's footprint (m)
+vec3 classCol(float c, vec2 xz, float pix) {
   if (c < 0.5) return vec3(0.075, 0.092, 0.034);                                   // rough meadow
   if (c < 1.5) return vec3(0.055, 0.105, 0.028);                                   // lawn
   if (c < 2.5) return mix(vec3(0.066, 0.074, 0.031), vec3(0.082, 0.068, 0.036), vnoise(xz * 0.35)) * (0.8 + 0.4 * vnoise(xz * 0.6 + 3.)); // rough scrubland
   if (c < 3.5) return vec3(0.16, 0.13, 0.09);                                      // earth track
-  if (c < 4.5) return mix(vec3(0.12, 0.085, 0.045), vec3(0.06, 0.08, 0.025), step(0.5, fract(xz.x * 0.4))); // vegetable beds
-  if (c < 5.5) return vec3(0.045, 0.04, 0.025);                                    // forest floor
+  if (c < 4.5) return bedsCol(xz, pix);                                            // vegetable beds
+  if (c < 5.5) return mix(mix(vec3(0.054, 0.045, 0.027), vec3(0.046, 0.038, 0.024), vnoise(xz * 1.3 + 3.)),  // forest floor:
+                          vec3(0.046, 0.06, 0.026), smoothstep(0.4, 0.75, vnoise(xz * 0.28)))   // leaf and needle litter,
+                   * (0.82 + 0.36 * vnoise(xz * 0.9 + 7.));                        // moss in patches, twigs and hollows
   if (c < 6.5) return vec3(0.048, 0.115, 0.028);                                   // Quidditch pitch
   if (c < 7.5) return vec3(0.12, 0.115, 0.1);                                      // shingle
   return mix(vec3(0.058, 0.068, 0.029), vec3(0.07, 0.062, 0.034), vnoise(xz * 0.21))  // overgrown garden: rank grass and
     * (0.8 + 0.4 * vnoise(xz * 0.8 + 5.));                                          // dead stems, nettle and bramble clumps
+}
+
+vec3 surfCol(float c, vec2 xz, float pix) {          // a class's colour, the pitch's mown stripes included
+  vec3 cc = classCol(c, xz, pix);
+  if (c > 5.5 && c < 6.5) cc *= 0.86 + 0.28 * step(0.5, fract(pitchUV(xz).x / 9.));
+  return cc;
+}
+float classAt(ivec2 i, ivec2 n) { return floor(texelFetch(tLocB, clamp(i, ivec2(0), n - 1), 0).b * 255. + 0.5); }
+bool hardClass(float c) { return c > 2.5 && c < 6.5 && abs(c - 5.) > 0.5; }    // paths, beds and the pitch
+
+// the ground's colour from the surface classes of the four texels round luv (the local layer's uv), as bilinear
+// filtering weighs them from their centres: soft classes blend across the texel between them, while a hard class keeps a
+// sharp edge, taking the point wherever its weight is a half or more
+vec3 classMix(vec2 luv, vec2 xz, float pix) {
+  ivec2 n = textureSize(tLocB, 0);
+  vec2 f = luv * vec2(n) - 0.5, w = fract(f);
+  ivec2 i = ivec2(floor(f));
+  vec4 c = vec4(classAt(i, n), classAt(i + ivec2(1, 0), n), classAt(i + ivec2(0, 1), n), classAt(i + ivec2(1, 1), n));
+  if (all(equal(c, c.xxxx))) return surfCol(c.x, xz, pix);
+  vec4 wt = vec4((1. - w.x) * (1. - w.y), w.x * (1. - w.y), (1. - w.x) * w.y, w.x * w.y);
+  float hard = -1., most = 0., soft = 0.;
+  for (int k = 0; k < 4; k++) {
+    float own = dot(wt, vec4(equal(c, vec4(c[k]))));
+    if (hardClass(c[k])) { if (own > most) { most = own; hard = c[k]; } }
+    else soft += wt[k];
+  }
+  if (most >= 0.5 || soft <= 0.) return surfCol(hard, xz, pix);
+  vec3 sum = vec3(0.);
+  for (int k = 0; k < 4; k++) {
+    bool first = k == 0 || (c[k] != c[0] && (k < 2 || c[k] != c[1]) && (k < 3 || c[k] != c[2]));
+    if (!hardClass(c[k]) && first) sum += dot(wt, vec4(equal(c, vec4(c[k])))) * surfCol(c[k], xz, pix);
+  }
+  return sum / soft;
+}
+
+// rock on an upright plane, (along it, up): weathering over tens of metres, beds dipping along it and joints leaning up
+// it, each wandering at its own scale, and grain, on coordinates warped so that no lattice shows
+float rockTex(vec2 q) {
+  q += 3. * vec2(vnoise(q * 0.07 + 3.), vnoise(q * 0.07 + 11.)) - 1.5;
+  vec2 b = mat2(0.96, -0.28, 0.28, 0.96) * q, j = mat2(0.96, 0.28, -0.28, 0.96) * q;
+  b.y += 1.4 * vnoise(q * 0.35 + 23.);
+  j.x += 1.6 * vnoise(q * 0.3 + 29.);
+  return (0.72 + 0.56 * vnoise(q * 0.09))
+       * (0.82 + 0.3 * vnoise(vec2(b.x * 0.08, b.y * 0.55) + 7.))
+       * (0.82 + 0.3 * vnoise(vec2(j.x * 0.45, j.y * 0.07) + 13.))
+       * (0.85 + 0.3 * vnoise(q * 1.3 + 17.));
+}
+// rock on the two upright planes, blended by the face's normal, so a face of any bearing shows it unstretched; moss.
+// The meshes that stand in for cut cliff share it (the harbour mouth's rock, set piece 34)
+vec3 rockAlb(vec3 p, vec3 n) {
+  vec2 w = pow(abs(n.xz) + 1e-3, vec2(4.));
+  float k = w.x / (w.x + w.y);
+  float r = k > 0.97 ? rockTex(p.zy) : (k < 0.03 ? rockTex(p.xy + 31.) : mix(rockTex(p.xy + 31.), rockTex(p.zy), k));
+  return mix(vec3(0.088, 0.082, 0.073) * r, vec3(0.05, 0.065, 0.03), smoothstep(0.55, 0.8, vnoise(p.xz * 0.3 + p.y * 0.2)) * 0.6);
 }
 
 vec3 groundAlb(vec3 p, TS s, float t, float pix, vec3 n, float shingle) {
@@ -41,12 +113,11 @@ vec3 groundAlb(vec3 p, TS s, float t, float pix, vec3 n, float shingle) {
     vec2 j = (vec2(vnoise(p.xz * 0.6), vnoise(p.xz * 0.6 + 9.)) - 0.5) * 2.4;
     if ((uDbg & 2048) != 0) j = vec2(0.);           // debug: class edges without their noise
     vec2 luv = vec2(dot(uLocU, vec3(p.xz + j, 1.)), dot(uLocV, vec3(p.xz + j, 1.)));
-    ivec2 ln = textureSize(tLocB, 0);                // the surface class, nearest: the texel nearest filtering would take
-    float c = floor(texelFetch(tLocB, clamp(ivec2(floor(luv * vec2(ln))), ivec2(0), ln - 1), 0).b * 255. + 0.5);
-    vec3 cc = classCol(c, p.xz);
-    if (c > 5.5 && c < 6.5) { vec2 u = pitchUV(p.xz); cc *= 0.86 + 0.28 * step(0.5, fract(u.x / 9.)); }
+    vec3 cc = (uDbg & 4) != 0                        // debug: the class of the nearest texel alone
+      ? surfCol(classAt(ivec2(floor(luv * vec2(textureSize(tLocB, 0)))), textureSize(tLocB, 0)), p.xz, pix)
+      : classMix(luv, p.xz, pix);
     // the lake's shingle from its smooth field (the page blurs its texels at load), the edge broken by the same noise
-    cc = mix(cc, classCol(7., p.xz), smoothstep(0.32, 0.48, shingle + 0.125 * j.x));
+    cc = mix(cc, classCol(7., p.xz, pix), smoothstep(0.32, 0.48, shingle + 0.125 * j.x));
     float lum = dot(sat, vec3(0.3, 0.55, 0.15));
     cc *= mix(1., clamp(lum / 0.075, 0.65, 1.45), 0.3);
     a = mix(a, cc, g.lw);
@@ -55,11 +126,7 @@ vec3 groundAlb(vec3 p, TS s, float t, float pix, vec3 n, float shingle) {
   a *= mix(1., 0.6, s.dens);
   a *= mix(0.82 + 0.36 * vnoise(p.xz * 0.35), 1., smoothstep(600., 1500., t));
   float rock = smoothstep(0.72, 0.42, n.y) * (1. - 0.5 * g.lw * smoothstep(0.42, 0.6, n.y));
-  vec3 rc = vec3(0.1, 0.094, 0.084) * (0.7 + 0.6 * vnoise(p.xz * 0.11 + p.y * 0.07))
-          * (0.86 + 0.14 * sin(p.y * 1.9 + 3. * vnoise(p.xz * 0.05)))           // weathered strata
-          * (0.65 + 0.6 * vnoise(vec2((p.x + p.z) * 0.35, p.y * 0.03)));          // vertical gullies and streaks
-  rc = mix(rc, vec3(0.05, 0.065, 0.03), smoothstep(0.55, 0.8, vnoise(p.xz * 0.3 + p.y * 0.2)) * 0.6);   // moss
-  return mix(a, rc, rock * 0.9);
+  return rock > 0. ? mix(a, rockAlb(p, n), rock * 0.9) : a;
 }
 
 // ------------------------------------------------------------------ sky, clouds, haze
@@ -88,7 +155,9 @@ vec3 sky(vec3 ro, vec3 rd) {
   c += uSunCol * 18. * smoothstep(0.99985, 0.99995, sd) * step(0., rd.y);
   if (rd.y > 0.) {
     vec2 sc = rd.xz / (rd.y + 1.) * 520.;
-    c += vec3(0.6, 0.65, 0.8) * step(0.9975, hash12(floor(sc))) * uDusk * smoothstep(0.02, 0.2, rd.y) * 0.5;
+    // stars come out as the twilight fades, from the sun 3 degrees down to about 11 (none in a civil-dusk sky)
+    c += vec3(0.6, 0.65, 0.8) * step(0.9975, hash12(floor(sc))) * (1. - smoothstep(STARS_SUN_Y.x, STARS_SUN_Y.y, uSunDir.y))
+       * smoothstep(0.02, 0.2, rd.y) * 0.5;
   }
   if (rd.y > 0.004) {
     float tc = (CLOUD_Y - ro.y) / rd.y;

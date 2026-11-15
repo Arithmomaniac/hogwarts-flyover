@@ -16,5 +16,6 @@ MATERIALS = [
     Material("castle-reveal", 4, 43, note="the masonry lining an opening, recessed"),
     Material("castle-plain", 4, 44, note="exposed plain masonry: steps, chimney stacks"),
     Material("castle-glass-dim", 4, 45, note="a pane lit dimly at dusk", glow="${defs.CANDLE} * 0.1"),
+    Material("castle-iron", 4, 47, note="iron: the oak doors' straps and the joints of their boards"),
     Material("castle-mesh-tower", 4, 150, count=50, note="mesh tower i (150 + i): its re-ranked top reaches P3 in ctop"),
 ]

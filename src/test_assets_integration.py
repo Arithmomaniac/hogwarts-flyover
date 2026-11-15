@@ -427,8 +427,9 @@ class NarrowCasterTests(unittest.TestCase):
                     gold = np.all(c["attr"][c["idx"][:, 0]] == self.GOLD, axis=1)
                     self.assertLessEqual(width[gold].max(initial=0.0), 2 * ThinPartTests.POLE_M)
         for asset, name in (("pitch", "gold"), ("street-furniture", "black-iron"), ("gates", "black-iron"),
-                            ("ship", "rigging"), ("shrieking-shack", "boarding"), ("greenhouses-north", "building-glass"),
-                            ("village-house", "black-iron"), ("hogs-head", "rust-iron")):
+                            ("ship", "rigging"), ("shrieking-shack", "fence-timber"),
+                            ("greenhouses-north", "building-glass"), ("village-house", "black-iron"),
+                            ("hogs-head", "rust-iron")):
             self.assertIn((asset, code(name)), found)
 
 

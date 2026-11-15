@@ -5,9 +5,9 @@ within 15% of the tour around the same share of it, so a tour that passes a plac
     python -X utf8 -m tools.timing.windows OLD_PAGE [NEW_PAGE] [--gpu nvidia|amd]
 
 It prints mesh_probe.WINDOWS as they should read for the new page (the worktree's page unless NEW_PAGE says otherwise),
-with each window's miss: how far the new tour passes from the old window's point. WINDOWS must still hold the old page's
-times. The run fails, and prints no WINDOWS, when the new tour passes no nearer than MAX_MISS_M to a window's point: the
-tour has left that place, or WINDOWS already hold the new page's times.
+with each window's miss: how far the new tour passes from the old window's point, in height as well as over the ground.
+WINDOWS must still hold the old page's times. The run fails, and prints no WINDOWS, when the new tour passes no nearer
+than MAX_MISS_M to a window's point: the tour has left that place, or WINDOWS already hold the new page's times.
 """
 import argparse
 import asyncio
@@ -28,14 +28,15 @@ MAX_MISS_M = 10.0               # a sample every STEP_S at the tour's top speed,
 
 def remap(windows, old_positions, old_total, new_positions, new_total, step=tour.STEP_S):
     """{window: (new start time, miss in metres)} for `windows` ({window: old start time}) between tours sampled every
-    `step` seconds."""
+    `step` seconds. The miss counts height too: a waypoint raised or lowered leaves the track over the ground as it was,
+    but not the view."""
     old_positions, new_positions = np.asarray(old_positions, float), np.asarray(new_positions, float)
     times = np.arange(len(new_positions)) * step
     out = {}
     for name, t in windows.items():
-        x, _, z = old_positions[min(int(round(t / step)), len(old_positions) - 1)]
+        point = old_positions[min(int(round(t / step)), len(old_positions) - 1)]
         near = np.abs(times - t / old_total * new_total) < SEARCH * new_total
-        d = np.where(near, np.hypot(new_positions[:, 0] - x, new_positions[:, 2] - z), np.inf)
+        d = np.where(near, np.linalg.norm(new_positions - point, axis=1), np.inf)
         j = int(np.argmin(d))
         out[name] = (round(float(times[j]), 2), float(d[j]))
     return out
