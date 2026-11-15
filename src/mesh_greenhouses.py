@@ -23,11 +23,25 @@ BAY_M, BAR_M = 1.2, 0.08
 BENCH_W, BENCH_H, PLANT_M = 0.9, 0.8, 0.55
 SHED_EAVE_M, SHED_PITCH = 2.6, 0.9
 SINK_M = 1.5
+FLOOR_GAP_M = 0.03                          # a glasshouse's floor stands this far above the highest ground inside it
 
 
 def outline(polygons):
     shape = unary_union(polygons)
     return max(getattr(shape, "geoms", [shape]), key=lambda p: p.area)
+
+
+def clear_floor(inside, ground, step=0.25):
+    """A floor level FLOOR_GAP_M above the highest ground inside `inside` (sampled every `step` m and at its corners),
+    so the ground never shows through it nor meets it where it can be seen."""
+    import shapely
+
+    x0, z0, x1, z1 = inside.bounds
+    x, z = np.meshgrid(np.arange(x0, x1 + step, step), np.arange(z0, z1 + step, step))
+    keep = shapely.contains_xy(inside, x, z)
+    corners = np.asarray(inside.exterior.coords)
+    xs, zs = np.concatenate([x[keep], corners[:, 0]]), np.concatenate([z[keep], corners[:, 1]])
+    return float(np.max(ground(xs, zs))) + FLOOR_GAP_M
 
 
 def floor_level(rect, ground):
@@ -41,15 +55,16 @@ def greenhouse(polygons, ground):
     """(opaque frame, benches and plants; glazing) for one mapped glass footprint."""
     rect = cx, cz, length, width, a = fit_rectangle(outline(polygons))
     b = np.array([-a[1], a[0]])
-    y = floor_level(rect, ground)
-    hl, hw, rise = length / 2, width / 2, width / 2 * PITCH
+    hl, hw = length / 2, width / 2
     at = lambda s, t, h: np.array([cx + a[0] * s + b[0] * t, h, cz + a[1] * s + b[1] * t])
-    eave, ridge, sill = y + EAVE_M, y + EAVE_M + rise, y + DWARF_M
     from shapely.geometry import Polygon
     from shapely.geometry.polygon import orient
     plan = lambda s0, s1, t0, t1: orient(Polygon([(p[0], p[2]) for p in (at(s0, t0, 0), at(s1, t0, 0), at(s1, t1, 0),
                                                                          at(s0, t1, 0))]), 1.0)
     footprint, inside = plan(-hl, hl, -hw, hw), plan(-hl + WALL_M, hl - WALL_M, -hw + WALL_M, hw - WALL_M)
+    y = clear_floor(inside, ground)                 # seen through the glass: the floor, never the lawn under it
+    rise = hw * PITCH
+    eave, ridge, sill = y + EAVE_M, y + EAVE_M + rise, y + DWARF_M
     below = lambda top: lambda x, z: np.minimum(ground(x, z) - SINK_M, top)   # sunk, but never above its own top
     opaque = [prism(footprint.difference(inside), below(sill), sill, WALL_STONE), prism(inside, below(y), y, WALL_STONE)]   # wall ring, floor
     ss = np.linspace(-hl, hl, max(2, int(round(length / BAY_M)) + 1))

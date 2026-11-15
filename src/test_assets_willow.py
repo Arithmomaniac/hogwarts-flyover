@@ -17,11 +17,18 @@ sys.path.insert(0, str(ROOT / "src"))
 import assets_testing as world  # noqa: E402
 import mesh_willow  # noqa: E402
 from materials import code  # noqa: E402
+import materials.willow as bark  # noqa: E402
+from materials.willow import BARK_AXES  # noqa: E402
 from mesh_source import CHANNELS, Grid, decode, sample  # noqa: E402
 
 # the faults trimesh finds in this family's decoded meshes (assets_testing.mesh_faults), pinned: none
 MESH_FAULTS = {"winding": {}, "collapsed": {}}
 BARK, KNOT, HOLE, LEAVES = (code(n) for n in ("willow-bark", "willow-knot", "willow-root-hole", "willow-leaves"))
+BARKS = {(7, aux) for aux in BARK_AXES}         # the bark, once for each direction its furrows run in
+
+
+def is_bark(attr):
+    return (attr[..., 0] == 7) & np.isin(attr[..., 1], list(BARK_AXES))
 TRIANGLE_BUDGET = 50_000
 
 
@@ -174,6 +181,59 @@ class WillowSkeletonTests(unittest.TestCase):
             with self.subTest(root=i):
                 self.assertTrue(np.all(inside | (ring[:, 1] < 0.0)))
 
+    def test_the_knots_dark_wood_fills_its_eye(self):
+        # the dark knot-hole is the burl's sunken middle, not a patch beside it, however the trunk leans
+        gap = -math.pi / 2
+        trunk = next(b for b in self.tree if b.level == 0)
+        site = mesh_willow.knot_site(flat, gap)
+        m = mesh_willow.knot_eye(trunk, gap, site)
+        lean = trunk.pts[-1] / trunk.pts[-1][1]
+        knot = m.pos[np.all(m.attr == KNOT, axis=1)]
+        ring = knot @ lean / (lean @ lean)                     # each vertex's height along the leaning axis
+        off = knot - ring[:, None] * lean
+        turn = wrapped(np.arctan2(off[:, 2], off[:, 0]) - site[0])
+        self.assertLess(abs(ring.mean() - site[1]), 0.01)
+        self.assertLess(abs(turn.mean()), math.radians(1))
+
+    def test_the_eye_is_a_smooth_dish(self):
+        # close round its middle the eye's floor is the same depth whichever way you look, not a crumpled star
+        gap = -math.pi / 2
+        site = mesh_willow.knot_site(flat, gap)
+        reach = mesh_willow.TRUNK_R * (1 + mesh_willow.FLARE * math.exp(-site[1] / mesh_willow.FLARE_M))
+        for d in (0.005, 0.02):
+            a = np.linspace(0, 2 * np.pi, 24, endpoint=False)
+            r = mesh_willow.trunk_radius(site[0] + d * np.cos(a) / reach, site[1] + d * np.sin(a), gap, site)
+            # the trunk's flare and ridges tilt the floor (a plane over a small circle); a crumple is what is left
+            basis = np.stack([np.ones_like(a), np.cos(a), np.sin(a)], axis=1)
+            residual = r - basis @ np.linalg.lstsq(basis, r, rcond=None)[0]
+            with self.subTest(d=d):
+                self.assertLess(np.ptp(residual), 0.005)
+
+    def test_the_burl_swells_round_a_sunken_knot(self):
+        # a healed branch scar: the trunk's own wood swells into a burl, and the knot sits sunk in its middle
+        gap = -math.pi / 2
+        trunk = next(b for b in self.tree if b.level == 0)
+        site = mesh_willow.knot_site(flat, gap)
+        m = mesh_willow.trunk_mesh(trunk, gap, knot=site)
+        lean = trunk.pts[-1][[0, 2]] / trunk.pts[-1][1]
+        rel = m.pos[:, [0, 2]] - m.pos[:, 1:2] * lean                      # off the leaning axis, at each height
+        out, heading = np.hypot(*rel.T), np.arctan2(rel[:, 0], rel[:, 1])
+        centre = mesh_willow.knot_eye(trunk, gap, site).pos[0]              # the eye's middle
+        crel = centre[[0, 2]] - centre[1] * lean
+        away = -np.sign(wrapped(math.atan2(math.cos(gap), math.sin(gap)) - math.atan2(*crel)))
+        turn = wrapped(heading - math.atan2(*crel)) * away
+        level = np.abs(m.pos[:, 1] - centre[1]) < 0.08
+        side = np.median(out[level & (turn > math.radians(45)) & (turn < math.radians(90))])
+        rim = out[level & (np.linalg.norm(m.pos - centre, axis=1) < 0.3)].max()
+        eye = math.hypot(*crel)
+        self.assertGreaterEqual(rim - side, 0.06)                                      # the burl stands proud
+        # and the knot is sunk in it: its middle stands lower than the burl around it (the lobes averaged away)
+        reach = mesh_willow.TRUNK_R * (1 + mesh_willow.FLARE * math.exp(-site[1] / mesh_willow.FLARE_M))
+        relief = lambda th, y: mesh_willow.trunk_radius(th, y, gap, site) - mesh_willow.trunk_radius(th, y, gap)
+        a, d = np.meshgrid(np.linspace(0, 2 * np.pi, 36, endpoint=False), (0.08, 0.1, 0.12, 0.15))
+        around = relief(site[0] + d * np.cos(a) / reach, site[1] + d * np.sin(a)).mean()
+        self.assertGreaterEqual(around - float(relief(np.array([site[0]]), np.array([site[1]]))[0]), 0.01)
+
     def test_its_pieces_are_wound_with_their_normals_on_level_ground(self):
         # the payload's oracle sees one ground and one bearing; a fold elsewhere would show at another site
         for i, piece in enumerate(mesh_willow.meshes(self.tree, flat, -math.pi / 2)):
@@ -186,11 +246,11 @@ class WillowTests(unittest.TestCase):
 
     def test_it_stands_at_its_mapped_place_on_the_ground(self):
         w = placed()
-        trunk = (w.attr[:, 1] == BARK[1]) & (w.out < 2.5) & (w.above > 1.2) & (w.above < 2.0)
+        trunk = is_bark(w.attr) & (w.out < 2.5) & (w.above > 1.2) & (w.above < 2.0)
         self.assertGreater(trunk.sum(), 20)
         centre = w.pos[trunk][:, [0, 2]].mean(axis=0)
         self.assertLess(np.hypot(*(centre - w.at)), 0.5)
-        self.assertLess(w.above[(w.attr[:, 1] == BARK[1]) & (w.out < 1.5)].min(), -0.2)   # rooted below the ground
+        self.assertLess(w.above[is_bark(w.attr) & (w.out < 1.5)].min(), -0.2)            # rooted below the ground
 
     def test_its_lower_branches_do_not_reach_the_ground(self):
         # "Nor do the lower branches hang right down to the ground": everything beyond the roots stands clear
@@ -218,7 +278,8 @@ class WillowTests(unittest.TestCase):
 
     def test_it_uses_its_own_bark_knot_hole_and_leaves(self):
         found = {tuple(int(v) for v in a) for a in placed().attr}
-        self.assertEqual(found, {BARK, KNOT, HOLE, LEAVES})
+        self.assertLessEqual({BARK, KNOT, HOLE, LEAVES}, found)
+        self.assertLessEqual(found, BARKS | {KNOT, HOLE, LEAVES})
 
     def test_the_gap_in_its_roots_faces_the_lawn_between_the_doors_and_the_hut(self):
         w = placed()
@@ -269,7 +330,7 @@ class WillowTests(unittest.TestCase):
     def test_a_root_curls_out_of_the_ground(self):
         # "at least one evidently curls right out of the ground": daylight under a root beside the trunk
         w = placed()
-        tris = w.tris[np.all(w.tri_attr == BARK, axis=1)]
+        tris = w.tris[is_bark(w.tri_attr)]
         mid = tris.mean(axis=1)
         out = np.hypot(mid[:, 0] - w.at[0], mid[:, 2] - w.at[1])
         arch = False
@@ -286,6 +347,62 @@ class WillowTests(unittest.TestCase):
 
     def test_it_stays_within_its_triangle_budget(self):
         self.assertLessEqual(len(placed().tris), TRIANGLE_BUDGET)
+
+    def test_the_knot_lies_flush_in_the_trunks_eye(self):
+        # "a knot on the trunk", "the knot in the bark": the dark knot-hole lies in the burl's sunken eye, within a couple
+        # of centimetres of the bark around it, not a ball set against the trunk
+        w = placed()
+        knot = w.pos[np.all(w.attr == KNOT, axis=1)]
+        bark = w.pos[is_bark(w.attr) & (w.out < 2.0) & (w.above < 1.5)]
+        self.assertGreater(len(knot), 0)
+        nearest = np.array([np.linalg.norm(bark - k, axis=1).min() for k in knot])
+        self.assertLess(nearest.max(), 0.035)
+
+    def test_the_knots_outline_is_round(self):
+        # seen square-on, the dark eye is a round hole, not a patch of the mesh's cells with straight sides
+        w = placed()
+        knot = np.all(w.attr == KNOT, axis=1)
+        centre = w.pos[knot].mean(axis=0)
+        out = np.array([centre[0] - w.at[0], 0.0, centre[2] - w.at[1]])
+        out /= np.linalg.norm(out)
+        side, up = np.array([-out[2], 0.0, out[0]]), np.array([0.0, 1.0, 0.0])
+        near = np.linalg.norm(w.tris.mean(axis=1) - centre, axis=1) < 0.4
+        tris, attr = w.tris[near], w.tri_attr[near]
+        a, e1, e2 = tris[:, 0], tris[:, 1] - tris[:, 0], tris[:, 2] - tris[:, 0]
+        step = 0.003
+        s, v = np.meshgrid(np.arange(-0.1, 0.1 + 1e-9, step), np.arange(-0.1, 0.1 + 1e-9, step))
+        covered = np.zeros(s.shape, bool)
+        p = np.cross(-out, e2)
+        det = np.einsum("ij,ij->i", e1, p)
+        ok = np.abs(det) > 1e-12
+        inv = 1.0 / np.where(ok, det, 1.0)
+        for idx in np.ndindex(s.shape):
+            start = centre + 0.5 * out + s[idx] * side + v[idx] * up
+            q = start - a
+            u = np.einsum("ij,ij->i", q, p) * inv
+            qv = np.cross(q, e1)
+            vv = (qv @ -out) * inv
+            tt = np.einsum("ij,ij->i", e2, qv) * inv
+            hit = ok & (u >= 0) & (vv >= 0) & (u + vv <= 1) & (tt > 0)
+            if hit.any():
+                covered[idx] = np.all(attr[np.flatnonzero(hit)[np.argmin(tt[hit])]] == KNOT)
+        self.assertGreater(covered.sum(), 50)
+        r, ang = np.hypot(s, v)[covered], np.arctan2(v, s)[covered]
+        bins = np.floor((ang + np.pi) / (2 * np.pi) * 16).astype(int) % 16
+        reach = np.array([r[bins == b].max() for b in range(16) if (bins == b).any()])
+        self.assertEqual(len(reach), 16)
+        self.assertLess(reach.max() / reach.min(), 1.15, np.round(reach, 3))
+
+    def test_the_roots_bark_runs_along_them(self):
+        # each bark vertex's code names the direction its furrows run; on the roots, that is out from the trunk
+        w = placed()
+        roots = is_bark(w.attr) & (w.out > 1.7) & (w.out < mesh_willow.ROOT_ZONE_M) & (w.above < 0.7)
+        self.assertGreater(roots.sum(), 200)
+        radial = np.stack([w.pos[roots, 0] - w.at[0], np.zeros(roots.sum()), w.pos[roots, 2] - w.at[1]], axis=1)
+        radial /= np.linalg.norm(radial, axis=1, keepdims=True)
+        axes = np.array([BARK_AXES[int(a)] for a in w.attr[roots, 1]])
+        off = np.degrees(np.arccos(np.clip(np.abs(np.einsum("ij,ij->i", radial, axes)), 0, 1)))
+        self.assertLessEqual(np.percentile(off, 90), 25.0)
 
 
 def self_ground(w, x, z):
@@ -357,7 +474,7 @@ class WillowLodTests(unittest.TestCase):
         self.assertGreaterEqual(iou(silhouette(self.levels["shadow"], self.views["sun"]), self.full["sun"]), 0.8)
 
     def test_every_level_is_wound_with_its_normals_in_its_own_codes(self):
-        codes = {BARK, KNOT, HOLE, LEAVES}
+        codes = BARKS | {KNOT, HOLE, LEAVES}
         for level, m in self.levels.items():
             with self.subTest(level=level):
                 self.assertEqual(opposed_faces(m), 0)
@@ -370,6 +487,74 @@ class WillowLodTests(unittest.TestCase):
             with self.subTest(level=level):
                 np.testing.assert_array_equal(again[level].pos, m.pos)
                 np.testing.assert_array_equal(again[level].idx, m.idx)
+
+
+def jitter(q):
+    """The bark shader's plate centres (materials.willow._JITTER): each cell's centre, relative to the cell's corner."""
+    hq = (q * np.array([0.1031, 0.103, 0.0973])) % 1.0
+    hq = hq + np.sum(hq * (hq[:, [1, 0, 2]] + 33.33), axis=1, keepdims=True)
+    return 0.5 + bark.JITTER_AMP * (((hq[:, [0, 0, 1]] + hq[:, [1, 0, 0]]) * hq[:, [2, 1, 0]]) % 1.0 - 0.5)
+
+
+def border(m1, rs):
+    """The distance from the point to the nearest border of the plate whose centre is m1 against the centres rs."""
+    b = rs - m1[:, None]
+    bb = np.einsum("nij,nij->ni", b, b)
+    eb = np.einsum("nij,nij->ni", 0.5 * (m1[:, None] + rs), b) / np.sqrt(np.maximum(bb, 1e-12))
+    return np.min(np.where(bb > 1e-6, eb, np.inf), axis=1)
+
+
+def bark_net(S, reach=1):
+    """The bark shader's plate net (materials.willow.BARK_P3) at points S in its cell space: each point's distance to the
+    nearest plate border, in cells, found as the shader does (the nearest centre, then the nearest border round it), and
+    its plate's cell. `reach` 2 searches 5x5x5 cells both times: the exact net, for any jitter."""
+    span = np.arange(-reach, reach + 1, dtype=float)
+    offsets = np.stack(np.meshgrid(span, span, span, indexing="ij"), -1).reshape(-1, 3)
+    c = np.floor(S)
+    f = S - c
+    rs = np.stack([o + jitter(c + o) - f for o in offsets], axis=1)
+    near = np.argmin(np.einsum("nij,nij->ni", rs, rs), axis=1)
+    m1, mo = rs[np.arange(len(S)), near], offsets[near]
+    if reach > 1:
+        return border(m1, rs), c + mo
+    round_ = np.stack([mo + o + jitter(c + mo + o) - f for o in offsets], axis=1)
+    return border(m1, round_), c + mo
+
+
+def plate_shade(cell):
+    """The shader's shade of each plate, by its cell."""
+    return bark.SHADE_LO + bark.SHADE_AMP * ((np.sin(cell @ np.array([12.9898, 78.233, 37.719])) * 43758.5453) % 1.0)
+
+
+class WillowBarkTests(unittest.TestCase):
+    def test_the_bark_fades_to_its_own_mean_far_off(self):
+        # past the fade the shader uses FAR_H and FAR_SHADE in place of the plates and furrows; were they not what the
+        # pattern averages to, the whole tree would brighten or darken as the camera draws back
+        rng = np.random.default_rng(7)
+        n = 40000
+        for name, d in (("upright", np.array([0.0, 1.0, 0.0])), ("lying", np.array([0.0, 0.0, 1.0]))):
+            e1 = np.cross(d, [1.0, 0.0, 0.0] if abs(d[1]) > 0.9 else [0.0, 1.0, 0.0])
+            e1 /= np.linalg.norm(e1)
+            e2 = np.cross(d, e1)
+            a, along, r = rng.uniform(0, 2 * np.pi, n), rng.uniform(-2, 2, n), rng.uniform(0.2, 1.2, n)
+            p = np.array([-254.3, 300.0, 184.2]) + r[:, None] * (np.cos(a)[:, None] * e1 + np.sin(a)[:, None] * e2) \
+                + along[:, None] * d
+            S = np.stack([p @ e1, p @ d * bark.STRETCH, p @ e2], axis=1) * bark.CELL_PER_M
+            e, cell = bark_net(S)
+            w = np.clip((e - bark.FURROW_E) / bark.FURROW_W, 0, 1)
+            h = w * w * (3 - 2 * w)
+            with self.subTest(wood=name):
+                self.assertAlmostEqual(float(np.mean(h)), bark.FAR_H, delta=0.03)
+                # the plates' albedo averages h times the plate's shade
+                self.assertAlmostEqual(float(np.mean(h * plate_shade(cell))) / (bark.FAR_H * bark.FAR_SHADE), 1.0,
+                                       delta=0.03)
+
+    def test_the_furrows_run_unbroken_between_plates(self):
+        # the shader's 3x3x3 search round the nearest centre must find the border it lies by; where it misses one, the
+        # furrow steps to the next border's depth at a hard edge
+        S = np.random.default_rng(3).uniform(0, 1, (30000, 3)) * [60.0, 20.0, 60.0] + [6600.0, 1500.0, 4800.0]
+        shader, exact = bark_net(S)[0], bark_net(S, reach=2)[0]
+        self.assertLess(float(np.mean(np.abs(shader - exact) > 0.01)), 0.002)
 
 
 class WillowMeshOracleTests(unittest.TestCase):

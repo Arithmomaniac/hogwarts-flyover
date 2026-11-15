@@ -26,6 +26,7 @@ SET_PIECE = 7
 P3_MARKER = "      //__SET_PIECES_P3__\n"
 REFL_MARKER = "    //__SET_PIECES_REFL__\n"
 LAMP_MARKER = "  //__LAMP_GLOW__\n"
+LAMP_CODES_MARKER = "  //__LAMP_CODES__\n"
 # distinct set-piece bodies, each a branch of the shading pass. Measured: as an else-if ladder, the 58 of lane B's
 # village M3 failed to start on NVIDIA (D3D11 out of memory creating the pixel shader), and any ladder past 110 fails to
 # compile (ANGLE: expression too complex); 200 independent ifs started on both GPUs but took 25-29 s to link
@@ -250,7 +251,13 @@ def lamp_lines(mats):
                    + " : vec3(0.);\n" for mat, terms in sorted(by_mat.items()))
 
 
-GENERATORS = {P3_MARKER: p3_branches, REFL_MARKER: refl_lines, LAMP_MARKER: lamp_lines}
+def lamp_codes(mats):
+    """The page's set of lit glazing codes (material * 256 + aux), whose panes it also draws as light points."""
+    codes = sorted(m.mat * 256 + a for m in mats if m.glow for a in range(m.aux, m.aux + m.count))
+    return f"  const LAMP_CODES = new Set([{', '.join(map(str, codes))}]);\n"
+
+
+GENERATORS = {P3_MARKER: p3_branches, REFL_MARKER: refl_lines, LAMP_MARKER: lamp_lines, LAMP_CODES_MARKER: lamp_codes}
 
 
 def fill(text, *markers):

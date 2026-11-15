@@ -8,7 +8,8 @@ and nothing outside the earthworks changes. Trees on the earthworks are cleared,
 path down to the lake cuts through, where the works only raise the ground (PS 6: "so dark either side of them that Harry
 thought there must be thick trees there"); so is every tree within LINE_CLEAR_M of the open line, whatever ground it
 stands on, so that no crown reaches the train. The running lines' formation takes the earth surface class and forest
-floor left on a cut face, an embankment or the cleared lineside becomes scrub or meadow. Hollows that an embankment
+floor left on a cut face, an embankment or the cleared lineside becomes scrub or meadow, as does the floor of a wood they
+cut down narrower than clearings.WOOD_M. Hollows that an embankment
 encloses, such as a dry valley it crosses, are made up to where they would spill, with spoil from the cuttings, as
 meadow. The design depends only on the manifest and meta, so a second run changes nothing. The earthworks may not reach
 water.
@@ -20,7 +21,9 @@ import sys
 from pathlib import Path
 
 import numpy as np
+from scipy import ndimage as ndi
 
+import clearings
 import common
 import railway
 from mesh_source import CHANNELS, DATA_JS, Grid, decode, encode_height, encode_u8, load_georef
@@ -136,7 +139,13 @@ def fix_railway(scene, meta, georef, bed, wd, trees, surface, stream, quantum=0.
     out = [a.copy() for a in (bed, wd, trees, surface, stream)]
     for a, v in zip(out, (np.where(moved, new, old), w, tr, cls, st)):
         a[rows, cols] = v
-    return (*out, int(changed.sum()))
+    # and a wood they cut down narrower than clearings.WOOD_M keeps no floor (trees in bytes): within twice that of the
+    # ground they clear, for a remnant and the gap it stands across
+    floor = clearings.woods_floor(out[3], out[2] / 255.0, common.LOCAL_RES_M)[rows, cols]
+    near = ndi.distance_transform_edt(~(bare | hollow | clear)) * common.LOCAL_RES_M <= 2 * clearings.WOOD_M
+    refloored = near & (floor != out[3][rows, cols])
+    out[3][rows, cols] = np.where(near, floor, out[3][rows, cols])
+    return (*out, int((changed | refloored).sum()))
 
 
 def main(path=DATA_JS):

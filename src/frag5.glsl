@@ -37,7 +37,7 @@ vec3 shade(vec3 ro, vec3 rd, Res r) {
   }
 
   vec3 n = gn, alb = vec3(0.1), emi = vec3(0.);
-  float ao = 1., spec = 0., shin = 32., wrap = 0.;
+  float ao = 1., spec = 0., shin = 32., wrap = 0., burn = 0.;
   if (r.mat == 1) {
     alb = galb;
     if (s.g.lw > 0.) {
@@ -45,22 +45,34 @@ vec3 shade(vec3 ro, vec3 rd, Res r) {
       float sm = (1. - smoothstep(-0.3, 0.5, ss)) * s.g.lw;
       alb = mix(alb, vec3(0.02, 0.017, 0.011), sm);
       spec = sm * 0.5; shin = 120.;
+      burn = sm;
     }
     ao = mix(1., 0.55, s.dens);
     float rk = smoothstep(0.72, 0.42, gn.y) * (1. - smoothstep(0.3, 1.5, pix));
     if (rk > 0.) n = normalize(n + (vec3(vnoise(p.xz * 0.45 + p.y * 0.3), vnoise(p.zy * 0.45 + 5.), vnoise(p.xy * 0.45 + 9.)) - 0.5) * 0.9 * rk);
   } else if (r.mat == 3) {
     n = vegNormal(p, s, gn);
-    float hue = s.tp.z;
+    float hue = s.tp.z, crown = 1.;
+    if (s.tp.w < 0. && (uDbg & 524288) == 0) {
+      // the far canopy sheet, where the trees are too small to draw: each 7 m cell of the tree table takes a crown's
+      // hue and light, as the 3D trees do, while a cell spans a pixel or two (nearer, as lite detail draws the sheet,
+      // the cells would be a quilt), fading to their mean as it shrinks under one; clumps of a few dozen metres shade
+      // it beyond that, so the Forest still reads as tree cover rather than a lawn (debug bit 524288: a smooth sheet,
+      // and the burns as painted beds)
+      vec2 cell = floor(p.xz / 7.);
+      float k = smoothstep(1.5, 3.5, pix) * (1. - smoothstep(7., 21., pix));
+      hue = mix(0.5, hash12(cell + 17.3), k);
+      crown = mix(1., 0.5 + hash12(cell + 41.9), k) * (0.78 + 0.36 * vnoise(p.xz * 0.025));   // the 3D trees' mean light
+    }
     vec3 dec = mix(vec3(0.034, 0.058, 0.016), vec3(0.06, 0.074, 0.02), hue);
     dec = mix(dec, vec3(0.1, 0.075, 0.02), step(0.94, hue) * 0.7);   // a few trees already turning
     vec3 con = vec3(0.021, 0.037, 0.025) * (0.85 + 0.3 * hue);
-    alb = s.tp.w < 0. ? mix(vec3(0.045, 0.064, 0.018), con, s.conF) : (s.tp.w > 1.5 ? vec3(0.05, 0.04, 0.03) : (s.tp.x > 0.5 ? con : dec));
+    alb = s.tp.w < 0. ? mix(dec, con, s.conF) * crown : (s.tp.w > 1.5 ? vec3(0.05, 0.04, 0.03) : (s.tp.x > 0.5 ? con : dec));
     ao = s.tp.w < 0. ? 0.7 : 0.3 + 0.7 * clamp((p.y - s.gy) / max(s.tc.w, 1.), 0., 1.);
     wrap = 0.3;
   } else if (r.mat == 4) {                            // castle (meshes)
     bool mt = r.aux > 149.5;                          // mesh tower: re-ranked top in ctop, battlements unless the dome
-    bool part = r.aux > 39.5 && r.aux < 49.5;         // mesh openings: 40 pane, 41 lit and 45 dimly lit at dusk, 42 oak, 43 their masonry lining, 44 steps
+    bool part = r.aux > 39.5 && r.aux < 49.5;         // mesh openings: 40 pane, 41 lit and 45 dimly lit at dusk, 42 oak, 43 their masonry lining, 44 steps, 47 iron
     bool cut = mt || part || (r.aux > 19.5 && r.aux < 39.5);   // real openings (mesh class 20 + roof type): no painted windows
     float top = r.ctop, rt = mt || part ? -1. : (r.aux > 19.5 ? r.aux - 20. : r.aux);
     int ti = mt ? int(r.aux - 150. + 0.5) : -1;
@@ -68,7 +80,7 @@ vec3 shade(vec3 ro, vec3 rd, Res r) {
     bw.x += 0.5 * mod(floor(bw.y), 2.);
     alb = vec3(0.26, 0.228, 0.19) * (0.86 + 0.28 * hash12(floor(bw)) * (1. - smoothstep(0.15, 0.6, pix)));   // warm brown-grey
     alb *= 0.88 + 0.24 * vnoise(p.xz * 0.05 + p.y * 0.04);
-    bool roof = false; float wx = faceCoord(p, n, true), wtop = top - 1.5;
+    bool roof = false; float wx = faceCoord(p, n, true), wtop = top - 1.5, sky = 1.;
     if (ti >= 0) {
       vec4 tw = uTw[ti]; float rf = uTx[ti].x, tt = mt ? r.ctop : tw.w;
       if (mt && (rf < 3.5 || rf > 4.5)) rf = 0.;
@@ -76,25 +88,37 @@ vec3 shade(vec3 ro, vec3 rd, Res r) {
       wx = atan(q.y, q.x) * tw.z; wtop = tt - 1.5;
       if (rf > 3.5 && rf < 4.5 && p.y > tt + 0.6) { alb = vec3(0.05, 0.085, 0.075); spec = 0.25; shin = 40.; roof = true; }
       else if (p.y > tt + 0.3 && ((rf > 0.5 && rf < 1.5) || rf > 4.5)) roof = true;
+      else if (n.y > 0.7) sky = 0.6;                 // a tower's roof walk, inside its battlements
     } else if ((rt == 1. || rt == 3.) && n.y > 0.3) roof = true;
-    else if (rt == 0. && n.y > 0.7) alb *= 0.7;
-    if (roof && spec == 0.) { alb = vec3(0.045, 0.05, 0.06) * (0.85 + 0.3 * vnoise(p.xz * 0.6)); spec = 0.12; shin = 24.; }
+    else if (rt == 0. && n.y > 0.7) { alb *= 0.7; sky = 0.6; }   // a wall-walk, its parapets shading it from much of the sky
+    if (roof && spec == 0.) {                         // slate: courses along the eaves, each slate a shade of its own
+      vec2 sl = vec2(dot(p.xz, normalize(vec2(-n.z, n.x) + 1e-6)) / 0.3, p.y / 0.16);
+      sl.x += 0.5 * mod(floor(sl.y), 2.);
+      float near = 1. - smoothstep(0.08, 0.35, pix);
+      alb = vec3(0.072, 0.074, 0.082) * (0.85 + 0.3 * vnoise(p.xz * 0.6)) * (1. + near * (0.3 * hash12(floor(sl)) - 0.15))
+          * (1. - near * 0.35 * (1. - smoothstep(0., 0.18, fract(sl.y))));   // each course's lower edge in its own shadow
+      spec = 0.12; shin = 24.;
+    }
     if (!roof && abs(n.y) < 0.3 && !cut) {
       float lit; float wm = windowMask(p, wx, LAKE + 39., wtop, vec2(3.2, 4.1), pix, lit);
       alb = mix(alb, vec3(0.012), wm * 0.85);
       spec = max(spec, wm * 0.6); shin = max(shin, wm * 90.);
       emi += wm * lit * uDusk * CANDLE * 0.2;
     }
-    ao = 0.65 + 0.35 * smoothstep(LAKE + 35., LAKE + 47., p.y);
+    ao = (0.65 + 0.35 * smoothstep(LAKE + 35., LAKE + 47., p.y)) * sky;
     if (part) {                                       // 40-43 and 45 sit recessed in the wall, where less of the sky reaches them
       bool pane = r.aux < 41.5 || (r.aux > 44.5 && r.aux < 45.5);   // 40 dark, 41 lit and 45 dimly lit at dusk
       if (r.aux < 43.5 || pane) ao *= 0.6;
+      if (r.aux > 42.5 && r.aux < 43.5 && n.y > 0.5) {   // a sill deep in its reveal, a floor under its vault: lit from the
+        ao *= 0.4; n = normalize(vec3(-rd.x, 0.3, -rd.z));   // opening rather than from the sky overhead
+      }
       if (pane) {                                     // glass: dark, a mirror-like glint of the sun and a Fresnel sky
         alb = vec3(0.012); spec = 0.6; shin = 400.;
         float fres = 0.04 + 0.96 * pow(1. - max(dot(n, -rd), 0.), 5.);
         emi += fres * mix(uHorCol, uSkyCol, clamp(reflect(rd, n).y * 2. + 0.5, 0., 1.)) * ao + lampGlow(4, r.aux) * uDusk;
       }
       else if (r.aux < 42.5) alb = vec3(0.09, 0.06, 0.035);
+      else if (r.aux > 46.5 && r.aux < 47.5) { alb = vec3(0.025, 0.023, 0.022); spec = 0.35; shin = 60.; }   // iron
     }
   } else if (r.mat == 5) {                            // Hogsmeade, Hagrid's hut, glasshouses, stands
     float kind = r.aux;
@@ -136,6 +160,17 @@ vec3 shade(vec3 ro, vec3 rd, Res r) {
   if (spec > 0.) {
     vec3 hv = normalize(L - rd);
     col += uSunCol * sh * spec * pow(max(dot(n, hv), 0.), shin) * step(0., ndl) * (shin + 8.) / 25.;
+  }
+  if (burn > 0. && (uDbg & 524288) == 0) {
+    // a burn's running water over its peaty bed: the sky it mirrors through its riffles, as the lake's Fresnel, and the
+    // sun's glints off them; the riffles (still, a metre or so across) flatten where a pixel spans them
+    float k = 1. - smoothstep(0.25, 1.5, pix / max(abs(dot(gn, rd)), 0.25));
+    vec2 q = p.xz * 1.6;
+    vec2 tilt = (vec2(vnoise(q), vnoise(q + 13.)) - 0.5) * 0.35 + (vec2(vnoise(q * 2.7 + 7.), vnoise(q * 2.7 + 21.)) - 0.5) * 0.18;
+    vec3 wn = normalize(vec3(tilt.x * k, 1., tilt.y * k)), rr = reflect(rd, wn);
+    rr.y = abs(rr.y);
+    float fr = 0.02 + 0.98 * pow(1. - max(dot(-rd, wn), 0.), 5.);
+    col = mix(col, skyBase(rr), fr * burn) + uSunCol * sh * burn * pow(max(dot(rr, L), 0.), 700.) * 40.;
   }
   return col + emi;
 }

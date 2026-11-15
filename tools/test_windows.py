@@ -28,6 +28,15 @@ class RemapTests(unittest.TestCase):
         moved = windows.remap({"out": 50.0, "back": 349.0}, line, 400.0, line, 400.0, step=1.0)
         self.assertEqual(moved, {"out": (50.0, 0.0), "back": (349.0, 0.0)})
 
+    def test_a_window_the_new_tour_passes_higher_counts_the_height_in_its_miss(self):
+        # a waypoint raised: the same track over the ground, the camera 20 m higher over its stretch, a changed view
+        t = np.arange(0.0, 400.0, 1.0)
+        old = path(t)
+        new = old.copy()
+        new[(t >= 100.0) & (t < 200.0), 1] += 20.0
+        moved = windows.remap({"low": 50.0, "raised": 150.0}, old, 400.0, new, 400.0, step=1.0)
+        self.assertEqual(moved, {"low": (50.0, 0.0), "raised": (150.0, 20.0)})
+
     def test_a_window_whose_place_the_new_tour_does_not_pass_fails_the_run(self):
         # as when WINDOWS already hold the new tour's times: a window that far from its place would time another view.
         # The new tour flies the old line for 200 s, then a parallel one 100 m off.

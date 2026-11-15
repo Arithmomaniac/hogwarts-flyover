@@ -13,9 +13,10 @@ the first run alone. Otherwise, as when the trial measured nothing, or when the 
 --max-amd-hours, AMD runs on two pages, judged by its bounds. A step that other processes' load blocks (exit status 3)
 runs again after BLOCKED_WAIT_S, up to BLOCKED_ATTEMPTS times; a step that measured never runs again. The outcome is
 NVIDIA's and AMD's verdicts, never the trial's. Each step's log and probe report, and summary.json, go to a folder of
-the run's own, build/logs/qualify-PAGEHASH-STARTED/, so no run overwrites another's.
+the run's own, build/logs/qualify-PAGEHASH-STARTED/, so no run overwrites another's. With --skip-amd, NVIDIA's run is
+the whole qualification: no pause to cool, no trial and no AMD runs, and the outcome is NVIDIA's verdicts alone.
 
-    python -X utf8 -m tools.timing.qualify [--max-amd-hours 2] [--dry-run]
+    python -X utf8 -m tools.timing.qualify [--max-amd-hours 2] [--skip-amd] [--dry-run]
 """
 import argparse
 import datetime
@@ -46,6 +47,7 @@ REPLICATES = 24                  # simulated runs per projected design
 COOL_S = 120                     # between NVIDIA's run and AMD's, which share the laptop's cooling
 BLOCKED, BLOCKED_WAIT_S, BLOCKED_ATTEMPTS = 3, 300, 3
 SESSION_STRIDE = 1000            # numbers one run's sessions and rounds apart from another's when they are merged
+SKIPPED_AMD = "AMD skipped (--skip-amd): the outcome is NVIDIA's alone"
 
 
 def probe_argv(gpu, out, baseline, layout=None, windows=None, rounds=None, sessions=None, aa_sessions=None):
@@ -175,38 +177,39 @@ def outcome(steps, judged):
     return "pass" if all(v["verdict"] == "pass" for gpu in judged.values() for v in gpu.values()) else "fail"
 
 
-def qualify(baseline, folder, max_hours, quiet=locks.quiet, run=step, sleep=time.sleep, projection=halfwidth,
-            say=print):
+def qualify(baseline, folder, max_hours, skip_amd=False, quiet=locks.quiet, run=step, sleep=time.sleep,
+            projection=halfwidth, say=print):
     """The whole qualification under one hold of the quiet lock: its summary. A trial that measured nothing (blocked,
-    or crashed) sends AMD to two pages, as a noisy one does."""
+    or crashed) sends AMD to two pages, as a noisy one does. With `skip_amd`, NVIDIA's run is the whole of it."""
     steps, judged, trial_stats, design = [], {}, None, None
     with quiet(f"qualification in {ROOT.name}", say) as token:
         nvidia = run("nvidia", probe_argv("nvidia", folder / "nvidia.json", baseline), token, folder)
         steps.append(nvidia)
         if nvidia["result"] is not None:
             judged["nvidia"] = verdicts([nvidia])
-        sleep(COOL_S)
-        trial = run(TRIAL_STEP, probe_argv("amd", folder / f"{TRIAL_STEP}.json", baseline, layout="fresh-window",
-                                           windows=TRIAL_WINDOWS, **TRIAL), token, folder)
-        steps.append(trial)
-        if trial["result"] is not None:
-            trial_stats = {**scatter(trial["result"]), "visitS": trial["seconds"] / len(trial["result"]["loads"]),
-                           "absolute": next(iter(trial["result"]["summary"].values())).get("absolute")}
-            aa_flagged = any("absolute" in s["flags"] for s in trial["result"]["summary"].values())
-            design = amd_design(trial_stats, aa_flagged, trial_stats["visitS"], max_hours, projection)
-        else:
-            why = "other processes' load blocked it" if trial["status"] == BLOCKED else \
-                f"it exited with status {trial['status']} and no report"
-            design = {"trialHalfwidth": None, "reasons": [f"the trial measured nothing: {why}"], **PAGES}
-        say(f"AMD runs {design['layout']}" + (f": {'; '.join(design['reasons'])}" if design["reasons"] else ""))
-        amd = [run(f"amd-{r['name']}", probe_argv("amd", folder / f"amd-{r['name']}.json", baseline, **r["args"]),
-                   token, folder) for r in design["runs"]]
-        steps += amd
-        if all(s["result"] is not None for s in amd):
-            judged["amd"] = verdicts(amd)
+        if not skip_amd:
+            sleep(COOL_S)
+            trial = run(TRIAL_STEP, probe_argv("amd", folder / f"{TRIAL_STEP}.json", baseline, layout="fresh-window",
+                                               windows=TRIAL_WINDOWS, **TRIAL), token, folder)
+            steps.append(trial)
+            if trial["result"] is not None:
+                trial_stats = {**scatter(trial["result"]), "visitS": trial["seconds"] / len(trial["result"]["loads"]),
+                               "absolute": next(iter(trial["result"]["summary"].values())).get("absolute")}
+                aa_flagged = any("absolute" in s["flags"] for s in trial["result"]["summary"].values())
+                design = amd_design(trial_stats, aa_flagged, trial_stats["visitS"], max_hours, projection)
+            else:
+                why = "other processes' load blocked it" if trial["status"] == BLOCKED else \
+                    f"it exited with status {trial['status']} and no report"
+                design = {"trialHalfwidth": None, "reasons": [f"the trial measured nothing: {why}"], **PAGES}
+            say(f"AMD runs {design['layout']}" + (f": {'; '.join(design['reasons'])}" if design["reasons"] else ""))
+            amd = [run(f"amd-{r['name']}", probe_argv("amd", folder / f"amd-{r['name']}.json", baseline, **r["args"]),
+                       token, folder) for r in design["runs"]]
+            steps += amd
+            if all(s["result"] is not None for s in amd):
+                judged["amd"] = verdicts(amd)
     return {"page": page_tag(), "head": git_head(), "baseline": inputs.spec("baseline-x")["sha256"],
             "rules": {"trialWindows": TRIAL_WINDOWS, "trial": TRIAL, "limit": LIMIT, "focus": FOCUS,
-                      "maxAmdHours": max_hours},
+                      "maxAmdHours": max_hours, "skipAmd": skip_amd},
             "steps": [{k: v for k, v in s.items() if k != "result"} for s in steps], "trial": trial_stats,
             "design": design, "verdicts": judged,
             "outcome": outcome([s for s in steps if s["name"] != TRIAL_STEP], judged)}
@@ -235,6 +238,8 @@ def report(summary):
         projected = f"; the trial's design projected bounds of ±{d['trialHalfwidth']:.1%}" \
             if d["trialHalfwidth"] is not None else ""
         lines.append(f"  AMD on {d['layout']}" + (f" ({'; '.join(d['reasons'])})" if d["reasons"] else "") + projected)
+    if summary["rules"]["skipAmd"]:
+        lines.append(f"  {SKIPPED_AMD}")
     for gpu, windows in summary["verdicts"].items():
         for window, v in windows.items():
             judged = v["integrated/baseline"]
@@ -251,6 +256,8 @@ def main(argv=None):
     parser.add_argument("--max-amd-hours", type=float, default=MAX_AMD_HOURS,
                         help="the longest AMD's fresh-window runs may project to take: beyond it the focus run is left "
                              "out, and beyond it for the first run alone AMD runs on two pages")
+    parser.add_argument("--skip-amd", action="store_true",
+                        help="run NVIDIA alone: no pause to cool, no AMD trial and no AMD runs")
     parser.add_argument("--dry-run", action="store_true", help="print the steps, measure nothing")
     args = parser.parse_args(argv)
     try:
@@ -262,9 +269,12 @@ def main(argv=None):
     started = datetime.datetime.now()
     folder = LOGS / f"qualify-{page_tag()}-{started:%Y%m%d-%H%M%S}"
     if args.dry_run:
+        print("1. NVIDIA, two pages:", *probe_argv("nvidia", folder / "nvidia.json", baseline))
+        if args.skip_amd:
+            print(SKIPPED_AMD)
+            return 0
         trial = probe_argv("amd", folder / f"{TRIAL_STEP}.json", baseline, layout="fresh-window",
                            windows=TRIAL_WINDOWS, **TRIAL)
-        print("1. NVIDIA, two pages:", *probe_argv("nvidia", folder / "nvidia.json", baseline))
         print(f"2. {COOL_S} s to cool, then the AMD trial, fresh-window:", *trial)
         print(f"3. AMD on fresh-window at the trial's design, every window and again {', '.join(FOCUS)}, when the "
               f"trial projects bounds within ±{LIMIT:.0%} and its A/A is not flagged, if the runs fit in "
@@ -272,7 +282,8 @@ def main(argv=None):
               "else on two pages")
         return 0
     folder.mkdir(parents=True)
-    summary = {"started": started.isoformat(timespec="seconds"), **qualify(baseline, folder, args.max_amd_hours),
+    summary = {"started": started.isoformat(timespec="seconds"),
+               **qualify(baseline, folder, args.max_amd_hours, skip_amd=args.skip_amd),
                "ended": datetime.datetime.now().isoformat(timespec="seconds")}
     (folder / "summary.json").write_text(json.dumps(summary, indent=1), encoding="utf-8")
     text = report(summary)

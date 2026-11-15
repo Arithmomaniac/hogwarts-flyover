@@ -1,4 +1,4 @@
-"""Hogsmeade set pieces (material 7, aux 60-99): the village's roofs, walls, trim, glazing and fittings. 96-99 are still
+"""Hogsmeade set pieces (material 7, aux 60-99): the village's roofs, walls, trim, glazing and fittings. None is
 free."""
 from materials import set_piece
 
@@ -20,6 +20,11 @@ def glazing(pane_w, pane_h, note):
 
 WINDOW_P3 = glazing(0.27, 0.31, "sash windows")
 SHOP_P3 = glazing(0.62, 1.15, "shop windows")
+PLAIN_GLASS_P3 = (" {       // plain dark glass, without bars: the sky at grazing angles; lamplight at dusk where the code glows\n"
+                  "        alb = vec3(0.05, 0.045, 0.035); spec = 0.6; shin = 400.;\n"
+                  "        float fres = 0.04 + 0.96 * pow(1. - max(dot(n, -rd), 0.), 5.);\n"
+                  "        emi += fres * mix(uHorCol, uSkyCol, clamp(reflect(rd, n).y * 2. + 0.5, 0., 1.)) + lampGlow(7, sid) * uDusk;\n"
+                  "      }")
 
 
 def shared(name, table, body, note):
@@ -49,6 +54,10 @@ GLOSSES = {71: ("margin-black", (0.025, 0.025, 0.028), "black-painted margins"),
 HARL_P3 = shared("HARL", HARLS, "alb = {rgb} * (0.9 + 0.14 * vnoise(p.xz * 2.3 + p.y * 1.7));",
                  "harled walls, limewashed or painted: a soft speckle in each code's colour")
 GLOSS_P3 = shared("GLOSS", GLOSSES, "alb = {rgb}; spec = 0.3; shin = 40.;", "gloss paint and enamel in each code's colour")
+PLANKS_P3 = (" {                             // rough grey planks, nailed up across windows and a door\n"
+             "        float plank = floor(faceCoord(p, n, false) / 0.17);\n"
+             "        alb = vec3(0.15, 0.135, 0.115) * (0.78 + 0.36 * hash12(vec2(plank, floor(p.y / 1.7)))) * (0.82 + 0.18 * step(0.08, fract(faceCoord(p, n, false) / 0.17)));\n"
+             "      }")
 
 
 def harl(aux):
@@ -109,8 +118,8 @@ MATERIALS = [
               glow="${defs.DIMLAMP} * 0.2"),
     set_piece(79, "glass-dim", note="window glass dimly lit at dusk", p3=WINDOW_P3, refl="vec3(0.03, 0.028, 0.025)",
               glow="${defs.DIMLAMP} * 0.1"),
-    set_piece(80, "glass-shop", note="shop windows, brightly lit at dusk", p3=SHOP_P3, refl="vec3(0.03, 0.028, 0.025)",
-              glow="${defs.LAMP} * 0.25"),
+    set_piece(80, "glass-shop", note="shop windows, unlit at night: the shops are shut (HBP 27)", p3=SHOP_P3,
+              refl="vec3(0.03, 0.028, 0.025)"),
     gloss(81),
     gloss(82),
     gloss(83),
@@ -139,17 +148,13 @@ MATERIALS = [
                   "      }"),
               refl="vec3(0.2, 0.175, 0.14)"),
     set_piece(89, "boarding",
-              note="rough planks nailed over windows, and a garden fence",
-              p3=(" {                             // rough grey planks, nailed up across windows\n"
-                  "        float plank = floor(faceCoord(p, n, false) / 0.17);\n"
-                  "        alb = vec3(0.15, 0.135, 0.115) * (0.78 + 0.36 * hash12(vec2(plank, floor(p.y / 1.7)))) * (0.82 + 0.18 * step(0.08, fract(faceCoord(p, n, false) / 0.17)));\n"
-                  "      }"),
+              note="rough planks nailed over windows, and the slats of a kiln's ventilator",
+              p3=PLANKS_P3,
               refl="vec3(0.15, 0.135, 0.115)"),
     set_piece(90, "lamp-glass",
-              note="the streetlamps' lanterns, alight at dusk",
-              p3=(" { alb = vec3(0.42, 0.38, 0.27); spec = 0.5; shin = 200.; emi += lampGlow(7, sid) * uDusk; }"
-                  "   // the streetlamps' lanterns, alight at dusk"),
-              refl="vec3(0.42, 0.38, 0.27)",
+              note="the streetlamps' lanterns: dark glass that shows the sky at grazing angles, alight at dusk",
+              p3=PLAIN_GLASS_P3,
+              refl="vec3(0.05, 0.045, 0.035)",
               glow="${defs.LAMP} * 0.6"),
     gloss(91),
     set_piece(92, "rust-iron", note="rusty wrought iron",
@@ -157,11 +162,10 @@ MATERIALS = [
                   " shin = 12.; }   // rusty wrought iron"),
               refl="vec3(0.2, 0.085, 0.04)"),
     set_piece(93, "glass-steamed",
-              note="a teashop's windows steamed up from inside, lamplit at dusk",
+              note="a teashop's windows steamed up from inside, unlit at night when it is shut",
               p3=(" { alb = vec3(0.5, 0.49, 0.47) * (0.88 + 0.16 * vnoise(p.xz * 11. + p.y * 9.)); spec = 0.12;"
-                  " shin = 18.; emi += lampGlow(7, sid) * uDusk; }   // a teashop's windows, steamed up from inside"),
-              refl="vec3(0.5, 0.49, 0.47)",
-              glow="${defs.LAMP} * 0.2"),
+                  " shin = 18.; }   // a teashop's windows, steamed up from inside"),
+              refl="vec3(0.5, 0.49, 0.47)"),
     set_piece(94, "shop-blind",
               note="a shop's canvas blind in broad stripes",
               p3=(" {                             // a shop's canvas blind, striped down its slope\n"
@@ -170,4 +174,18 @@ MATERIALS = [
                   "      }"),
               refl="vec3(0.33, 0.37, 0.29)"),
     gloss(95),
+    set_piece(96, "door-boarded", note="a door of rough planks, boarded shut", p3=PLANKS_P3,
+              refl="vec3(0.15, 0.135, 0.115)"),
+    set_piece(97, "glass-plain", note="plain glass in Honeydukes' shop windows, between the mullions that divide them"
+              " into lights",
+              p3=PLAIN_GLASS_P3,
+              refl="vec3(0.05, 0.045, 0.035)"),
+    set_piece(98, "fence-timber", note="dark, weathered fence timber",
+              model="speckled", values={"alb": "vec3(0.07, 0.062, 0.05)", "lo": "0.75", "amp": "0.45", "freq": "6.",
+                                        "rise": "2.", "spec": "0.", "shin": "32."},
+              refl="vec3(0.07, 0.062, 0.05)"),
+    set_piece(99, "flagstone", note="the High Street's footway of grey flagstones",
+              model="speckled", values={"alb": "vec3(0.3, 0.29, 0.27)", "lo": "0.8", "amp": "0.32", "freq": "1.7",
+                                        "rise": "0.", "spec": "0.04", "shin": "16."},
+              refl="vec3(0.3, 0.29, 0.27)"),
 ]

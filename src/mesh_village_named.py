@@ -36,7 +36,7 @@ PUBLIC = {   # the inferred designs' style records, by the family layout() gives
 }
 TALL = {"wide": 1.2, "sill": 1.0, "high": 2.4}
 CARRIAGE = {"wide": 3.2, "high": 3.4, "every": 6.5}
-VENT = {"wide": 1.3, "high": 0.9, "cap": 1.8, "cap_h": 0.7}
+VENT = {"wide": 1.3, "high": 0.9, "cap": 1.8, "cap_h": 0.7, "slats": 4, "slat": (0.1, 0.06)}   # slat: high, deep
 OLD_END = 0.4                   # the Three Broomsticks' very old end takes this share of its length
 NAVE_SHARE = 0.5                # a slice across the kirk's footprint is nave where the footprint covers this much of it
 PORCH_M = 3.6
@@ -49,7 +49,9 @@ BAY = {"wide": 2.2, "face": 1.1, "deep": 0.6, "sill": 0.75, "head": 2.3, "top": 
        "into": 0.1}             # a bay runs this far into its wall, so the two make one solid
 SIGN_OVER_M = 1.0               # the Hog's Head's bracket stands this far above its door's head
 BOARDS_M = 0.08                 # planks nailed up this far behind a wall's face
-FENCE = {"out": 4.0, "post": 3.5, "high": 1.1, "rail": 0.95, "post_w": 0.1, "rail_w": 0.07}
+SEALED = {"at": (0.55, 1.45), "high": 0.2, "thick": 0.04, "past": 0.2}   # boards nailed across a sealed door: their
+                                # middles this far over its floor, reaching "past" it on either side
+FENCE = {"out": 4.0, "post": 3.5, "high": 1.1, "rails": (0.45, 0.95), "post_w": 0.12, "rail_w": 0.08}
 MULLION = {"wide": 0.09, "light": 0.8, "back": 0.02}     # no light between Honeydukes' mullions is wider than "light"
 DERVISH, GLADRAGS = "dervish-and-banges", "gladrags"
 POST_OFFICE, SCRIVENSHAFTS, PUDDIFOOTS = "post-office", "scrivenshafts", "puddifoots"
@@ -57,7 +59,9 @@ LOFT = {"long": 2.4, "wide": 1.5, "high": 1.3, "cap": 0.3, "cap_h": 0.8, "holes"
         "hole_z": 0.45, "ledge": 0.12}  # holes and their ledge stand "hole_z" over the ridge
 CROW = {"step": 0.5, "up": 0.25, "sunk": 0.35, "deep": 0.45, "proud": 0.07, "apex": (0.6, 0.3)}
 BLIND = {"under": 2.7, "out": 1.4, "drop": 0.4, "valance": 0.2, "thick": 0.03}
-CLOCK = {"at": 4.2, "out": 0.8, "r": 0.42, "face": 0.36, "half": 0.1, "sides": 12}  # its centre "at" over the floor
+CLOCK = {"at": 4.2, "out": 0.8, "r": 0.42, "face": 0.36, "half": 0.1, "sides": 12,  # its centre "at" over the floor
+         "hands": ((300.0, 0.17, 0.035), (60.0, 0.27, 0.025)),   # ten past ten: (turn from upright, reach, width)
+         "mark": (0.27, 0.33, 0.04)}                             # an hour mark at 12, 3, 6 and 9: (from, to, width)
 
 
 def restyle(named, style):
@@ -71,7 +75,7 @@ def restyle(named, style):
     if named == SHACK:
         return replace(style, family="shack", storeys=2.0, eaves=5.2, wall="weatherboard", plinth="rubble",
                        roof="iron", roof_material="corrugated-iron", pitch=35.0, hips=False, shopfront=None,
-                       margins=None, door="door-black", sign=False)
+                       margins=None, door="door-boarded", sign=False)
     if named == BROOMSTICKS and style.family == "cottage":
         return replace(style, wall="rubble", plinth="rubble", roof="thatch", roof_material="village-thatch",
                        pitch=50.0, hips=False, shopfront=None, margins=None, sign=False)
@@ -231,13 +235,18 @@ def finish(b):
 def dress(b, k, s, z0, w, h, depth, mat):
     """Dress a front window just cut in facade k (centred s along it, from z0, w by h, its glass `depth` behind the
     wall's face, its surround `mat`). Honeydukes' are mullioned (PoA 10), divided into lights at most MULLION['light']
-    wide by upright bars of `mat` standing in the opening from sill to head. Madam Puddifoot's shop windows (those in
-    its shopfront's paint) are steamed up (OotP 25): a misted pane stands just in front of the glass."""
+    wide by upright bars of `mat` standing in the opening from sill to head. Its shop windows' lights are plain glass: a
+    plain pane just before the glass hides the shop glass's painted bars, which would run beside the mullions. The
+    pane is opaque, so the owners' windows over the shop keep their own glass, which may be lit at dusk. Madam
+    Puddifoot's shop windows (those in its shopfront's paint) are steamed up (OotP 25): a misted pane stands just in
+    front of the glass."""
     if b.u.asset == PUDDIFOOTS and mat == b.st.shopfront:
         b.fittings.append(b._local_box(k, s, -depth + 0.01, -depth + 0.02, z0, z0 + h, w, "glass-steamed"))
         return
     if b.u.asset != HONEYDUKES:
         return
+    if mat == b.st.shopfront:
+        b.fittings.append(b._local_box(k, s, -depth + 0.005, -depth + 0.01, z0, z0 + h, w, "glass-plain"))
     n = math.ceil(w / MULLION["light"]) - 1
     for i in range(1, n + 1):
         b.fittings.append(b._local_box(k, s - w / 2 + w * i / (n + 1), -depth, -MULLION["back"], z0, z0 + h,
@@ -270,9 +279,10 @@ def _hogs_head(b):
 
 
 def _shack(b):
-    """The Shrieking Shack's openings: a door in the middle of its front, sealed like every other way in (PoA 14), and
-    windows on both storeys of every free wall, each boarded over but the ground-floor one in the middle of the wall
-    that faces the castle at the world's origin (DH 32); then its garden fence."""
+    """The Shrieking Shack's openings: a door in the middle of its front, sealed like every other way in (PoA 14): a
+    leaf of planks with boards nailed across it; windows on both storeys of every free wall, each boarded over but the
+    ground-floor one in the middle of the wall that faces the castle at the world's origin (DH 32); then its garden
+    fence."""
     import mesh_village as mv
 
     u, st, f = b.u, b.st, b.fp.frame
@@ -287,7 +297,11 @@ def _shack(b):
         clear = (len(centres) // 2 + (1 if k == u.front else 0)) % len(centres) if k == castle else None
         for i, s in enumerate(centres):
             if i == door:
-                b._hole(k, s, zf, 1.0, 2.0, st.door, st.wall, 0.12)
+                b._hole(k, s, zf, 1.0, 2.0, st.door, st.wall, BOARDS_M)
+                for z in SEALED["at"]:
+                    b.fittings.append(b._local_box(k, s, 0.0, SEALED["thick"], zf + z - SEALED["high"] / 2,
+                                                   zf + z + SEALED["high"] / 2, 1.0 + 2 * SEALED["past"],
+                                                   "weatherboard"))
                 b._steps(k, s, 1.0)
             else:
                 _window(b, k, s, zf + mv.SILL_M, 0.8, 1.2, "glass-dim" if i == clear else None)
@@ -307,8 +321,9 @@ def _window(b, k, s, z0, w, h, glass=None):
 
 def _fence(b):
     """The Shack's garden fence (PoA 14: they "leaned on the fence, looking up at it"): posts at most FENCE['post']
-    apart on a ring FENCE['out'] beyond its walls, standing in the ground and joined by a rail; none within reach of a
-    road, so the path runs through it. Standing out beyond the eaves, it casts."""
+    apart on a ring FENCE['out'] beyond its walls, standing in the ground and joined by two rails, all of dark weathered
+    timber, which reads from the tour as a fence rather than a pale outline; none within reach of a road, so the path
+    runs through it. Standing out beyond the eaves, it casts."""
     from materials import code
     from mesh_geometry import bar, concat
 
@@ -321,7 +336,7 @@ def _fence(b):
     world = b.fp.frame.world(pts)
     g = np.asarray(b.v.scene.ground(world[:, 0], world[:, 1]), np.float64) - b.y_ref
     standing = [b.v.streets.road_share([w]) == 0.0 for w in world]
-    attr = code("boarding")
+    attr = code("fence-timber")
     pieces = []
     for i in range(len(pts)):
         if not standing[i]:
@@ -329,7 +344,8 @@ def _fence(b):
         pieces.append(bar((*pts[i], g[i] - 0.2), (*pts[i], g[i] + FENCE["high"]), FENCE["post_w"], attr))
         j = (i + 1) % len(pts)
         if standing[j]:
-            pieces.append(bar((*pts[i], g[i] + FENCE["rail"]), (*pts[j], g[j] + FENCE["rail"]), FENCE["rail_w"], attr))
+            for rail in FENCE["rails"]:
+                pieces.append(bar((*pts[i], g[i] + rail), (*pts[j], g[j] + rail), FENCE["rail_w"], attr))
     if pieces:
         b.cast(concat(pieces))
 
@@ -472,13 +488,14 @@ def _skews(b):
 
 def _tall_room(b, bell):
     """A tall one-storey room (the school's schoolroom, the village hall): a door in the middle of its front, tall
-    windows in its other bays and along its back, and on the schoolroom a bell turret on its longest free gable."""
+    windows in its other bays, as many either side (_odd_bays), and along its back, and on the schoolroom a bell turret
+    on its longest free gable."""
     import mesh_village as mv
 
     u, zf = b.u, b.z_floor
     k = u.front
     _, _, _, length = b._facade(k)
-    centres, pitch = mv.bays(length)
+    centres, pitch = _odd_bays(length)
     for i, s in enumerate(centres):
         if i == len(centres) // 2:
             b._hole(k, s, zf, 1.2, 2.3, b.st.door, b.st.wall, 0.12)
@@ -501,9 +518,23 @@ def _bell_gable(b):
     return max(gables, key=lambda k: b._facade(k)[3]) if gables else None
 
 
+def _odd_bays(length):
+    """mesh_village.bays(length), but an odd number of them, so that a door in the middle one stands in the middle of
+    the front: one more where they stay wide enough for a tall window between their piers, else one fewer."""
+    import mesh_village as mv
+
+    centres, pitch = mv.bays(length)
+    if len(centres) % 2:
+        return centres, pitch
+    count = len(centres) + 1 if (length - 1.0) / (len(centres) + 1) >= TALL["wide"] + 0.6 else len(centres) - 1
+    pitch = (length - 1.0) / count
+    return [0.5 + pitch * (i + 0.5) for i in range(count)], pitch
+
+
 def _kiln(b):
     """The distillery's kiln: a door in the middle of its front with a small window beside it, and on its pyramid
-    roof's peak a louvred ventilator under a slate cap, the pagoda of a Highland distillery."""
+    roof's peak a louvred ventilator under a slate cap, the pagoda of a Highland distillery: its dark inside, and on
+    each of its sides VENT['slats'] slats one over another before it."""
     import mesh_village as mv
     import mesh_village_roofs as roofs
 
@@ -518,41 +549,53 @@ def _kiln(b):
     w = VENT["wide"]
     z0 = b.z_ridge - w / 2 * math.tan(math.radians(b.st.pitch)) - 0.1       # down to meet the slopes at its sides
     z1 = b.z_ridge + VENT["high"]
-    b.feature(b._local_box(k, s, o - w / 2, o + w / 2, z0, z1, w, "boarding", back=True))
+    (high, deep), inner = VENT["slat"], w - 2 * VENT["slat"][1]
+    b.feature(b._local_box(k, s, o - inner / 2, o + inner / 2, z0, z1, inner, "plinth-dark", back=True))
+    for i in range(VENT["slats"]):
+        lo = b.z_ridge + 0.1 + (z1 - 0.05 - b.z_ridge - 0.1) * i / VENT["slats"]
+        for side in (-1.0, 1.0):
+            b.feature(b._local_box(k, s, o + side * inner / 2, o + side * w / 2, lo, lo + high, w, "boarding"))
+            b.feature(b._local_box(k, s + side * (w - deep) / 2, o - inner / 2, o + inner / 2, lo, lo + high, deep,
+                                   "boarding"))
     b.feature(_pyramid(b, k, s, o, VENT["cap"], VENT["cap"], z1, z1 + VENT["cap_h"], "village-slate"))
 
 
 def _hangar(b):
     """The carriage hangar: a row of carriage doors along its front, CARRIAGE['wide'] by CARRIAGE['high'], each
-    opening FLOOR_OVER_M over the ground before it, however the ground falls along the shed, so a carriage can roll
-    in."""
-    import mesh_village as mv
-
-    k, zf = b.u.front, b.z_floor
+    reaching down into the ground before it, the lowest across its width, however the ground falls along the shed, so
+    a carriage can roll in."""
+    k = b.u.front
     a, t, n, length = b._facade(k)
     count = max(1, int((length - 2.0) // CARRIAGE["every"]))
+    w = CARRIAGE["wide"]
     for i in range(count):
         s = 1.0 + (length - 2.0) * (i + 0.5) / count
-        g = float(b.v.scene.ground(*b.fp.frame.world(a + t * s + n * 0.6))) - b.y_ref
-        z0 = min(zf, g + mv.FLOOR_OVER_M)
-        b._hole(k, s, z0, CARRIAGE["wide"], min(CARRIAGE["high"], b._head(k) - z0), b.st.door, b.st.wall, 0.12)
+        g = min(float(b.v.scene.ground(*b.fp.frame.world(a + t * x + n * d))) for x in (s - w / 2, s, s + w / 2)
+                for d in (0.0, 0.3)) - b.y_ref
+        z0 = g - 0.05
+        b._hole(k, s, z0, w, min(CARRIAGE["high"], b._head(k) - z0), b.st.door, b.st.wall, 0.12)
 
 
 def _owl_loft(b):
     """The post office's owl loft (OotP 16: "the post office, from which owls issued at regular intervals"): a
-    weatherboarded box along the middle of its longest ridge under a hipped slate cap, reaching down to meet the roof's
-    slopes, with a row of flight holes over a perching ledge along each long side."""
+    weatherboarded box along its highest ridge, as near the middle of its front as that ridge lets it stand (an
+    L-shaped plan's highest ridge may cover only part of the front), under a hipped slate cap, reaching down to meet
+    the roof's slopes, with a row of flight holes over a perching ledge along each long side."""
     import mesh_village_roofs as roofs
 
     v, f = roofs.roof(b.u.outline, b.angles)
     top = v[:, 2] >= v[:, 2].max() - 1e-6
     p, q = max(((v[i, :2], v[j, :2]) for tri in f for i, j in zip(tri, np.roll(tri, -1)) if top[i] and top[j]),
                key=lambda e: float(np.linalg.norm(e[1] - e[0])))
-    d = (q - p) / np.linalg.norm(q - p)
+    span = float(np.linalg.norm(q - p))
+    d = (q - p) / span
+    a, t, _, length = b._facade(b.u.front)
+    front = float((a + t * length / 2 - p) @ d) if abs(float(t @ d)) > 0.7 else span / 2
+    long, wide = min(LOFT["long"], span), LOFT["wide"]
+    c = p + d * min(max(front, long / 2), span - long / 2)
     k = max(range(len(b.edges)), key=lambda k: abs(float(b._facade(k)[1] @ d)))     # a facade along the ridge
     a, t, n, _ = b._facade(k)
-    s, o = float(((p + q) / 2 - a) @ t), float(((p + q) / 2 - a) @ n)
-    long, wide = min(LOFT["long"], float(np.linalg.norm(q - p))), LOFT["wide"]
+    s, o = float((c - a) @ t), float((c - a) @ n)
     z0 = b.z_ridge - wide / 2 * math.tan(math.radians(b.st.pitch)) - 0.1
     z1 = b.z_ridge + LOFT["high"]
     b.feature(b._local_box(k, s, o - wide / 2, o + wide / 2, z0, z1, long, "weatherboard", back=True))
@@ -619,7 +662,8 @@ def _blind(b):
 def _clock(b):
     """Dervish & Banges' bracket clock, an instrument maker's sign (PoA 5: "magical instruments and stuff"): a drum
     with a white face on either side, looking up and down the street, held out over the pavement on an iron bar from
-    the pier nearest the middle of its front, between its upper windows."""
+    the pier nearest the middle of its front, between its upper windows. Iron hands on each face read ten past ten,
+    over iron marks at the quarters."""
     import mesh_village as mv
 
     k, zf = b.u.front, b.z_floor
@@ -634,6 +678,19 @@ def _clock(b):
     b.fittings.append(_plate(b, k, s, ring(r), "black-iron", CLOCK["half"]))
     for side in (-1.0, 1.0):
         b.fittings.append(_plate(b, k, s + side * (CLOCK["half"] + 0.0025), ring(CLOCK["face"]), "clock-face"))
+        on = s + side * (CLOCK["half"] + 0.008)                     # just proud of the face
+        for turn, reach, wide in CLOCK["hands"]:                    # clockwise as seen from that side
+            b.fittings.append(_plate(b, k, on, _bar(o, z, side * turn, -0.03, reach, wide), "black-iron", 0.002))
+        for turn in (0.0, 90.0, 180.0, 270.0):
+            b.fittings.append(_plate(b, k, on, _bar(o, z, turn, *CLOCK["mark"]), "black-iron", 0.002))
+
+
+def _bar(o, z, turn, start, end, wide):
+    """A bar on a clock's face centred at (o, z) (metres out of the wall, height), turned `turn` degrees from upright,
+    from `start` to `end` out from the centre, `wide` across: its corners, a convex outline for _plate."""
+    d = np.array([math.sin(math.radians(turn)), math.cos(math.radians(turn))])
+    across = np.array([-d[1], d[0]]) * wide / 2
+    return [tuple(np.array([o, z]) + d * x + across * y) for x, y in ((start, -1), (end, -1), (end, 1), (start, 1))]
 
 
 def _bay(b, k, s):

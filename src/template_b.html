@@ -176,6 +176,7 @@
     STATION: v2(poi("Hogsmeade station").p), GRAWP: v2(poi("Grawp's clearing").p), NTW: String(tw.length),
     CAS_CLS: `vec2[6](${M.castle.cls.map((c) => v2(c)).join(",")})`, TREE_N: String(TREE_N), TREE_G0: fl(TREE_N / 2),
     SATGAIN: "1.3", FOG_DENS: "(1.0/24000.0)", MESH_SH_LAYERS: "5",
+    STARS_SUN_Y: "vec2(-0.2,-0.05)",                 // the sun's height (sine) from which the stars shine fully, and none
     // lamplight behind lit windows: black-body tints in linear sRGB (candles ~2200 K, the train's lamps ~2700 K, dim
     // oil lamps ~2400 K); daylight-white glows would read as white once the night exposure lifts them
     CANDLE: "vec3(1.0,0.29,0.022)", LAMP: "vec3(1.0,0.4,0.095)", DIMLAMP: "vec3(1.0,0.34,0.06)",
@@ -188,6 +189,7 @@ vec3 lampGlow(int mat, float aux) {
   //__LAMP_GLOW__
   return vec3(0.);
 }`;
+  //__LAMP_CODES__
   [["CG_FINE", CG[0]], ["CG_MID", CG[1]], ["CG_FAR", CG[2]]].forEach(([k, g]) => { defs[k] = `vec4(${fl(g.c)},${fl(g.o)},${fl(g.s)},${fl(g.n)})`; });
   if (!fLin) defs.MANUAL_BILERP = "1";
   const fragSrc = $("fragSrc").textContent.replace("//__DEFINES__", Object.entries(defs).map(([k, v]) => `#define ${k} ${v}`).join("\n"))
@@ -366,7 +368,7 @@ in vec3 vP;
 uniform vec3 uCamPos;
 out vec4 o;
 void main() { o = vec4(length(vP - uCamPos), 0., 0., 0.); }`;
-  let meshP, resP, shDepthP, reflP, glassP, meshDP, lakeP;
+  let meshP, resP, shDepthP, reflP, glassP, meshDP, lakeP, lightP;
   const shDepthVs = `#version 300 es
 precision highp float;
 layout(location = 0) in vec3 aPos;
@@ -386,8 +388,9 @@ vec3 albedo(int mat, float aux, vec3 n) {
   if (mat == 4) {
     if (aux > 39.5 && aux < 41.5 || aux > 44.5 && aux < 45.5) return vec3(0.012);   // window glass
     if (aux > 41.5 && aux < 42.5) return vec3(0.09, 0.06, 0.035);      // oak doors
+    if (aux > 46.5 && aux < 47.5) return vec3(0.025, 0.023, 0.022);    // their iron
     float rt = aux > 9.5 && aux < 15.5 ? CLS[int(aux) - 10].y : aux > 19.5 && aux < 25.5 ? CLS[int(aux) - 20].y : -1.;
-    return (rt == 1. || rt == 3.) && n.y > 0.3 ? vec3(0.045, 0.05, 0.06) : vec3(0.25, 0.219, 0.182);   // P3's warm masonry, a shade darker
+    return (rt == 1. || rt == 3.) && n.y > 0.3 ? vec3(0.072, 0.074, 0.082) : vec3(0.25, 0.219, 0.182);   // P3's slate and warm masonry, a shade darker
   }
   if (mat == 5) {
     bool roof = n.y > 0.25;
@@ -414,8 +417,16 @@ void main() {
   o = vec4(c, length(vP - uCamPos));
 }`;
   // glazing over the shaded (display-space) image, before TAA: pass 0 multiplies by the tinted transmission, pass 1
-  // adds the Fresnel sky/sun reflection; both commute, so overlapping panes need no sorting. Depth-tested against the
-  // opaque scene without writing depth, and the image's alpha (the opaque hit distance TAA reprojects) is left alone.
+  // screens over it (template_c.html drawGlass) the display value of the Fresnel sky/sun reflection and of the sheen
+  // the old glass scatters (GLASS_HAZE of the sky and sun that reach it), so a pane reads as greenish glass even seen
+  // square on, where it reflects little: a screen adds about as a sheen would over dark rooms and less over bright
+  // ground. Overlapping panes need no sorting, since each pass's blends commute. Depth-tested against the opaque scene
+  // without writing depth, and the image's alpha (the opaque hit distance TAA reprojects) is left alone. Debug bit
+  // 65536 leaves the glazing out. GLASS_SUN of the sun striking a pane joins the sky in the light its glass scatters;
+  // GLASS_SCREEN of the sheen's display value is screened, since a screen of the whole overstates a faint sheen two- or
+  // threefold over mid-tones (about right over a dim room)
+  const GLASS_T = `vec3(0.6, 0.74, 0.66)`;
+  const GLASS_HAZE = 0.05, GLASS_SUN = 0.35, GLASS_SCREEN = 0.6;
   const glassFs = `#version 300 es
 precision highp float; precision highp int;
 in vec3 vP; in vec3 vN; flat in uvec2 vAttr;
@@ -426,12 +437,49 @@ void main() {
   vec3 v = normalize(vP - uCamPos), n = normalize(vN);
   if (dot(n, v) > 0.) n = -n;                       // panes are seen from either side
   float f = 0.04 + 0.96 * pow(1. - max(dot(-v, n), 0.), 5.);
-  // the image is display-encoded: transmission T scales it by T^(1/2.2), and a small reflection adds about its
-  // tonemapped linear value at mid-tones
-  if (uGlassPass == 0) { o = vec4(pow(vec3(0.78, 0.86, 0.8) * (1. - f), vec3(1. / 2.2)), 1.); return; }
+  // the image is display-encoded: transmission T scales it by T^(1/2.2)
+  if (uGlassPass == 0) { o = vec4(pow(${GLASS_T} * (1. - f), vec3(1. / 2.2)), 1.); return; }
   vec3 r = reflect(v, n);
   vec3 env = mix(uHorCol, uSkyCol, smoothstep(0., 0.5, r.y)) + uSunCol * pow(max(dot(r, uSunDir), 0.), 400.) * 20.;
-  o = vec4(aces(env * f * uExposure), 0.);
+  vec3 haze = ${fl(GLASS_HAZE)} * (uSkyCol * (0.6 + 0.4 * abs(n.y)) + uSunCol * abs(dot(n, uSunDir)) * ${fl(GLASS_SUN)});
+  o = vec4(${fl(GLASS_SCREEN)} * pow(aces((env * f + haze) * uExposure), vec3(1. / 2.2)), 0.);
+}`;
+  // small lights (template_c.html drawLights): each lit pane of the payload's full levels as a point, so a window or a
+  // lamp too small for a pixel of its own still shows at night. A pane covering cover pixels shines at its own radiance
+  // times LIGHT_GAIN * cover, never under LIGHT_MIN of it nor over it, fading out as the pane grows past 1-3 pixels and
+  // draws itself, and dimmed by the fog; drawn LIGHT_PX across, a little nearer than its pane, so its own reveal cannot
+  // hide it while anything standing in front does
+  const LIGHT_GAIN = 2, LIGHT_MIN = 0.25, LIGHT_PX = 2.5;
+  const lightVs = `#version 300 es
+precision highp float;
+layout(location = 0) in vec3 aPos;                 // the pane's centre
+layout(location = 1) in vec4 aNrmA;                // its outward normal, its area (m2)
+layout(location = 2) in vec2 aCode;                // its glazing code: material, aux
+uniform vec3 uCamPos; uniform mat3 uCamRot; uniform float uTanHalf, uDusk, uExposure; uniform vec2 uRes, uJitter;
+out vec3 vCol;${lampGlsl}
+vec3 aces(vec3 x) { return clamp((x * (2.51 * x + 0.03)) / (x * (2.43 * x + 0.59) + 0.14), 0., 1.); }
+void main() {
+  vec3 d = aPos - uCamPos; float t = length(d);
+  float facing = dot(aNrmA.xyz, -d / t), pix = 2. * uTanHalf / uRes.y;
+  float cover = aNrmA.w * max(facing, 0.) / (t * t * pix * pix);
+  float k = clamp(max(cover * ${fl(LIGHT_GAIN)}, ${fl(LIGHT_MIN)}), 0., 1.) * (1. - smoothstep(1., 3., cover)) * step(0.1, facing);
+  float b = 1. / 1100., kb = b * d.y, path = abs(kb) < 1e-3 ? t : (1. - exp(-kb)) / (b * d.y / t);   // as applyFog
+  float fog = exp(-${defs.FOG_DENS} * exp(-b * (uCamPos.y - (${defs.LAKE} - 3.))) * path);
+  vCol = pow(aces(lampGlow(int(aCode.x + 0.5), aCode.y) * uDusk * k * fog * uExposure), vec3(1. / 2.2));
+  vec3 v = transpose(uCamRot) * (aPos - d / t * (0.25 + 0.001 * t) - uCamPos);
+  gl_Position = max(vCol.r, max(vCol.g, vCol.b)) > 0.004 && v.z > ${fl(MESH_NEAR)}
+    ? vec4(v.x * uRes.y / (uRes.x * uTanHalf) - 2. * uJitter.x / uRes.x * v.z, v.y / uTanHalf - 2. * uJitter.y / uRes.y * v.z,
+           v.z * ${fl((MESH_FAR + MESH_NEAR) / (MESH_FAR - MESH_NEAR))} - ${fl(2 * MESH_FAR * MESH_NEAR / (MESH_FAR - MESH_NEAR))}, v.z)
+    : vec4(2., 2., 2., 1.);                         // unlit, unseen or behind the camera: outside the view
+  gl_PointSize = ${fl(LIGHT_PX)};
+}`;
+  const lightFs = `#version 300 es
+precision highp float;
+in vec3 vCol;
+out vec4 o;
+void main() {
+  vec2 q = gl_PointCoord * 2. - 1.;
+  o = vec4(vCol * clamp(1.5 - dot(q, q), 0., 1.), 0.);
 }`;
   // the water the shading pass mirrors the meshes in (frag5.glsl: water at the lake's level), every other pixel
   // discarded: an occlusion query round it tells whether a frame showed any
@@ -445,9 +493,9 @@ void main() {
   o = vec4(0.);
 }`;
   try {
-    [meshP, resP, shDepthP, reflP, glassP, meshDP, lakeP] = await Promise.all([program(meshFs, meshVs), program(resolveFs),
+    [meshP, resP, shDepthP, reflP, glassP, meshDP, lakeP, lightP] = await Promise.all([program(meshFs, meshVs), program(resolveFs),
       program("#version 300 es\nprecision highp float;\nvoid main() {}", shDepthVs), program(reflFs, reflVs),
-      program(glassFs, meshVs), program(meshDistFs, meshVs), program(lakeFs)].map(linked));
+      program(glassFs, meshVs), program(meshDistFs, meshVs), program(lakeFs), program(lightFs, lightVs)].map(linked));
   }
   catch (e) { window.__hog = { error: String(e.message || e) }; return fail("Mesh shader failed to compile:\n" + (e.message || e)); }
   // mesh sun shadows: one depth layer per footprint (layer 0 every caster, then the payload's finer regions), cached
@@ -689,6 +737,7 @@ void main() {
     out.refRows = lv.rows; out.refTan = Math.tan(lv.fov * Math.PI / 360);
     gl.bindVertexArray(null);
     out.buffers = [...vb, ib];
+    out.lights = lightPoints(payload, s, idx);
     out.gen = ++meshUploads;
     out.towerTops = towerTops;
     out.shadow = shadow;
@@ -698,6 +747,60 @@ void main() {
   function freeMeshes(chunks) {
     chunks.forEach((c) => gl.deleteVertexArray(c.vao));
     (chunks.buffers || []).forEach((b) => gl.deleteBuffer(b));
+    if (chunks.lights) { gl.deleteVertexArray(chunks.lights.vao); gl.deleteBuffer(chunks.lights.buf); }
+  }
+  // the lit panes of each group's full level as light points (lightVs): a pane is its lit triangles joined through
+  // shared corners where they face about the same way (a lantern's sides are panes of their own), at their
+  // area-weighted centre, facing along their outward normal, with their summed area
+  function lightPoints(payload, s, idx) {
+    const pos = new Uint16Array(s.pos.buffer, s.pos.byteOffset, s.pos.byteLength >> 1), nrm = new Int8Array(s.nrm.buffer, s.nrm.byteOffset, s.nrm.byteLength);
+    const attr = new Uint8Array(s.attr.buffer, s.attr.byteOffset, s.attr.byteLength), pts = [];
+    let v0 = 0, t0 = 0;
+    for (const c of payload.chunks) {
+      if (c.level === 0 && c.pass !== "glass") {
+        const lo = c.box.slice(0, 3), sc = [0, 1, 2].map((a) => (c.box[a + 3] - c.box[a]) / 65535), root = new Map(), panes = new Map();
+        const at = (v) => [0, 1, 2].map((a) => lo[a] + pos[3 * (v0 + v) + a] * sc[a]);
+        const key = (v) => (pos[3 * (v0 + v)] * 65536 + pos[3 * (v0 + v) + 1]) * 65536 + pos[3 * (v0 + v) + 2];
+        const find = (k) => { while (root.get(k) !== k) { root.set(k, root.get(root.get(k))); k = root.get(k); } return k; };
+        const lit = [];
+        for (let i = 3 * t0, e = 3 * (t0 + c.tris); i < e; i += 3) {
+          const a = idx[i], code = attr[2 * (v0 + a)] * 256 + attr[2 * (v0 + a) + 1];
+          if (!LAMP_CODES.has(code)) continue;
+          const [p, q, r] = [0, 1, 2].map((j) => at(idx[i + j]));
+          const u = [0, 1, 2].map((a) => q[a] - p[a]), w = [0, 1, 2].map((a) => r[a] - p[a]);
+          const cr = [u[1] * w[2] - u[2] * w[1], u[2] * w[0] - u[0] * w[2], u[0] * w[1] - u[1] * w[0]];
+          const area = 0.5 * Math.hypot(...cr);
+          if (!(area > 0)) continue;
+          const o = [nrm[2 * (v0 + a)] / 127, nrm[2 * (v0 + a) + 1] / 127], z = 1 - Math.abs(o[0]) - Math.abs(o[1]);
+          const vn = z >= 0 ? [o[0], o[1], z] : [(1 - Math.abs(o[1])) * Math.sign(o[0] || 1), (1 - Math.abs(o[0])) * Math.sign(o[1] || 1), z];
+          const side = cr[0] * vn[0] + cr[1] * vn[1] + cr[2] * vn[2] < 0 ? -1 : 1;   // the face normal turned outward, as its vertices'
+          const facing = cr.reduce((b, v, j) => b * 3 + Math.round(side * v / (2 * area)) + 1, 0);   // which of 27 ways it faces
+          const ks = [0, 1, 2].map((j) => key(idx[i + j]) * 27 + facing);
+          ks.forEach((k) => { if (!root.has(k)) root.set(k, k); });
+          for (const k of ks.slice(1)) { const r0 = find(ks[0]), r1 = find(k); if (r0 !== r1) root.set(r1, r0); }
+          lit.push([ks[0], code, p, q, r, cr.map((v) => side * v), area]);
+        }
+        for (const [k0, code, p, q, r, cr, area] of lit) {
+          const k = find(k0);
+          const pane = panes.get(k) || { c: [0, 0, 0], n: [0, 0, 0], a: 0, code };
+          for (let a = 0; a < 3; a++) { pane.c[a] += (p[a] + q[a] + r[a]) / 3 * area; pane.n[a] += cr[a] * 0.5; }
+          pane.a += area;
+          panes.set(k, pane);
+        }
+        for (const pane of panes.values()) {
+          const nl = Math.hypot(...pane.n);
+          if (nl > 0) pts.push(...pane.c.map((v) => v / pane.a), ...pane.n.map((v) => v / nl), pane.a, pane.code >> 8, pane.code & 255);
+        }
+      }
+      v0 += c.verts; t0 += c.tris;
+    }
+    const vao = gl.createVertexArray(), buf = gl.createBuffer();
+    gl.bindVertexArray(vao); gl.bindBuffer(gl.ARRAY_BUFFER, buf); gl.bufferData(gl.ARRAY_BUFFER, new Float32Array(pts), gl.STATIC_DRAW);
+    gl.enableVertexAttribArray(0); gl.vertexAttribPointer(0, 3, gl.FLOAT, false, 36, 0);
+    gl.enableVertexAttribArray(1); gl.vertexAttribPointer(1, 4, gl.FLOAT, false, 36, 12);
+    gl.enableVertexAttribArray(2); gl.vertexAttribPointer(2, 2, gl.FLOAT, false, 36, 28);
+    gl.bindVertexArray(null);
+    return { vao, buf, count: pts.length / 9 };
   }
   let meshChunks;
   try { meshChunks = await uploadMeshes(typeof MESHES === "undefined" ? null : MESHES); }
@@ -751,7 +854,7 @@ void main() {
   const UR = uniforms(resP);
   gl.uniform1i(UR.tG0, 22);
   const UL = uniforms(reflP), REFL_UNIT = 31;
-  const UG = uniforms(glassP);
+  const UG = uniforms(glassP), ULt = uniforms(lightP);
   gl.useProgram(lakeP);
   gl.uniform1i(gl.getUniformLocation(lakeP, "tG0"), 22); gl.uniform1i(gl.getUniformLocation(lakeP, "tG2"), 24);
   // cone pre-pass: reads the grid from tTree, so it renders into its own target, copied into tTree's band each frame

@@ -1633,7 +1633,7 @@
       "inferred": true
     },
     "harbour-local-cutout": {
-      "text": "Only a tightly bounded exterior recess with a closed-back shell is cut into the cliff; there is no boathouse or navigable tunnel. src/fix_harbour.py cuts the water-filled recess, 8 m wide and 12 m into the cliff at the cliff foot nearest the mapped mouth (1f), and the mesh roofs it with rock back to the cliff's surface, spans the cut's 4.5 m of open water with a low arch and closes it 10 m in.",
+      "text": "Only a tightly bounded exterior recess with a closed-back shell is cut into the cliff; there is no boathouse or navigable tunnel. src/fix_harbour.py cuts the water-filled recess, 8 m wide and 12 m into the cliff, square to the lake's edge at the cliff foot nearest the mapped mouth (1f), and the mesh roofs it with rock back to the cliff's surface, spans the cut's 4.5 m of open water with a low arch and closes it 10 m in. The castle's walls over the recess stand on that roof, the channel running on under the castle.",
       "basis": [
         {
           "source": "wh-grounds",
@@ -1652,7 +1652,7 @@
       "images": ["Balquhidder_kirk.jpg", "Balquhidder_kirk_old.jpg"]
     },
     "hogsmeade-lamps-high-street-only": {
-      "text": "Ornate Victorian cast-iron lamps stand on the High Street only, about every 30 m, alternately on either side: each on the pavement 1.6 m in front of the end of a building's front, clear of its door, a glass lantern on a tapering iron post over a stone plinth. The Hog's Head side road is unlit.",
+      "text": "Ornate Victorian cast-iron lamps stand on the High Street only, about every 30 m, alternately on either side: each on the pavement 1.6 m in front of the end of a building's front, clear of its door, squared to the front: a lantern of dark glass framed in iron at its corners under an iron cap and finial, on a tapering iron post with a flared foot and a ladder bar, over a stone plinth. The Hog's Head side road is unlit.",
       "basis": [
         {"source": "wh-hogsmeade", "quote": "the darkness complete but for a few streetlamps and lit upper windows"},
         {
@@ -1695,7 +1695,7 @@
       "inferred": true
     },
     "village-wings-join-parents": {
-      "text": "Village footprints of 16 m² or less are wings or outshots of the building they touch.",
+      "text": "Village footprints of 16 m² or less are wings or outshots of the building they touch. One whose traced plan is only specks, a single texel of the map cut off from its building by the 2 m grid, is left out: the building it touches stands for it.",
       "basis": [{"source": "data", "note": "no village footprint lies between 16 and 20 m²"}]
     },
     "greenhouse-design-inferred": {
@@ -1909,7 +1909,7 @@
       ]
     },
     "castle-base-lake-cliff": {
-      "text": "Between the castle and the lake the base drops 36 m (about 118 ft) as White Hound's cliff: a foot-path slope (22 degrees) below the castle's walls, then a near-vertical face (81 degrees) to the water, with the 2e wall at its lip.",
+      "text": "Between the castle and the lake the base drops 36 m (about 118 ft) as White Hound's cliff: a foot-path slope (22 degrees) below the castle's walls, then a near-vertical face (81 degrees) to the water, with the 2e wall at its lip. The ground under the castle's walls and 2 m beyond them keeps the platform's or the foot-path's level, so no wall hangs down the face: where the walls stand nearer the water than the face has room for, the cliff drops sheer from there, with the face below. That departs locally from White Hound's upper part sloping back, his conclusion rather than the books': real curtain walls often rise straight from sheer rock. Where that drop meets the lake, a ledge of shingle about 2 m wide at the shore's level lies at its foot, so the lake's edge stays level beside so tall a bank: a landscape deviation that moves the lake's edge out about 2 m (at most 2.8 m) along parts of the castle's lake front, 528 m² of water in all.",
       "basis": [
         {
           "source": "wh-grounds",
@@ -1987,7 +1987,7 @@
       ]
     },
     "willow-lawn": {
-      "text": "A lawn opens from the northern greenhouses to the Willow, 2.4 ha (328 by 118 m), so that it stands alone on its knoll: no tree stands over any of the seven greenhouses' lines to its crown, nor within 20 m of it. The light woods White Hound's map draws beside those greenhouses lay over the lines from three of them. The lawn's edge wanders, the woods thin out over 12 m beyond it, where the lawn gives way in tufts to such leaf litter as lies under them, and four trees stand scattered on it, clear of the lines, the paths and the vegetable patch, which it takes in round the greenhouses with its beds and hollow as they were. From each greenhouse the trees now hide none of the points on the Willow's top quarter (8.6 to 11.5 m above its knoll) that the ground leaves in sight: 60, 9, 22, 7, 8, 6 and 12 of 60 show. Through the 20 m sight line it replaces they hid all 60 from one greenhouse, all 7 from another and 4 of 6 from a third.",
+      "text": "A lawn opens from the northern greenhouses to the Willow, 2.4 ha (328 by 118 m), so that it stands alone on its knoll: no tree stands over any of the seven greenhouses' lines to its crown, nor within 20 m of it. White Hound's map draws lawn there, the hillock between them (4h) and the vegetable patch round the greenhouses, which the lawn takes in with its beds and hollow as they were. Four trees stand scattered on it, clear of the lines, the paths and the vegetable patch, and its edge wanders. From each greenhouse the trees hide none of the points on the Willow's top quarter (8.6 to 11.5 m above its knoll) that the ground leaves in sight: 60, 9, 22, 7, 8, 6 and 12 of 60 show. The lawn was cut through light woods over the lines from three of the greenhouses, which were the patch's hatching read as undergrowth (vegetable-patch-beds).",
       "basis": [
         {
           "source": "wh-grounds",
@@ -2002,6 +2002,20 @@
           "source": "user",
           "choice": "willow_site: (a) The Willow on its own knoll, about 0.51 Mm³, standing 13.5 m above the lake, plus a tree-free sight corridor about 20 m wide from the northern greenhouses through the woods"
         }
+      ]
+    },
+    "vegetable-patch-beds": {
+      "text": "White Hound hatches the vegetable patch, with paler strokes across the hatching: no tree stands on it, and its beds are one plot on the level terrace the castle's base lays for it, running on over the outflow where the base buries it. His hatching runs on over the base's banks round the terrace, 1 in 2.2, where the patch is lawn: beds lie on no ground steeper than 1 in 6.7. The beds are 1.2 m wide, crops in rows between narrow paths, plot by plot a different crop or dug-over soil. Read texel by texel, the hatching and the grass between its strokes made a lattice of beds and lawn, and read as undergrowth it stood trees all over the patch.",
+      "basis": [
+        {"source": "wh-grounds-map", "quote": "vegetable patch"},
+        {"source": "wh-grounds", "quote": "splashed across the flooded vegetable patch to double Herbology"}
+      ]
+    },
+    "dashed-outlines": {
+      "text": "White Hound outlines landforms with dashed lines, the hillocks (4f, 4g and 4h) and the howe (4i): no tree stands on them. Read as his tree ink, their dashes stood a ring of trees on the Willow's lawn round the hillock between it and the greenhouses, and one round the howe, with the woods' floor under them.",
+      "basis": [
+        {"source": "wh-grounds-map", "quote": "hillock obscuring view from greenhouses to Whomping Willow"},
+        {"source": "wh-grounds-map", "quote": "howe"}
       ]
     },
     "station-wood": {
@@ -2109,7 +2123,7 @@
       ]
     },
     "scrubland-as-scrub": {
-      "text": "White Hound's three maps draw rough scrubland, as their legend names it. In the 2 m layer that covers his grounds and Hogsmeade maps the scene draws it as scrub: shrubby ground of olive green and bracken brown, not heather in bloom. Nothing places heath or moor on the ground his maps draw: his legend has no such ground, and he calls the land round Hogsmeade's fields moorland only in general. Beyond that layer, over most of the Forest map's scrubland, the ground keeps the Sentinel-2 imagery's colours, tinted green where the Forest map draws fields. Every patch of ground, the scrub, the woods' floor and the lawns as well as the clearings' ground, gives way to the ground round it in tufts across 16 m of its edge rather than ending at a line, but where a wall, a path, the railway's works or the shore explains its line. The woods' floor lies only under their canopy, beyond which its tufts would read as specks on open ground; the station wood and the train's screen stand dense to a line, so their floor gives way within it, to grass under their outer trees.",
+      "text": "White Hound's three maps draw rough scrubland, as their legend names it. In the 2 m layer that covers his grounds and Hogsmeade maps the scene draws it as scrub: shrubby ground of olive green and bracken brown, not heather in bloom. Nothing places heath or moor on the ground his maps draw: his legend has no such ground, and he calls the land round Hogsmeade's fields moorland only in general. Beyond that layer, over most of the Forest map's scrubland, the ground keeps the Sentinel-2 imagery's colours, tinted green where the Forest map draws fields. Every patch of ground, the scrub, the woods' floor and the lawns as well as the clearings' ground, gives way to the ground round it in tufts across 16 m of its edge rather than ending at a line, but where a wall, a path, the railway's works or the shore explains its line. The woods' floor, leaf litter and moss, lies only under the canopy of woods 16 m across or more: beyond it its tufts would read as specks on open ground, and under a lone tree or a clump of a few the grass grows on. The station wood and the train's screen stand dense to a line, so their floor gives way within it, to grass under their outer trees.",
       "basis": [
         {"source": "wh-hogsmeade", "quote": "Rough scrubland, not suitable for farming."},
         {
@@ -2184,7 +2198,7 @@
       ]
     },
     "tour-gryffindor-close": {
-      "text": "The tour's Gryffindor Tower waypoint stands 105 m south-south-east of the tower, 34 m above the lake, high enough to see it over the trees on the shore, where the castle fills about 17% of the frame. The old waypoint was 170 m off.",
+      "text": "The tour's Gryffindor Tower waypoint stands 105 m south-south-east of the tower, 55 m above the lake, high enough that no tree on the shore stands in front of the castle, where the castle fills about 25% of the frame. At 34 m up the shore's trees hid the tower's foot, 10% of the frame in front of the castle. The old waypoint was 170 m off.",
       "basis": [
         {"source": "user", "note": "decided by the orchestrator under the user's delegation of look choices"}
       ]
@@ -2250,7 +2264,13 @@
       ]
     },
     "tour-west-tower-close": {
-      "text": "The tour's West Tower (Owlery) waypoint stands 154 m west of the tower, where the castle fills about 19% of the frame. The old waypoint was 325 m off.",
+      "text": "The tour's West Tower (Owlery) waypoint stands 154 m west of the tower, 100 m above the ground, where the castle fills about 24% of the frame over the trees west of it, which cover 2.5% of the frame in front of it. At 45 m up they filled the near foreground, 6% of the frame in front of the castle. The old waypoint was 325 m off.",
+      "basis": [
+        {"source": "user", "note": "decided by the orchestrator under the user's delegation of look choices"}
+      ]
+    },
+    "tour-opening-wide": {
+      "text": "The tour opens on the castle in its setting, from 1.8 km south-east and 300 m up: the lake, the grounds, the woods and the hills round them, the castle on its cliff about a tenth of the frame wide. The waypoints after it close in on the castle, and only this wide view is exempt from the framing test's limit on trees in front of the castle.",
       "basis": [
         {"source": "user", "note": "decided by the orchestrator under the user's delegation of look choices"}
       ]
@@ -2314,10 +2334,21 @@
       ]
     },
     "tour-length": {
-      "text": "The tour lasts about 574 s, under the ten minutes allowed for it: the camera slows when it flies low and near what it looks at, so the closer waypoints lengthen it. Its speed formula stays as it was.",
+      "text": "The tour lasts about 573 s, under the ten minutes allowed for it: the camera slows when it flies low and near what it looks at, so the closer waypoints lengthen it. Its speed formula stays as it was.",
       "basis": [
         {"source": "user", "note": "decided by the orchestrator under the user's delegation of look choices"}
       ]
+    },
+    "north-tower-stands-clear": {
+      "text": "The North Tower's overhanging top stands clear of the buildings round it, which are cut back from it, since the skyline keeps it below Ravenclaw and Gryffindor: a thin column and its top beside them, not fused into their roofs.",
+      "basis": [
+        {
+          "source": "wh-castle",
+          "quote": "both the North Tower and the Astronomy Tower have a long thin column topped by a wider, overhanging top"
+        },
+        {"source": "wh-castle", "quote": "the three highest Towers – Ravenclaw, Astronomy and Gryffindor"}
+      ],
+      "inferred": true
     },
     "pitch-stairs-from-lawn": {
       "text": "Each of the four 15 ft stairs climbs from the lawn behind the stands to a landing at the top tier, and continues down through a 15 ft cut in the tiers to the walkway behind the barrier (user: lawn, as White Hound writes).",
@@ -2374,7 +2405,7 @@
       "inferred": true
     },
     "bridges-stone-arch": {
-      "text": "Wherever a road or path runs between two pieces of a burn in the data, a small rubble-stone bridge carries it over: coped parapets 1 m high either side of the road, and an arch ringed in pale stone over the water's opening in each face. White Hound gives no construction; the stone arch is the Highland vernacular, decided by lane A under the user's delegation of look choices.",
+      "text": "Wherever a road or path runs between two pieces of a burn in the data, a small rubble-stone bridge carries it over as one structure: a spandrel wall at each face, where the burn leaves the road's bank, rising into a coped parapet 1 m above the deck, unbroken and stopping short of any path that leaves the road; in each face a segmental arch ringed in pale stone over the burn's water there (skewed where the burn crosses obliquely); and a deck humped over the arches where the road lies too low over the water, eased back down at 1 in 7. White Hound gives no construction; the humpbacked rubble arch is the Highland vernacular, decided by lane A under the user's delegation of look choices.",
       "basis": [
         {"source": "user", "quote": "I only want substantive issues, not visual reviews."},
         {
@@ -2386,7 +2417,7 @@
       "inferred": true
     },
     "gates-pillars-boars": {
-      "text": "Two tall pale-stone pillars stand either side of the road where the boundary wall, as drawn, opens at the mapped gap, 18 ft apart, with the wall run on from them into the boundary wall; each carries a winged boar of weathered stone, wings raised, facing out of the grounds. The leaves' bars follow the falling road down to the ground. White Hound gives no width, stone or facing.Decided by lane A under the user's delegation of look choices; not reviewed by the user.",
+      "text": "Two tall stone pillars, rubble in rough courses under pale cornices, stand either side of the road where the boundary wall, as drawn, opens at the mapped gap, 18 ft apart, with the wall run on from them into the boundary wall; each carries a stocky winged boar of weathered, lichened stone, tusked, wings raised, facing out of the grounds. The leaves' bars follow the falling road down to the ground. White Hound gives no width, stone or facing.Decided by lane A under the user's delegation of look choices; not reviewed by the user.",
       "basis": [
         {"source": "user", "quote": "I only want substantive issues, not visual reviews."},
         {
@@ -2407,7 +2438,7 @@
       "inferred": true
     },
     "walls-coped": {
-      "text": "The boundary walls stand 2.2 m high, as the raymarched walls do, in rubble stone under a pale stone coping that overhangs them a little. White Hound gives no height or construction.Decided by lane A under the user's delegation of look choices; not reviewed by the user.",
+      "text": "The boundary walls stand 2.2 m high, as the raymarched walls do, run on across the map's breaks narrower than 3.5 m (open where a road crosses), in rubble stone under a pale stone coping that overhangs them a little. White Hound gives no height or construction.Decided by lane A under the user's delegation of look choices; not reviewed by the user.",
       "basis": [
         {"source": "user", "quote": "I only want substantive issues, not visual reviews."},
         {"source": "wh-grounds-map", "note": "boundary wall (3a)"}
@@ -2435,7 +2466,7 @@
       "inferred": true
     },
     "hedge-crowns": {
-      "text": "The field hedges are trimmed to about 1.5 m with irregular crowns rather than flat tops, for a more natural look.Decided by lane A under the user's delegation of look choices; not reviewed by the user.",
+      "text": "The field hedges run as continuous rows, the map's breaks narrower than 4 m (its ink breaks up at bends and along thin rows) closed and opened again only where a road or path crosses, with stray fragments dropped; each row is trimmed to about 1.5 m, its sides all but upright to shoulders that round over the top, under an irregular crown, for a more natural look.Decided by lane A under the user's delegation of look choices; not reviewed by the user.",
       "basis": [
         {"source": "user", "quote": "I only want substantive issues, not visual reviews."},
         {"source": "data", "note": "locA hedge channel"}
@@ -2489,12 +2520,14 @@
       "inferred": true
     },
     "willow-knot": {
-      "text": "The knot sits 0.4 m up the trunk, a little round from the gap.",
+      "text": "The knot sits 0.4 m up the trunk, a little round from the gap: a dark knot-hole sunk in the middle of a burl that the trunk's own wood, bark and all, swells into, as an old branch scar heals.",
       "basis": [
         {
           "source": "wh-grounds",
           "quote": "On the lower part of the trunk, at a height accessible to a large domestic cat or an agile rat"
-        }
+        },
+        {"source": "wh-grounds", "quote": "trying to see the single knot in the bark of the old tree"},
+        {"source": "wh-grounds", "quote": "prod the knot on the trunk"}
       ],
       "inferred": true
     },
@@ -2553,6 +2586,21 @@
         }
       ]
     },
+    "high-street-footway": {
+      "text": "A footway of grey flagstones runs along the High Street's fronts, 2 m out from their walls, and its lamps stand on it. It is draped over the ground a 0.12 m kerb above it, but where it meets a front, before its doors, it stays under that building's floor, so no door opens below it; it stops at the buildings and at the side roads, leaving the carriageway between.",
+      "basis": [
+        {"source": "wh-hogsmeade", "quote": "fancy shop signs hanging above the pavements"},
+        {
+          "source": "wh-hogsmeade",
+          "quote": "There are at least some streetlamps, which will probably be ornate Victorian cast-iron jobs rather than modern."
+        },
+        {
+          "source": "data",
+          "note": "at site X it covers 1,164 m² in 1,235 triangles; without it the lamps stood on the grass verge (inspection round 1)"
+        }
+      ],
+      "inferred": true
+    },
     "village-ancillary": {
       "text": "Hogsmeade's small structures are the High Street's lamps, the shops' hanging signs and the Hog's Head's boar sign, the Shack's fence, a kirkyard wall with a few headstones, and garden walls and gates near the High Street.",
       "basis": [
@@ -2563,6 +2611,13 @@
         {"source": "wh-hogsmeade", "quote": "fancy shop signs hanging above the pavements"}
       ],
       "inferred": true
+    },
+    "village-night-windows": {
+      "text": "At night no glass on a High Street building's ground floor is lit: its shops are shut, and so is the Three Broomsticks. A quarter of its upper windows are lit and 15% dimly, as are the windows of the houses off the High Street.",
+      "basis": [
+        {"source": "wh-hogsmeade", "quote": "the darkness complete but for a few streetlamps and lit upper windows"},
+        {"source": "wh-hogsmeade", "quote": "Lights twinkled from windows over shops"}
+      ]
     },
     "hogs-head-slate": {
       "text": "The Hog's Head is slated, not thatched.",
@@ -2595,7 +2650,7 @@
       "images": ["Hogs_Head.gif"]
     },
     "shack-character": {
-      "text": "The Shrieking Shack is two storeys of unpainted weatherboard on a rubble footing under corrugated iron, with one rubble gable stack. Its door is shut and every window is boarded over but one, on the ground floor of the wall that faces the castle; a low fence rings its garden a few metres out, open where the path comes up to it.",
+      "text": "The Shrieking Shack is two storeys of unpainted weatherboard on a rubble footing under corrugated iron, with one rubble gable stack. Its door is shut, a leaf of planks with boards nailed across it, and every window is boarded over but one, on the ground floor of the wall that faces the castle; a low fence of two dark timber rails on posts rings its garden a few metres out, open where the path comes up to it.",
       "basis": [
         {
           "source": "wh-hogsmeade",
@@ -2633,7 +2688,7 @@
       ]
     },
     "honeydukes-mullions": {
-      "text": "Honeydukes' windows are mullioned: every window in its front, the shop's and those of the owners' rooms over it, is divided into lights at most 0.8 m wide by upright bars, painted like its shopfront in the shop windows and of stone above.",
+      "text": "Honeydukes' windows are mullioned: every window in its front, the shop's and those of the owners' rooms over it, is divided into lights at most 0.8 m wide by upright bars, painted like its shopfront in the shop windows and of stone above. The shop windows' lights are plain glass.",
       "basis": [
         {"source": "wh-hogsmeade", "quote": "nodding through the mullioned windows at the thick, swirling snow"},
         {"source": "wh-hogsmeade", "quote": "It has mullioned windows (that is, divided by a narrow vertical bar)"},
@@ -2654,7 +2709,7 @@
       "inferred": true
     },
     "post-office-owl-loft": {
-      "text": "The post office carries an owl loft along the middle of its ridge: a weatherboarded box under a hipped slate cap, with a row of flight holes over a perching ledge along each long side, for the owls that fly from it.",
+      "text": "The post office carries an owl loft along its highest ridge, as near the middle of its front as that ridge allows: a weatherboarded box under a hipped slate cap, with a row of flight holes over a perching ledge along each long side, for the owls that fly from it.",
       "basis": [
         {"source": "wh-hogsmeade", "quote": "the post office, from which owls issued at regular intervals"},
         {
@@ -2674,7 +2729,7 @@
       "inferred": true
     },
     "puddifoots-steamed-windows": {
-      "text": "Madam Puddifoot's is harled pink, and its shop windows are steamed up from inside, misted panes that glow with lamplight at dusk.",
+      "text": "Madam Puddifoot's is harled pink, and its shop windows are steamed up from inside: misted panes, unlit at night when the teashop is shut.",
       "basis": [
         {"source": "wh-hogsmeade", "quote": "a small teashop that Harry had never noticed before"},
         {
@@ -2698,7 +2753,7 @@
       ]
     },
     "dervish-and-banges-clock": {
-      "text": "Dervish & Banges, which sells magical instruments, hangs an instrument maker's bracket clock out over the pavement from the pier nearest the middle of its front: a drum with a white face on either side, on an iron bar.",
+      "text": "Dervish & Banges, which sells magical instruments, hangs an instrument maker's bracket clock out over the pavement from the pier nearest the middle of its front: a drum with a white face on either side, on an iron bar, each face's iron hands at ten past ten over iron marks at the quarters.",
       "basis": [
         {
           "source": "wh-hogsmeade",
@@ -2709,7 +2764,7 @@
       "inferred": true
     },
     "village-public-buildings": {
-      "text": "White Hound places the village's public buildings but draws none, so they follow Highland types. The school is a tall one-storey schoolroom of rubble under slate, its door in the middle of its front, tall windows front and back and a bell turret on its free gable, beside a two-storey white-harled schoolhouse. The village hall is a tall one-storey harled hall, its door between tall windows, with a low annexe. The distillery is white-harled under slate: a still house beside a square kiln under a steep pyramid roof crowned by a louvred ventilator, the pagoda of a Highland distillery; the kiln has no chimney of its own. The carriage hangar is one long weatherboarded shed under slate, kept for the carriages, its long front a row of carriage doors.",
+      "text": "White Hound places the village's public buildings but draws none, so they follow Highland types. The school is a tall one-storey schoolroom of rubble under slate, its door in the middle of its front, tall windows front and back and a bell turret on its free gable, beside a two-storey white-harled schoolhouse. The village hall is a tall one-storey harled hall, its door between tall windows, with a low annexe. The distillery is white-harled under slate: a still house beside a square kiln under a steep pyramid roof crowned by a louvred ventilator, the pagoda of a Highland distillery; the kiln has no chimney of its own. The carriage hangar is one long weatherboarded shed under slate, kept for the carriages, its long front a row of carriage doors reaching down to the ground.",
       "basis": [
         {
           "source": "wh-hogsmeade",
@@ -2799,7 +2854,7 @@
       "inferred": true
     },
     "village-levels": {
-      "text": "The village's building records also give two coarser levels of detail and a shadow caster, so whatever places a building places it at every level. lod1 lays every window and door flat on its wall, stands the chimney stacks in the roofs as boxes and fills each roof's skin in, trimmed back to its gables so their windows show; it keeps base courses, dormers, the named buildings' bays, buttresses and roof features and the kirkyard's and gardens' walls, but no fittings, painted margins or reveals. lod2 is each building's walls under its filled-in skin, which keeps the eaves that the flyover sees from above; the shadow caster, which the page draws again only when the sun moves, is its walls and attic, the cheapest, with what stands out beyond the eaves and casts a shadow of its own: Gladrags' blind and the Shack's fence as built, the kirkyard's wall, and each garden's wall and gate as one slab along them. Seen from above it leaves no patch of more than a square metre of the full village farther than 0.75 m from it. They are designed for frame time, none cut to fit the payload's room. The payload carries each level that passes its guards and saves enough triangles, and the page chooses among them for each view.",
+      "text": "The village's building records also give two coarser levels of detail and a shadow caster, so whatever places a building places it at every level. lod1 lays every window and door flat on its wall, stands the chimney stacks in the roofs as boxes and fills each roof's skin in, trimmed back to its gables so their windows show; it keeps base courses, dormers, the named buildings' bays, buttresses and roof features and the kirkyard's and gardens' walls, but no fittings, painted margins or reveals. lod2 is each building's walls under its filled-in skin, which keeps the eaves that the flyover sees from above; the shadow caster, which the page draws again only when the sun moves, is its walls and attic, the cheapest, with what stands out beyond the eaves and casts a shadow of its own: Gladrags' blind and the Shack's fence as built, the High Street's lamps, the kirkyard's wall, and each garden's wall and gate as a slab along each of its runs. Seen from above it leaves no patch of more than a square metre of the full village farther than 0.75 m from it. Every level keeps the High Street's footway as built, which would pop out of view where a level left it out. They are designed for frame time, none cut to fit the payload's room. The payload carries each level that passes its guards and saves enough triangles, and the page chooses among them for each view.",
       "basis": [
         {
           "source": "user",
@@ -2808,7 +2863,7 @@
         {"source": "user", "note": "live frame time ranks above page load"},
         {
           "source": "data",
-          "note": "at site X, of the full village's 171k triangles lod1 takes 68k, lod2 32k and the shadow caster 21k; packed alone, they take 0.64, 0.31 and 0.23 MB. Without its eaves lod2 would take about 21k, but its roofs seen from above would cover a sixth less (intersection over union 0.84)"
+          "note": "at site X, of the full village's 178k triangles lod1 takes 70k, lod2 33k and the shadow caster 25k; packed alone in payload format 4, they take 1.74, 0.80 and 0.44 MB. Without its eaves lod2 would take about 22k, but its roofs seen from above would cover a sixth less (intersection over union 0.84)"
         },
         {
           "source": "data",
@@ -2983,6 +3038,7 @@
       "decisions": [
         "wh-skyline",
         "towers-flat-battlemented",
+        "north-tower-stands-clear",
         "warm-masonry",
         "castle-colour-red-cast",
         "ravenclaw-battlements",
@@ -3805,7 +3861,7 @@
       "inputs": ["meta.extras.gates", "locA.road"],
       "dimensions": {"opening_m": 5.49, "pillar_height_m": 4.5, "pillar_width_m": 1.0, "gate_height_m": 3.0},
       "parts": ["paired gates", "tall stone pillars", "winged-boar figures", "wall up to the pillars"],
-      "materials": ["wrought iron", "pale stone", "weathered stone (the boars)"],
+      "materials": ["wrought iron", "rubble stone", "pale stone cornices", "weathered stone (the boars)"],
       "decisions": ["gates-pillars-boars", "gates-closed"]
     },
     {
@@ -3851,7 +3907,7 @@
       "status": "built",
       "sources": [{"source": "data", "note": "decoded hedge lines"}],
       "inputs": ["locA.hedge"],
-      "parts": ["trimmed hedges with irregular crowns"],
+      "parts": ["continuous trimmed hedges, rounded, with irregular crowns"],
       "decisions": ["hedge-heuristic", "hedge-crowns"]
     },
     {
@@ -3968,10 +4024,15 @@
         "flared roots with a gap",
         "finer asymmetric growth",
         "an arching root",
-        "the knot",
+        "the knot in its burl",
         "leaves"
       ],
-      "materials": ["grey-brown ridged bark", "dark knot", "earthy tunnel mouth", "grey-green willow leaves"],
+      "materials": [
+        "grey-brown bark with deep fissures along the wood",
+        "a dark knot-hole in a burl",
+        "earthy tunnel mouth",
+        "grey-green willow leaves"
+      ],
       "decisions": [
         "willow-root-gap",
         "willow-limbs",
@@ -4429,7 +4490,8 @@
         "village-detail-where-seen",
         "village-levels",
         "village-ancillary",
-        "shack-above-the-village"
+        "shack-above-the-village",
+        "village-night-windows"
       ]
     },
     {
@@ -4461,7 +4523,7 @@
     {
       "id": "street-furniture",
       "family": "village",
-      "title": "High Street lamps",
+      "title": "High Street lamps and footway",
       "status": "planned",
       "labels": ["wh-hogsmeade-map:1h"],
       "sources": [
@@ -4469,7 +4531,8 @@
           "source": "wh-hogsmeade",
           "quote": "There are at least some streetlamps, which will probably be ornate Victorian cast-iron jobs rather than modern."
         },
-        {"source": "wh-hogsmeade", "quote": "In DH the side-road to the Hog's Head is not lit"}
+        {"source": "wh-hogsmeade", "quote": "In DH the side-road to the Hog's Head is not lit"},
+        {"source": "wh-hogsmeade", "quote": "fancy shop signs hanging above the pavements"}
       ],
       "images": ["Brechin_lamp.jpg"],
       "traced": [
@@ -4480,8 +4543,13 @@
           "plan_px": [[375.0, 1100.0], [640.0, 1700.0]]
         }
       ],
-      "parts": ["cast-iron lamps on stone plinths"],
-      "decisions": ["hogsmeade-lamps-high-street-only", "village-high-street", "village-ancillary"]
+      "parts": ["cast-iron lamps on stone plinths", "a kerbed flagstone footway"],
+      "decisions": [
+        "hogsmeade-lamps-high-street-only",
+        "high-street-footway",
+        "village-high-street",
+        "village-ancillary"
+      ]
     }
   ],
   "excluded": {

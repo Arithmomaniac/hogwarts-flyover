@@ -59,7 +59,7 @@ TIMBER, IRON, GLASS, BARK, SASH = (code(n) for n in ("dark-timber", "black-iron"
 WEATHERBOARD, SHINGLES, PUMPKIN, EARTH, PLANKS = (code(n) for n in ("creosoted-weatherboard", "shingles", "pumpkin",
                                                                     "turned-earth", "weathered-planks"))
 FOLIAGE = code("hedge")                   # the hedges' green
-WALL_STONE = code("wall-stone")           # the boundary walls' stone
+WALL_STONE = code("grounds-rubble")       # the grounds' walls, gate pillars and bridges: rubble stone in rough courses
 WALL_IN = 1.05                            # boundary walls are drawn wider than scale and thinned (template_b WALL_IN)
 HEDGE_LEVEL = 0.45
 WALL_HEIGHT_M, HEDGE_HEIGHT_M = 2.2, 1.5
@@ -70,11 +70,13 @@ ROOF_M, SIDE_OVER_M, GABLE_OVER_M = 0.15, 0.45, 0.3
 DOOR_W, DOOR_H = 5 * FT, 11 * FT
 WINDOW_W, SILL_M, HEAD_M, PANE_M = 4 * FT, 3 * FT, 11 * FT, 2 * FT
 WINDOW_AT = 0.22 * HUT_W                  # window centres either side of the doors, as cabin.jpg places them
+CASING_M, CASING_PROUD_M = 0.12, 0.04      # the openings' casings: width, and how far they stand proud of the boards
 REVEAL_M = 0.12
 
 POST_M, POST_PITCH_M, FENCE_M, RAILS_M = 0.12, 2.4, 1.25, (0.45, 1.05)
 GATE_M, GATE_FROM_M = 1.4, 2.0            # the gate's opening, and how far along the fence from its end by the house
-PUMPKINS, PUMPKIN_PITCH_M = 12, 3.0
+PUMPKINS, PUMPKIN_PITCH_M, PUMPKIN_RIB = 12, 3.0, 0.17
+FENCE_CLEAR_M = 2.5                    # the fence stops this far from the hut's walls, then runs on to them
 
 # the pitch (see the module notes); insets are metres in from the stands' registered outer edge, heights metres above
 # the playing surface
@@ -155,6 +157,20 @@ def hut(h, ground):
             parts.append(box(c - 0.03, c + 0.03, SILL_M, HEAD_M, z0, z1, SASH))
             for y in np.arange(SILL_M + PANE_M, HEAD_M - 0.01, PANE_M):
                 parts.append(box(c - WINDOW_W / 2, c + WINDOW_W / 2, y - 0.03, y + 0.03, z0, z1, SASH))
+    for s in (1.0, -1.0):                       # casings proud of the boards round each opening, sills, the door's ironwork
+        z0, z1 = sorted((s * hd, s * (hd + CASING_PROUD_M)))
+        for x0, x1, y0, y1 in [(-DOOR_W / 2, DOOR_W / 2, 0.0, DOOR_H)] + [
+                (c - WINDOW_W / 2, c + WINDOW_W / 2, SILL_M, HEAD_M) for c in (-WINDOW_AT, WINDOW_AT)]:
+            w = CASING_M
+            parts += [box(x0 - w, x0, y0, y1 + w, z0, z1, TIMBER), box(x1, x1 + w, y0, y1 + w, z0, z1, TIMBER),
+                      box(x0 - w, x1 + w, y1, y1 + w, z0, z1, TIMBER)]
+            if y0 > 0.0:                        # a sill board, projecting
+                zs0, zs1 = sorted((s * hd, s * (hd + 0.1)))
+                parts.append(box(x0 - w - 0.04, x1 + w + 0.04, y0 - 0.06, y0, zs0, zs1, TIMBER))
+        zi0, zi1 = sorted((s * (hd - REVEAL_M + 0.02), s * (hd - REVEAL_M + 0.04)))   # on the door's face, in its reveal
+        for y in (0.6, DOOR_H - 0.6):
+            parts.append(box(-DOOR_W / 2 + 0.05, 0.1, y - 0.05, y + 0.05, zi0, zi1, IRON))      # strap hinges
+        parts.append(lathe(DOOR_W / 2 - 0.25, s * (hd - REVEAL_M + 0.06), [(0.07, 1.1), (0.07, 1.16)], IRON, 8))
     eave_y, zo = EAVE_M - SIDE_OVER_M * slope, hd + GABLE_OVER_M
     for s in (1.0, -1.0):                       # the two slopes, a slab each: top, underside, fascia, bargeboards
         x1 = s * (hw + SIDE_OVER_M)
@@ -202,24 +218,46 @@ def tree(x, z, y):
 
 
 def pumpkin(x, z, y, d, phase):
-    """A ribbed pumpkin `d` across and 0.62 d high sitting on y, shaded smoothly as the spheroid it nearly is."""
-    th = np.linspace(0.0, 2 * math.pi, 25)
-    ph = np.linspace(0.0, math.pi, 7)
+    """A pumpkin `d` across and about 0.6 d high sitting on y: ten deep ribs, a dimple at the top under a short green
+    stem, shaded smoothly from its own surface."""
+    th = np.linspace(0.0, 2 * math.pi, 41)
+    ph = np.linspace(0.0, math.pi, 11)
     T, P = np.meshgrid(th, ph)                                 # rows from the bottom up
-    r = d / 2 * (1.0 - 0.08 * (1.0 - np.cos(8 * (T + phase))) / 2) * np.sin(P)
+    r = d / 2 * (1.0 - PUMPKIN_RIB * (1.0 - np.cos(10 * (T + phase))) / 2) * np.sin(P)
     ry = 0.31 * d
-    pos = np.stack([x + r * np.cos(T), y + ry * (1.0 - np.cos(P)), z + r * np.sin(T)], -1).reshape(-1, 3)
+    dimple = 0.09 * d * np.exp(-((math.pi - P) / 0.55) ** 2)
+    pos = np.stack([x + r * np.cos(T), y + ry * (1.0 - np.cos(P)) - dimple, z + r * np.sin(T)], -1).reshape(-1, 3)
     centre = np.array([x, y + ry, z])
-    nrm = (pos - centre) / np.array([(d / 2) ** 2, ry ** 2, (d / 2) ** 2])
-    nrm /= np.linalg.norm(nrm, axis=1, keepdims=True)
     cols = len(th)
     a = (np.arange(len(ph) - 1)[:, None] * cols + np.arange(cols - 1)[None, :]).ravel()
     idx = np.concatenate([np.column_stack([a, a + cols + 1, a + 1]), np.column_stack([a, a + cols, a + cols + 1])])
     face = np.cross(pos[idx[:, 1]] - pos[idx[:, 0]], pos[idx[:, 2]] - pos[idx[:, 0]])
     flip = np.einsum("ij,ij->i", face, pos[idx].mean(axis=1) - centre) < 0
     idx[flip] = idx[flip][:, [0, 2, 1]]
+    face[flip] = -face[flip]
+    nrm = np.zeros_like(pos)                                   # its ribs shade from the faces about each vertex
+    for k in range(3):
+        np.add.at(nrm, idx[:, k], face)
+    seam = np.arange(len(ph)) * cols                           # the seam's two columns are one
+    nrm[seam] = nrm[seam + cols - 1] = nrm[seam] + nrm[seam + cols - 1]
+    nrm[np.linalg.norm(nrm, axis=1) < 1e-12] = (pos - centre)[np.linalg.norm(nrm, axis=1) < 1e-12]
+    nrm /= np.linalg.norm(nrm, axis=1, keepdims=True)
     body = Mesh(pos, nrm, np.tile(np.asarray(PUMPKIN, np.uint8), (len(pos), 1)), idx.astype(np.uint32))
-    return [body, bar((x, y + 0.6 * d, z), (x + 0.05, y + 0.62 * d + 0.25, z), 0.07, BARK)]
+    top = y + 2 * ry - 0.09 * d
+    stem = lathe(x, z, [(0.07, top - 0.05), (0.05, top + 0.12), (0.04, top + 0.2)], FOLIAGE, 7)
+    return [body, stem]
+
+
+def pumpkin_leaf(c, y, heading, size):
+    """A broad, five-lobed pumpkin leaf lying cupped on the ground at y, its stalk end at c (x, z)."""
+    t = np.linspace(0.0, 2 * math.pi, 16, endpoint=False)
+    rad = size * (0.75 + 0.25 * np.abs(np.cos(2.5 * t)))
+    mid = np.asarray(c) + size * np.array([math.cos(heading), math.sin(heading)])
+    rim = np.column_stack([mid[0] + rad * np.cos(t + heading), y + 0.03 + 0.12 * size * (1 + np.sin(t)) / 2,
+                           mid[1] + rad * np.sin(t + heading)])
+    hub = np.array([mid[0], y + 0.12 * size, mid[1]])
+    tris = np.array([[hub, rim[k], rim[(k + 1) % len(rim)]] for k in range(len(rim))])
+    return faceted(tris, FOLIAGE, up=True)
 
 
 def oriented_box(h, c, length, width, base, height, attr, ground):
@@ -243,8 +281,16 @@ def garden(outline, h, ground):
     """Hagrid's garden on White Hound's traced outline (see the module notes), in world coordinates."""
     house, rng = footprint(h), np.random.default_rng(4)
     g = lambda xz: np.asarray(ground(xz[..., 0], xz[..., 1]), np.float64)
-    lines = LineString(outline.exterior.coords).difference(house.buffer(1.0))
-    lines = [l for l in getattr(lines, "geoms", [lines]) if l.length > 2.0]
+    from shapely.ops import nearest_points
+    lines = LineString(outline.exterior.coords).difference(house.buffer(FENCE_CLEAR_M))   # clear of the hut's walls
+    lines = [l for l in getattr(lines, "geoms", [lines]) if l.length > 3.0]
+    for k, l in enumerate(lines):                # and where a line comes up to the hut, it runs on to the wall
+        pts = list(l.coords)
+        for end in (0, -1):
+            if house.distance(Point(*pts[end])) < FENCE_CLEAR_M + 0.5:
+                wall = nearest_points(house.exterior, Point(*pts[end]))[0].coords[0]
+                pts = [wall] + pts if end == 0 else pts + [wall]
+        lines[k] = LineString(pts)
     front_corners = [world(h, s * HUT_W / 2, -HUT_D / 2) for s in (-1.0, 1.0)]
     ends = [(min(np.hypot(*(np.asarray(l.coords[k]) - c)) for c in front_corners), i, k)
             for i, l in enumerate(lines) for k in (0, -1)]
@@ -290,19 +336,36 @@ def garden(outline, h, ground):
             parts.append(bar((hinge[0], y + 0.25, hinge[1]), (leaf[0], y + 1.0, leaf[1]), 0.06, TIMBER))
     fits = outline.difference(house.buffer(1.5)).buffer(-1.2)
     back_door = world(h, 0.0, HUT_D / 2)
-    lattice = [back_door - h.front * (2.6 + i * PUMPKIN_PITCH_M) + h.right * (j * PUMPKIN_PITCH_M)
-               for i in range(8) for j in range(-6, 7)]
+    lattice = [back_door - h.front * (2.6 + i * PUMPKIN_PITCH_M * 0.87)
+               + h.right * ((j + 0.5 * (i % 2)) * PUMPKIN_PITCH_M) + rng.uniform(-0.5, 0.5, 2)
+               for i in range(8) for j in range(-6, 7)]                # offset rows, sprawling
     lattice = [p for p in lattice if fits.contains(Point(*p).buffer(1.3))]
-    lattice.sort(key=lambda p: np.hypot(*(p - back_door)))
+    lattice.sort(key=lambda p: np.hypot(*(p - back_door)) + rng.uniform(0.0, 2.5))
     if len(lattice) < PUMPKINS:
         raise ValueError("no room for a dozen pumpkins behind the hut")
-    patch = []
-    for p in lattice[:PUMPKINS]:
-        q = p + rng.uniform(-0.15, 0.15, 2)
+    patch, grown = [], []
+    for q in lattice[:PUMPKINS]:
         d = rng.uniform(1.5, 2.0)                                    # "the size of a large boulder"
-        parts += pumpkin(q[0], q[1], float(g(q[None])[0]) - 0.08, d, rng.uniform(0, 1))
-        patch.append(Point(*q).buffer(d / 2 + 0.6))
-    soil = unary_union(patch).convex_hull.intersection(fits.buffer(0.6))
+        y = float(g(q[None])[0])
+        parts += pumpkin(q[0], q[1], y - 0.08, d, rng.uniform(0, 1))
+        for k in range(5):                                           # its leaves, round its foot
+            heading = rng.uniform(0, 2 * math.pi)
+            foot = q + (d / 2 - 0.1) * np.array([math.cos(heading), math.sin(heading)])
+            parts.append(pumpkin_leaf(foot, float(g(foot[None])[0]), heading + rng.uniform(-0.5, 0.5), rng.uniform(0.35, 0.55)))
+        patch.append(Point(*q).buffer(d / 2 + rng.uniform(0.5, 1.1), 10))
+        grown.append(q)
+    for q in grown:                                                  # short runners curling out from each, leafed
+        for k in range(3):
+            heading, turn = rng.uniform(0, 2 * math.pi), rng.uniform(-0.9, 0.9)
+            way = [q + 1.0 * np.array([math.cos(heading), math.sin(heading)])]
+            for _ in range(4):
+                heading += turn / 4
+                way.append(way[-1] + 0.4 * np.array([math.cos(heading), math.sin(heading)]))
+            ys = g(np.array(way)) + 0.05
+            for (pa, ya), (pb, yb) in zip(zip(way[:-1], ys[:-1]), zip(way[1:], ys[1:])):
+                parts.append(bar((pa[0], ya, pa[1]), (pb[0], yb, pb[1]), 0.04, FOLIAGE))
+            parts.append(pumpkin_leaf(way[-1], float(ys[-1]) - 0.05, heading, rng.uniform(0.3, 0.45)))
+    soil = unary_union(patch).intersection(fits.buffer(0.6))         # a lobed patch, not a cut polygon
     soil = max(getattr(soil, "geoms", [soil]), key=lambda p: p.area)
     parts.append(lid(soil, lambda x, z: np.asarray(ground(x, z)) + 0.03, EARTH))
     taken = [soil.buffer(0.8)]
@@ -331,6 +394,10 @@ def garden(outline, h, ground):
                 quad = [(a[0] + o[0], ya - 0.02, a[1] + o[1]), (b[0] + o[0], yb - 0.02, b[1] + o[1]),
                         (b[0], yb + 0.3, b[1]), (a[0], ya + 0.3, a[1])]
                 parts.append(toward(panel(quad, EARTH), np.array([o[0], 0.6, o[1]])))
+        for p_, y_ in zip(spine[1:-1], ys[1:-1]):                    # the potatoes' haulms along the ridge
+            for t_ in (-0.25, 0.25):
+                q_ = p_ + (tips[1] - tips[0]) / 5 * t_
+                parts.append(lathe(q_[0], q_[1], [(0.3, y_ + 0.22), (0.24, y_ + 0.45), (0.0, y_ + 0.58)], FOLIAGE, 7))
     patch_far = max(np.hypot(*(np.asarray(p.centroid.coords[0]) - back_door)) for p in patch)
     beyond = [p for p in by_door if np.hypot(*(p - back_door)) > patch_far + 3.0]
     c, heap = place(beyond, Point(0, 0).buffer(1.5, 8), fits, taken)  # the compost heap, beyond the pumpkins
@@ -460,6 +527,8 @@ def stair(p, deg, ground):
             if abs(ra - rb) > 0.05:
                 parts.append(bar((ra, ya - 0.12, w), (rb, yb - 0.12, w), 0.12, TIMBER))
                 parts.append(bar((ra, ya + 0.95, w), (rb, yb + 0.95, w), 0.06, TIMBER))
+                for rr, yy in ((ra, ya), (rb, yb)):           # a newel at each end of the handrail, down to the ground
+                    parts.append(bar((rr, min(gy(rr), yy) - 0.3, w), (rr, yy + 1.2, w), 0.12, TIMBER))
         for rr in (back - LANDING_M, back):       # posts under the landing
             base = gy(rr) - 0.3
             if top - 0.05 - base > 0.2:
@@ -709,8 +778,8 @@ def gates(scene):
         sunk = min(g(p) for p in corners) - 0.5
         rot, shift = frame(c, out, 0.0)
         r = PIER_M / 2
-        pier = [box(-r - 0.1, r + 0.1, sunk, foot + PLINTH_M, -r - 0.1, r + 0.1, PALE_STONE),     # plinth
-                box(-r, r, foot + PLINTH_M, top, -r, r, PALE_STONE),                              # shaft
+        pier = [box(-r - 0.1, r + 0.1, sunk, foot + PLINTH_M, -r - 0.1, r + 0.1, WALL_STONE),     # plinth
+                box(-r, r, foot + PLINTH_M, top, -r, r, WALL_STONE),                              # shaft
                 box(-r - 0.12, r + 0.12, top, top + CAP_M, -r - 0.12, r + 0.12, PALE_STONE),      # cornice
                 box(-r + 0.05, r - 0.05, top + CAP_M, top + CAP_M + 0.12, -r + 0.05, r - 0.05, PALE_STONE)]
         parts.append(placed(concat(pier), rot, shift))
@@ -744,10 +813,16 @@ def gates(scene):
 
 # ---------------------------------------------------------------- walls, hedges and the tomb
 COPING_M, COPING_OVER_M = 0.15, 0.06      # the coping course: depth, and overhang either side of the wall
-SAFETY_WALL_M, SAFETY_THICK_M, SAFETY_INSET_M, SAFETY_PATH_M = 1.1, 0.45, 0.4, 0.8   # the cliff-edge safety wall (2e)
+SAFETY_WALL_M, SAFETY_THICK_M, SAFETY_INSET_M, SAFETY_PATH_M = 1.1, 0.45, 0.0, 0.8   # the cliff-edge safety wall (2e)
+SAFETY_SKIRT_M = 1.0                           # its foot at most this far below the path's level, off the harbour roof
 BRINK_SEARCH_M = 6.0                           # how far in from the mapped edge the cliff's brink may lie
 RUIN_THICK_M, RUIN_LOW_M, RUIN_HIGH_M, RUIN_BLOCK_M = 1.0, 0.9, 1.4, 1.2   # the old curtain wall's remnant (5d)
-HEDGE_CROWN_M, HEDGE_VERTEX_M = 0.18, 2.5
+HEDGE_CROWN_M, HEDGE_STEP_M = 0.2, 1.5    # the crown's lumps; the spacing of the rows' cross-sections
+HEDGE_HALF_M, HEDGE_SQUARENESS = (0.45, 0.8), 3.2   # half-width; the loaf's squareness (2 an ellipse)
+HEDGE_PROFILE_DEG = (0.0, 10.0, 35.0, 65.0, 90.0, 115.0, 145.0, 170.0, 180.0)
+GATEWAY_M = 1.0                             # a gateway opens this far either side of a road or path's ink
+WALL_JOIN_M = 3.5                           # breaks in a boundary wall narrower than a gateway
+HEDGE_JOIN_M, HEDGE_MIN_M = 4.0, 4.0        # breaks in a row narrower than a gateway; the shortest row kept
 MARBLE = code("white-marble")
 
 
@@ -814,13 +889,24 @@ def safety_wall(scene, footprint):
     walk = surface(scene)
     g = lambda xz: walk(xz[:, 0], xz[:, 1])
 
-    def foot(x, z):                                # on the harbour's roof where it stands over the cut, not its bed; the
+    def foot(x, z, base=None):                     # on the harbour's roof where it stands over the cut, not its bed; the
         x, z = np.asarray(x, np.float64), np.asarray(z, np.float64)     # lowest within 0.5 m, so it spans the cut's bank
         level = lambda x, z: np.where(walk(x, z) > np.asarray(scene.ground(x, z)) + 0.01, walk(x, z) - 0.5,
                                       scene.sunk(x, z))
+        here = level(x, z)
+        if base is not None:                       # no deeper than SAFETY_SKIRT_M under its own level: no teeth down the
+            here = np.maximum(here, base(x, z) - SAFETY_SKIRT_M)          # sheer face its outer side overhangs
         ring = [(0.0, 0.0)] + [(r * math.cos(t), r * math.sin(t)) for r in (0.25, 0.5)
                                for t in np.arange(8) * math.pi / 4]
-        return np.min([level(x + dx, z + dz) for dx, dz in ring], axis=0)
+        low = np.min([level(x + dx, z + dz) for dx, dz in ring], axis=0)
+        rec = scene.meta["extras"].get("harbour")
+        if rec is None:
+            return here
+        m, u = np.asarray(rec["mouth"], np.float64), np.asarray(rec["axis"], np.float64)
+        rel = np.stack([x, z], -1) - m                          # only by the roof: elsewhere its foot is under it,
+        a, w = rel @ u, rel @ np.array([-u[1], u[0]])           # not hung down the cliff face beyond the brink
+        by_roof = (a > PORTAL_M - 2.0) & (a < rec["depth"] + ROOF_PAST_M + 2.0) & (np.abs(w) < SHELL_HALF_M + 2.0)
+        return np.where(by_roof, low, here)
     drop = g(p - 1.5 * n) - g(p + 1.5 * n) > 0.3
     if drop.all():
         runs = [np.arange(len(p))]
@@ -848,7 +934,8 @@ def safety_wall(scene, footprint):
         if line.length < 2.0:
             continue
         wall = line.buffer(SAFETY_THICK_M / 2, cap_style=2, join_style=2)
-        out += coped(scene, pieces_of(wall), SAFETY_WALL_M, along(scene, line, path), foot, step=0.5)
+        base = along(scene, line, path)
+        out += coped(scene, pieces_of(wall), SAFETY_WALL_M, base, lambda x, z: foot(x, z, base), step=0.5)
     return out
 
 
@@ -885,26 +972,196 @@ def brink(scene, p, n, window=9):
 
 def along(scene, line, path, step=0.5, window=5):
     """Heights for a wall on `line`, level across it: the ground of the `path` beside it at the same fraction of their
-    lengths (median-smoothed over `window` samples), by the nearest point of the line."""
+    lengths (median-smoothed over `window` samples), interpolated to each point by its projection onto the line, so the
+    stone and the coping that overhangs it rise together without steps."""
     from scipy.ndimage import median_filter
-    from scipy.spatial import cKDTree
     f = np.linspace(0.0, 1.0, max(int(line.length / step), 2) + 1)
-    on = np.array([line.interpolate(v, normalized=True).coords[0] for v in f])
     by = np.array([path.interpolate(v, normalized=True).coords[0] for v in f])
     level = median_filter(surface(scene)(by[:, 0], by[:, 1]), size=window, mode="nearest")
-    tree = cKDTree(on)
-    return lambda x, z: level[tree.query(np.column_stack([np.ravel(x), np.ravel(z)]))[1]].reshape(np.shape(x))
+
+    def height(x, z):
+        x, z = np.asarray(x, np.float64), np.asarray(z, np.float64)
+        t = shapely.line_locate_point(line, shapely.points(np.ravel(x), np.ravel(z)), normalized=True)
+        return np.interp(t, f, level).reshape(np.shape(x))
+    return height
 
 
-def hedges(scene, polygons):
-    """Field hedges: trimmed, but with irregular crowns, on footprints given vertices every HEDGE_VERTEX_M."""
-    crown = lambda x, z: (scene.ground(x, z) + HEDGE_HEIGHT_M
-                          + HEDGE_CROWN_M * np.sin(0.9 * np.asarray(x) + 0.4 * np.asarray(z)) * np.sin(0.7 * np.asarray(z) - 0.3 * np.asarray(x)))
+def joined(polygons, join, paths=None):
+    """The map's pieces of a wall or hedge joined across breaks narrower than `join` (its ink breaks up at bends and
+    along thin runs), opened again wherever a road or path crosses them."""
+    from shapely.ops import nearest_points
+    pieces = pieces_of(unary_union(polygons).buffer(join / 2, quad_segs=4).buffer(-join / 2, quad_segs=4))
+    tree, links = shapely.STRtree(pieces), []
+    for i, a in enumerate(pieces):               # breaks the closing leaves where the pieces stand staggered
+        for j in tree.query(a.buffer(join)):
+            b = pieces[j]
+            if j > i and a.distance(b) < join:
+                width = float(np.clip(2 * min(a.area / a.length, b.area / b.length), 0.5, 1.4))
+                links.append(LineString(nearest_points(a, b)).buffer(width / 2, quad_segs=4))
+    rows = pieces_of(unary_union(pieces + links))
+    if paths is not None and not paths.is_empty:                     # a gateway wherever a road or path crosses a run:
+        cut = []                                                     # where its ink splits the run, not runs beside it
+        for g in rows:
+            for k in pieces_of(paths.intersection(g)):
+                if len(pieces_of(g.difference(k.buffer(0.05)))) > 1:
+                    cut.append(k.buffer(GATEWAY_M))
+        rows = pieces_of(unary_union(rows).difference(unary_union(cut))) if cut else rows
+    return rows
+
+
+def hedge_rows(polygons, paths=None):
+    """The hedges' rows (joined, across breaks narrower than HEDGE_JOIN_M), and the fragments that stand alone dropped."""
     out = []
-    for poly in polygons:
-        s = poly.simplify(0.05, preserve_topology=True)
-        poly = s if s.is_valid and s.geom_type == "Polygon" and not s.is_empty else poly
-        out.append(prism(poly.segmentize(HEDGE_VERTEX_M), scene.sunk, crown, FOLIAGE))
+    for g in joined(polygons, HEDGE_JOIN_M, paths):
+        e = np.asarray(g.minimum_rotated_rectangle.exterior.coords)
+        if max(np.hypot(*(e[1] - e[0])), np.hypot(*(e[2] - e[1]))) > HEDGE_MIN_M:
+            out.append(g.simplify(0.25, preserve_topology=True))
+    return out
+
+
+def centrelines(row):
+    """[(points (n, 2), half-widths (n,))] along a row's medial axis (the Voronoi diagram of its sides, its spurs
+    pruned), each run between the axis's ends and forks, carried on to the row's own ends."""
+    import networkx as nx
+    from scipy.spatial import Voronoi
+    edge = row.segmentize(0.4)
+    pts = np.concatenate([np.asarray(r.coords)[:-1] for r in (edge.exterior, *edge.interiors)])
+    vor = Voronoi(pts)
+    inside = shapely.contains_xy(row, vor.vertices[:, 0], vor.vertices[:, 1])
+    radius = shapely.distance(row.boundary, shapely.points(vor.vertices))
+    graph = nx.Graph()
+    for a, b in vor.ridge_vertices:
+        if a >= 0 and b >= 0 and inside[a] and inside[b]:
+            graph.add_edge(a, b, w=float(np.hypot(*(vor.vertices[a] - vor.vertices[b]))))
+    if not graph.number_of_nodes():
+        return []
+    spur = 2.5 * float(np.median(radius[list(graph.nodes)]))
+    for _ in range(30):                          # prune the spurs running out to the sides' corners
+        cut = []
+        for leaf in [n for n in graph.nodes if graph.degree(n) == 1]:
+            path, length, here = [leaf], 0.0, leaf
+            while True:
+                nxt = [m for m in graph.neighbors(here) if m not in path]
+                if len(nxt) != 1 or graph.degree(here) > 2 and here != leaf:
+                    break
+                length += graph[here][nxt[0]]["w"]
+                path.append(nxt[0])
+                here = nxt[0]
+                if graph.degree(here) != 2:
+                    break
+            if graph.degree(here) > 2 and length < spur:
+                cut += path[:-1]
+        if not cut:
+            break
+        graph.remove_nodes_from(set(cut))
+    from scipy.spatial import cKDTree
+    parts = [list(c) for c in nx.connected_components(graph)]
+    if len(parts) > 1:                           # the axis breaks where the row narrows: join the pieces up again
+        links = nx.Graph()
+        for i in range(len(parts)):
+            tree = cKDTree(vor.vertices[parts[i]])
+            for j in range(i + 1, len(parts)):
+                dist, at = tree.query(vor.vertices[parts[j]])
+                k = int(np.argmin(dist))
+                a, b = parts[i][at[k]], parts[j][k]
+                if dist[k] < 3.0 and row.buffer(0.2).contains(LineString(vor.vertices[[a, b]])):
+                    links.add_edge(i, j, w=float(dist[k]), ends=(a, b))
+        for i, j, data in nx.minimum_spanning_tree(links, weight="w").edges(data=True):
+            graph.add_edge(*data["ends"], w=data["w"])
+    lines = []
+    stops = {n for n in graph.nodes if graph.degree(n) != 2}
+    seen = set()
+    for s0 in stops or [next(iter(graph.nodes))]:
+        for nb in graph.neighbors(s0):
+            if (s0, nb) in seen:
+                continue
+            chain = [s0, nb]
+            while chain[-1] not in stops and len(chain) < 100000:
+                nxt = [m for m in graph.neighbors(chain[-1]) if m != chain[-2]]
+                if not nxt or nxt[0] == chain[0]:
+                    break
+                chain.append(nxt[0])
+            seen.update({(chain[-1], chain[-2]), (chain[0], chain[1])})
+            line = LineString(vor.vertices[chain]).simplify(0.3)
+            if line.length < 0.5:
+                continue
+            xy = np.asarray(line.coords)
+            for end, nb_ in ((0, 1), (-1, -2)):          # carry an end on to the row's own end
+                if graph.degree(chain[end]) == 1:
+                    d = xy[end] - xy[nb_]
+                    d /= max(np.linalg.norm(d), 1e-9)
+                    reach = float(radius[chain[end]])
+                    xy = np.concatenate([xy[:1] + d * reach, xy]) if end == 0 else np.concatenate([xy, xy[-1:] + d * reach])
+            line = LineString(xy)
+            n = max(int(math.ceil(line.length / HEDGE_STEP_M)), 1)
+            q = np.array([line.interpolate(t, normalized=True).coords[0] for t in np.linspace(0.0, 1.0, n + 1)])
+            half = np.clip(shapely.distance(row.boundary, shapely.points(q)), HEDGE_HALF_M[0], HEDGE_HALF_M[1])
+            lines.append((q, half))
+    return lines
+
+
+def hedge_crown(x, z):
+    """The hedges' irregular crown: lumps of a few metres and smaller tufts, deterministic in world position."""
+    x, z = np.asarray(x, np.float64), np.asarray(z, np.float64)
+    return HEDGE_CROWN_M * (0.65 * np.sin(1.1 * x + 0.6 * z) * np.sin(0.8 * z - 0.9 * x + 1.3)
+                            + 0.35 * np.sin(1.7 * x - 1.2 * z + 0.4) * np.sin(1.4 * z + 1.1 * x))
+
+
+def hedges(scene, polygons, paths=None):
+    """Field hedges in continuous rows (hedge_rows): along each row's centreline a rounded loaf of foliage, its sides all
+    but upright to shoulders low on a domed top (a superellipse), trimmed to about HEDGE_HEIGHT_M under an irregular
+    crown (hedge_crown) and shaded smoothly; its ends closed."""
+    angles = np.radians(HEDGE_PROFILE_DEG)
+    cx, cy = np.cos(angles), np.sin(angles)
+    e = 2.0 / HEDGE_SQUARENESS                              # a superellipse: |x|^n + |y|^n = 1
+    px = np.sign(cx) * np.abs(cx) ** e
+    py = np.abs(cy) ** e
+    nx_ = np.sign(px) * np.abs(px) ** (HEDGE_SQUARENESS - 1)   # its normal, before scaling by half-width and height
+    ny_ = np.abs(py) ** (HEDGE_SQUARENESS - 1)
+    out, built = [], []
+    rows = hedge_rows(polygons, paths)
+    for row in rows:
+        lines = [(q, half) for q, half in centrelines(row) if len(q) > 1]
+        shapes = [LineString(q) for q, _ in lines]
+        for k, (q, half) in enumerate(lines):
+            if shapes[k].length < HEDGE_MIN_M and not any(   # a short run only where it joins a longer one
+                    shapes[j].length >= HEDGE_MIN_M and shapes[j].distance(shapes[k]) < 0.6 for j in range(len(lines))):
+                continue
+            t = np.gradient(q, axis=0)
+            t /= np.maximum(np.linalg.norm(t, axis=1, keepdims=True), 1e-9)
+            side = np.column_stack([-t[:, 1], t[:, 0]])
+            ground = np.asarray(scene.ground(q[:, 0], q[:, 1]), np.float64)
+            height = HEDGE_HEIGHT_M + hedge_crown(q[:, 0], q[:, 1]) + 0.3          # from 0.3 m into the ground
+            xz = q[:, None, :] + (half[:, None] * px[None, :])[..., None] * side[:, None, :]
+            y = ground[:, None] - 0.3 + height[:, None] * py[None, :]
+            pos = np.concatenate([xz[..., :1], y[..., None], xz[..., 1:]], axis=-1)
+            n2 = (nx_[None, :] / half[:, None]) [..., None] * side[:, None, :]
+            nrm = np.concatenate([n2[..., :1], (ny_[None, :] / height[:, None])[..., None], n2[..., 1:]], axis=-1)
+            nrm /= np.maximum(np.linalg.norm(nrm, axis=-1, keepdims=True), 1e-9)
+            k, m = pos.shape[:2]
+            grid = np.arange(k * m).reshape(k, m)
+            a_, b_, c_, d_ = grid[:-1, :-1].ravel(), grid[1:, :-1].ravel(), grid[1:, 1:].ravel(), grid[:-1, 1:].ravel()
+            idx = np.concatenate([np.column_stack([a_, b_, c_]), np.column_stack([a_, c_, d_])])
+            pos, nrm = pos.reshape(-1, 3), nrm.reshape(-1, 3)
+            face = np.cross(pos[idx[:, 1]] - pos[idx[:, 0]], pos[idx[:, 2]] - pos[idx[:, 0]])
+            flip = np.einsum("ij,ij->i", face, nrm[idx].sum(axis=1)) < 0
+            idx[flip] = idx[flip][:, [0, 2, 1]]
+            out.append(Mesh(pos, nrm, np.tile(np.asarray(FOLIAGE, np.uint8), (len(pos), 1)), idx.astype(np.uint32)))
+            for end, sgn in ((0, -1.0), (-1, 1.0)):            # its ends
+                ring = pos.reshape(k, m, 3)[end]
+                out.append(toward(panel(ring, FOLIAGE), np.array([sgn * t[end][0], 0.0, sgn * t[end][1]])))
+            built.append(LineString(q).buffer(float(half.max()) + 3.0))   # a row stands in sight of these
+    covered = unary_union(built) if built else Polygon()
+    near_path = paths.buffer(GATEWAY_M) if paths is not None and not paths.is_empty else Polygon()
+    for piece in polygons:                       # what no row carries stands as a rounded shrub, not a block or nothing
+        for rest in pieces_of(piece.difference(near_path).difference(covered)):
+            if rest.area > 0.1:
+                c = rest.representative_point()
+                r = float(np.clip(math.sqrt(rest.area / math.pi) + 0.3, 0.6, 1.2))
+                y = float(np.asarray(scene.ground(np.array([c.x]), np.array([c.y])))[0])
+                h = HEDGE_HEIGHT_M + float(hedge_crown(c.x, c.y))
+                out.append(lathe(c.x, c.y, [(r, y - 0.3), (r, y + 0.45 * h), (0.85 * r, y + 0.75 * h),
+                                            (0.5 * r, y + 0.95 * h), (0.0, y + h)], FOLIAGE, 12, cap=False))
     return out
 
 
@@ -933,12 +1190,13 @@ def tomb(scene):
 
 # ---------------------------------------------------------------- the harbour mouth
 HARBOUR_ROCK, IVY = code("harbour-rock"), code("ivy")
-PORTAL_M, BACK_IN_M, ROOF_PAST_M = 1.5, 2.0, 1.0   # the portal's distance in from the waterline; the back wall's in
+PORTAL_M, BACK_IN_M, ROOF_PAST_M = -0.5, 2.0, 1.0  # the portal's lip, out over the water; the back wall's in
                                                     # front of the cut's end; how far the roof runs past it
 CROWN_M, SPRING_M, CHANNEL_HALF_M, SHELL_HALF_M, FLOOR_M = 2.0, 0.8, 2.25, 5.0, 2.5  # above / below the lake;
 # the channel spans only the cut's wet width: fix_harbour lowers 2 m texels, so its banks ramp up inside the 8 m rectangle
-IVY_TO_M, IVY_STRAND_M, IVY_PITCH_M = 1.0, 0.3, 0.2
-RELIEF_M = 0.45                                    # the roof's broken surface, in and out of the cliff's line
+IVY_TO_M, IVY_STRAND_M, IVY_PITCH_M = 0.8, 0.3, 0.2
+IVY_SPREAD_M, IVY_ABOVE_M = 1.2, 3.0   # the ivy's reach beyond the opening either side, and above its crown
+RELIEF_M = 0.5                                    # the roof's broken surface, in and out of the cliff's line
 
 
 def vault(w):
@@ -963,7 +1221,7 @@ def harbour_frame(scene):
         f = (w + beyond) / (2 * beyond)
         cliff = (1 - f) * g(a, -beyond + 0 * w) + f * g(a, beyond + 0 * w)
         bulge = 1.0 - np.minimum((w / SHELL_HALF_M) ** 2, 1.0)  # fades to nothing where the roof meets the uncut cliff
-        rough = RELIEF_M * bulge * np.sin(1.7 * a + 2.3 * np.sin(0.9 * w)) * np.cos(1.1 * w - 0.7 * a)
+        rough = RELIEF_M * bulge * (0.6 * np.sin(1.4 * w + 0.3 * a) + 0.4 * np.sin(2.9 * w - 0.5 * a + 1.1))   # gullies
         t = np.maximum(g(a, w), cliff) + 0.05 + rough
         return np.where(np.abs(w) < CHANNEL_HALF_M + 0.5, np.maximum(t, lake + vault(w) + 0.6), t)
     return m, u, side, at, g, top
@@ -1015,7 +1273,18 @@ def harbour(scene):
         return np.concatenate([np.stack([q[0], q[1], q[2]], -2).reshape(-1, 3, 3),
                                np.stack([q[0], q[2], q[3]], -2).reshape(-1, 3, 3)])
 
-    parts = [faceted(sheet(T, A, W), HARBOUR_ROCK, up=True)]                      # the roof, as the cliff's surface
+    P = np.stack([A, T, W], -1)                                                    # the roof, as the cliff's surface,
+    nrm = np.cross(np.gradient(P, axis=1), np.gradient(P, axis=0))                 # shaded smoothly as the cliff is
+    nrm[nrm[..., 1] < 0] *= -1
+    nrm /= np.maximum(np.linalg.norm(nrm, axis=-1, keepdims=True), 1e-12)
+    grid = np.arange(P.shape[0] * P.shape[1]).reshape(P.shape[:2])
+    q = [grid[:-1, :-1].ravel(), grid[1:, :-1].ravel(), grid[1:, 1:].ravel(), grid[:-1, 1:].ravel()]
+    idx = np.concatenate([np.column_stack([q[0], q[1], q[2]]), np.column_stack([q[0], q[2], q[3]])])
+    pos, nrm = P.reshape(-1, 3), nrm.reshape(-1, 3)
+    face = np.cross(pos[idx[:, 1]] - pos[idx[:, 0]], pos[idx[:, 2]] - pos[idx[:, 0]])
+    flip = face[:, 1] < 0
+    idx[flip] = idx[flip][:, [0, 2, 1]]
+    parts = [Mesh(pos, nrm, np.tile(np.asarray(HARBOUR_ROCK, np.uint8), (len(pos), 1)), idx.astype(np.uint32))]
     Av, Wv = np.meshgrid(np.linspace(a0, back, int(math.ceil((back - a0) / 0.5)) + 1),
                          np.linspace(-CHANNEL_HALF_M, CHANNEL_HALF_M, 17), indexing="ij")
     parts.append(flipped(faceted(sheet(lake + vault(Wv), Av, Wv), HARBOUR_ROCK, up=True)))    # the vault, facing down
@@ -1043,25 +1312,44 @@ def harbour(scene):
         face.append([(a0, low[i], wf[i]), (a0, low[i + 1], wf[i + 1]), (a0, tf[i + 1], wf[i + 1])])
         face.append([(a0, low[i], wf[i]), (a0, tf[i + 1], wf[i + 1]), (a0, tf[i], wf[i])])
     parts.append(toward(faceted(np.array(face), HARBOUR_ROCK), np.array([-1.0, 0.0, 0.0])))
-    ivy = []                                                                       # the curtain of ivy over the opening
-    for k, w in enumerate(np.arange(-CHANNEL_HALF_M + IVY_STRAND_M / 2, CHANNEL_HALF_M, IVY_PITCH_M)):
+    ivy = []                                    # a curtain of ivy over the opening, draping down the face round it
+    ga = np.arange(a0, a1 + 1e-9, 0.25)
+    for k, w in enumerate(np.arange(-CHANNEL_HALF_M - IVY_SPREAD_M + IVY_STRAND_M / 2, CHANNEL_HALF_M + IVY_SPREAD_M,
+                                    IVY_PITCH_M)):
         h1, h2, h3 = (((math.sin(12.9898 * k + c) * 43758.5453) % 1.0) for c in (4.1, 9.7, 2.3))
-        bottom = lake + IVY_TO_M + 0.35 * h1
-        crown = lake + float(vault(w)) + 0.5
-        if crown - bottom < 0.3:
+        inside = abs(w) < CHANNEL_HALF_M - 0.1
+        bottom = lake + (IVY_TO_M + 0.35 * h1 if inside else SPRING_M + 0.3 + 1.2 * h1)
+        top_y = lake + CROWN_M + IVY_ABOVE_M * (0.5 + 0.5 * h3)
+        face_at = top(ga, np.full_like(ga, w))
+        width = IVY_STRAND_M * (0.8 + 0.6 * h2)
+        ys = np.arange(top_y, bottom - 1e-9, -0.4)
+        if len(ys) < 2:
             continue
-        width, x = IVY_STRAND_M * (0.8 + 0.6 * h2), a0 - 0.05 - 0.12 * h3      # ragged, and hanging at varied depths
-        ivy.append(toward(panel([(x, bottom, w - width / 2), (x, bottom, w + width / 2), (x, crown, w + width / 2),
-                                 (x, crown, w - width / 2)], IVY), np.array([-1.0, 0.0, 0.0])))
+        xs = []
+        for y in ys:                            # on the face where it stands this high; under the lintel, hanging free
+            j = np.flatnonzero(face_at >= y)
+            if not len(j) or j[0] == 0:
+                at_ = a0
+            else:                               # between the samples either side of the height, not stepped
+                i0 = j[0] - 1
+                f = (y - face_at[i0]) / max(face_at[j[0]] - face_at[i0], 1e-6)
+                at_ = ga[i0] + f * (ga[j[0]] - ga[i0])
+            xs.append(at_ - 0.15 - 0.1 * h3)
+        for (xa, ya), (xb, yb) in zip(zip(xs[:-1], ys[:-1]), zip(xs[1:], ys[1:])):
+            ivy.append(toward(panel([(xb, yb, w - width / 2), (xb, yb, w + width / 2), (xa, ya, w + width / 2),
+                                     (xa, ya, w - width / 2)], IVY), np.array([-1.0, 0.0, 0.0])))
     rot, shift = frame(m, u, 0.0)
     return [placed(concat(parts), rot, shift), placed(concat(ivy), rot, shift)]
 
 
 # ---------------------------------------------------------------- bridges
-ARCH_SHADOW = code("arch-shadow")
+ARCH_SHADOW, RUBBLE, DECK = code("arch-shadow"), WALL_STONE, code("bridge-deck")
 CROSSING_GAP_M, ROAD_DENSITY = 25.0, 0.5            # the widest road between two pieces of a stream, and road ink
 DECK_HALF_M, PARAPET_THICK_M, PARAPET_M = (1.2, 5.0), 0.45, 1.05   # the deck's clear half-width range; parapets
-SPAN_M, DEEP_SPAN_M, RING_M = 7.0, 9.0, 0.22         # parapet lengths for shallow and deep crossings; the arch ring
+RING_M, COVER_M, ABUT_M = 0.22, 0.3, 1.0             # the arch ring; the stone over it, under the deck; wall past it
+SPAN_M, RISE = (1.2, 6.5), (0.45, 1.1)               # the arch's span and rise ranges
+FACE_REACH_M = 4.0                                  # how far past the road's edge a face may stand, out to the burn
+RAMP_GRADE = 7.0                                    # a raised deck's approaches: 1 in RAMP_GRADE
 
 
 def road_ink(scene):
@@ -1103,6 +1391,12 @@ def crossings(scene):
     return out
 
 
+def road_ink_polygon(scene):
+    """All the road and path ink, as a polygon of its texels' squares."""
+    road, _ = road_ink(scene)
+    return unary_union(field_polygons(-road, scene.local, -ROAD_DENSITY))
+
+
 def ink_polygon(scene, c, reach):
     """The road ink within `reach` of c as a polygon of its texels."""
     road, _ = road_ink(scene)
@@ -1117,61 +1411,168 @@ def ink_polygon(scene, c, reach):
     return unary_union(squares) if squares else Polygon()
 
 
-def bridge(scene, c, axis, half_width, ends):
-    """A small stone bridge carrying the road over a burn: coped parapets either side of the road, stopping wherever
-    other road or path ink leaves it, and where the burn meets the road's bank on either side a stone headwall with an
-    arch over the water's opening, ringed in pale stone and sized to the drop from the road to the burn. Local frame:
-    x along the road, z across it."""
+def upright(outline, z, attr, facing):
+    """A flat polygon (local (x, y), holes and notches allowed) standing in the plane z, facing +z or -z."""
+    import shapely
+    tris = np.array([np.asarray(t.exterior.coords)[:3] for t in shapely.constrained_delaunay_triangles(outline).geoms])
+    pos = np.concatenate([tris, np.full(tris.shape[:2] + (1,), z)], axis=-1)
+    return toward(faceted(pos, attr), np.array([0.0, 0.0, facing]))
+
+
+def burn_run(stream, scene, at, x0, z, reach=10.0):
+    """(lo, hi) along the road of the burn's water in a strip just outside a face at z, the run nearest x0; or None."""
+    xs = np.arange(-reach, reach + 1e-9, 0.25)
+    wet = np.zeros_like(xs, bool)
+    for off in (0.75, 1.5):
+        wet |= sample(stream, scene.local, *np.moveaxis(at(xs, np.full_like(xs, z + np.sign(z) * off)), -1, 0)) < 0
+    if not wet.any():
+        return None
+    from scipy import ndimage as ndi
+    lab, _ = ndi.label(wet)
+    k = lab[np.flatnonzero(wet)[np.argmin(np.abs(xs[wet] - x0))]]
+    run = xs[lab == k]
+    return float(run.min()), float(run.max())
+
+
+def arch_opening(x0, half, spring, radius, centre, floor):
+    """The opening beneath a segmental arch in a bridge's face (x along the road, y up): the arch, a circle of `radius`
+    about (x0, centre), from its springing at (x0 - half, spring) over to its springing at (x0 + half, spring), then
+    back along the bed beneath it, floor = (xs from x0 - half to x0 + half, the bed's heights there, none above the
+    springing)."""
+    th = np.linspace(-math.asin(min(half / radius, 1.0)), math.asin(min(half / radius, 1.0)), 15)
+    soffit = [(x0 + radius * math.sin(t), centre + radius * math.cos(t)) for t in th]
+    # exactly on the springing: computed, the ends miss it by an ulp and can cross a bed lying there
+    soffit[0], soffit[-1] = (x0 - half, spring), (x0 + half, spring)
+    return Polygon(soffit + list(zip(floor[0][::-1], floor[1][::-1])))
+
+
+def bridge(scene, c, axis, half_width, ends, stream=None):
+    """One small rubble-stone bridge carrying the road over a burn: a spandrel wall at each face, where the burn leaves
+    the road's bank (no further than FACE_REACH_M past the road's edge), rising into a coped parapet; in each face a
+    segmental arch over the burn's water there, ringed in pale stone over the dark beneath (a skew bridge where the
+    burn crosses obliquely); and between the faces a deck, humped where the road lies too low over the water for the
+    arches and eased back down to it at 1 in RAMP_GRADE. The walls stop short of any path leaving the road, so each
+    parapet runs unbroken. Local frame: x along the road, z across it, y up."""
     side = np.array([-axis[1], axis[0]])
     at = lambda x, z: c + np.asarray(x)[..., None] * axis + np.asarray(z)[..., None] * side
+    g = lambda x, z: np.asarray(scene.ground(*np.moveaxis(at(x, z), -1, 0)), np.float64)
     road_density = scene.locA[..., CHANNELS["locA"].index("road")] / 255.0
     zs = np.arange(0.0, 8.01, 0.25)
-    extent = {}
-    for s in (1.0, -1.0):                       # the deck's edge each side: where the road ink ends across it
+    extent, face, arch = {}, {}, {}
+    for s in (1.0, -1.0):                       # the road's edge each side: where its ink ends across it
         edge = []
         for x in (-1.5, 0.0, 1.5):
             d = sample(road_density, scene.local, *np.moveaxis(at(np.full_like(zs, x), s * zs), -1, 0))
             edge.append(zs[np.argmax(d < ROAD_DENSITY)] if (d < ROAD_DENSITY).any() else zs[-1])
         extent[s] = float(np.clip(max(edge), *DECK_HALF_M)) + 0.1
-    road = float(scene.ground(*c[:, None])[0])
-    beds = [float(scene.ground(*e[:, None])[0]) for e in ends]
-    length = DEEP_SPAN_M if road - min(beds) > 2.0 else SPAN_M
-    deck = Polygon([at(x, z) for x, z in ((-length, -extent[-1.0]), (length, -extent[-1.0]), (length, extent[1.0]),
-                                          (-length, extent[1.0]))])
-    other = ink_polygon(scene, c, length + 4.0).difference(deck.buffer(0.3)).buffer(0.5)   # paths and bends leaving it
+        mine = [e for e in ends if float((e - c) @ side) * s > 0]
+        z0 = abs(float((mine[0] - c) @ side)) if mine else 0.0
+        face[s] = float(np.clip(z0, extent[s] + PARAPET_THICK_M, extent[s] + FACE_REACH_M))
+        x_end = float((mine[0] - c) @ axis) if mine else 0.0
+        run = burn_run(stream, scene, at, x_end, s * face[s]) if stream is not None else None
+        lo, hi = run or (x_end - 0.8, x_end + 0.8)
+        span = float(np.clip(hi - lo + 0.5, *SPAN_M))
+        x0, half = 0.5 * (lo + hi), span / 2
+        xa = np.linspace(x0 - half, x0 + half, 9)
+        bank = g(xa, np.full_like(xa, s * face[s]))
+        spring = float(np.median(bank)) + 0.05             # on the banks; the opening runs down to the channel's bed
+        rise = float(np.clip(0.22 * span, *RISE))
+        radius = (half ** 2 + rise ** 2) / (2 * rise)
+        arch[s] = (x0, half, spring, rise, radius, spring + rise - radius, (xa, np.minimum(bank - 0.15, spring)))
+    xs = np.arange(-40.0, 40.01, 0.5)
+    a_lo = min(a[0] - a[1] - RING_M for a in arch.values())
+    a_hi = max(a[0] + a[1] + RING_M for a in arch.values())
+    over = lambda x: np.maximum(np.maximum(a_lo - np.asarray(x), np.asarray(x) - a_hi), 0.0)   # beyond the arches
+    road = lambda x, z: g(x, np.clip(z, -extent[-1.0], extent[1.0]))   # the road's own cross-fall, carried to the walls
+    hump = max(0.0, *(a[2] + a[3] + RING_M + COVER_M - float(road(np.array([a[0]]), np.array([s * extent[s]]))[0])
+                      for s, a in arch.items()))
+    bump = lambda x: np.maximum(hump - over(x) / RAMP_GRADE, 0.0)
+    keep = (over(xs) <= ABUT_M) | (bump(xs) > 0.02)
+    i0, i1 = np.flatnonzero(keep)[[0, -1]]
+    deck_x = xs[max(i0 - 1, 0): i1 + 2]
+    surface_at = lambda x, z: road(np.asarray(x, np.float64), np.asarray(z, np.float64)) + bump(x)
+    walled = (over(xs) <= ABUT_M) | (bump(xs) > 0.25)             # parapets over the arches and wherever it stands proud
+    w0, w1 = xs[np.flatnonzero(walled)[[0, -1]]]
+    other = ink_polygon(scene, c, 30.0)                 # paths and bends leaving it: the walls stop short of them
+    rect = Polygon([at(x, z) for x, z in ((-40, -extent[-1.0]), (40, -extent[-1.0]), (40, extent[1.0]), (-40, extent[1.0]))])
+    beyond = max(face.values()) + 1.0               # a path leaves the road: ink reaching past the faces, not the
+    other = unary_union([g for g in pieces_of(other.difference(rect.buffer(0.3)))   # road's own ragged edge
+                         if max(abs((np.asarray(g.exterior.coords) - c) @ side)) > beyond])
+    other = other.buffer(0.5) if not other.is_empty else other
+    for s in (1.0, -1.0):                           # the walls stop short of it, but never while the deck stands proud
+        line = lambda x: Point(*at(x, s * (face[s] - PARAPET_THICK_M / 2)))
+        for x in np.arange(a_hi, w1 + 0.25, 0.25):
+            if not other.is_empty and other.intersects(line(x)):
+                end = max(x - 0.5, a_hi + 0.3)
+                w1 = end if bump(np.array([end]))[0] <= 0.25 else w1
+                break
+        for x in np.arange(a_lo, w0 - 0.25, -0.25):
+            if not other.is_empty and other.intersects(line(x)):
+                end = min(x + 0.5, a_lo - 0.3)
+                w0 = end if bump(np.array([end]))[0] <= 0.25 else w0
+                break
+    wx = np.unique(np.concatenate([np.arange(w0, w1, 0.5), [w1]]))
     parts = []
     for s in (1.0, -1.0):
-        off = extent[s] + PARAPET_THICK_M / 2
-        rail = Polygon([at(x, s * off + t * PARAPET_THICK_M / 2) for x, t in
-                        ((-length / 2, -1), (length / 2, -1), (length / 2, 1), (-length / 2, 1))]).difference(other)
-        parts += coped(scene, [g for g in pieces_of(rail) if g.area > 0.2], PARAPET_M)
-    for e, bed in zip(ends, beds):
-        z0, x0 = float((e - c) @ side), float((e - c) @ axis)
-        s = 1.0 if z0 >= 0 else -1.0
-        z = s * max(abs(z0), extent[s] + 1.5 * PARAPET_THICK_M)                   # the headwall, facing the burn
-        r = float(np.clip(road - bed - 0.15, 0.3, 1.4))
-        spring, foot = bed + 0.05, bed - 0.4
-        reach = r + RING_M + 1.2
-        xs = np.linspace(x0 - reach, x0 + reach, 13)
-        g = np.asarray(scene.ground(*np.moveaxis(at(xs, np.full_like(xs, z)), -1, 0)), np.float64)
-        top = np.maximum(g + 0.25, spring + r + RING_M + 0.25)
-        rot, shift = frame(c, axis, 0.0)
-        face = [toward(panel([(xa, foot, z), (xb, foot, z), (xb, tb, z), (xa, ta, z)], WALL_STONE), np.array([0.0, 0.0, s]))
-                for xa, xb, ta, tb in zip(xs[:-1], xs[1:], top[:-1], top[1:])]
-        th = np.linspace(0.0, math.pi, 13)
-        void = [(x0 + r, foot, z + s * 0.03)] + [(x0 + r * math.cos(a), spring + r * math.sin(a), z + s * 0.03) for a in th] \
-            + [(x0 - r, foot, z + s * 0.03)]
-        face.append(toward(panel(void, ARCH_SHADOW), np.array([0.0, 0.0, s])))
-        for ta, tb in zip(th[:-1], th[1:]):                     # the arch ring's voussoirs
-            ring = [(x0 + rr * math.cos(a), spring + rr * math.sin(a), z + s * 0.04) for rr, a in
-                    ((r, ta), (r + RING_M, ta), (r + RING_M, tb), (r, tb))]
-            face.append(toward(panel(ring, PALE_STONE), np.array([0.0, 0.0, s])))
-        parts.append(placed(concat(face), rot, shift))
-    return parts
+        x0, half, spring, rise, radius, centre, floor = arch[s]
+        deck_at = lambda x: surface_at(x, np.full_like(np.asarray(x, np.float64), s * extent[s]))
+        th = np.linspace(-math.asin(min(half / radius, 1.0)), math.asin(min(half / radius, 1.0)), 15)
+        zo, zi = s * face[s], s * (face[s] - PARAPET_THICK_M)
+        foot = np.minimum(g(wx, np.full_like(wx, zo)), g(wx, np.full_like(wx, zi))) - 0.5
+        opening = arch_opening(x0, half, spring, radius, centre, floor)         # down to the bed along the face
+        rail = deck_at(wx) + PARAPET_M - COPING_M
+        wall = Polygon(list(zip(wx, foot)) + list(zip(wx[::-1], rail[::-1]))).buffer(0)
+        parts.append(upright(wall.difference(opening), zo, RUBBLE, s))             # the face and its parapet
+        back = Polygon(list(zip(wx, deck_at(wx) - 0.3)) + list(zip(wx[::-1], rail[::-1]))).buffer(0)
+        parts.append(upright(back, zi, RUBBLE, -s))                               # the parapet's back, over the deck
+        for x, f in ((wx[0], -1.0), (wx[-1], 1.0)):                               # the walls' ends
+            y0, y1 = float(np.interp(x, wx, foot)), float(np.interp(x, wx, rail))
+            parts.append(toward(panel([(x, y0, zi), (x, y0, zo), (x, y1, zo), (x, y1, zi)], RUBBLE), np.array([f, 0.0, 0.0])))
+        parts += [toward(panel([(x0 + rr * math.sin(t), centre + rr * math.cos(t), zo + s * 0.02) for rr, t in
+                                ((radius, ta), (radius + RING_M, ta), (radius + RING_M, tb), (radius, tb))], PALE_STONE),
+                         np.array([0.0, 0.0, s])) for ta, tb in zip(th[:-1], th[1:])]   # the arch ring's voussoirs
+        depth = zo - s * 0.2                                                      # the dark under the arch
+        parts.append(upright(opening, depth, ARCH_SHADOW, s))
+        soffit = [(x0 + radius * math.sin(t), centre + radius * math.cos(t)) for t in th]
+        for (xa_, ya), (xb_, yb) in zip(soffit[:-1], soffit[1:]):
+            parts.append(toward(panel([(xa_, ya, zo), (xb_, yb, zo), (xb_, yb, depth), (xa_, ya, depth)], ARCH_SHADOW),
+                                np.array([x0 - 0.5 * (xa_ + xb_), centre - 0.5 * (ya + yb), 0.0])))
+        for x, y, f in ((x0 - half, floor[1][0], 1.0), (x0 + half, floor[1][-1], -1.0)):   # its jambs, to the bed
+            if spring - y > 0.02:
+                parts.append(toward(panel([(x, y, zo), (x, spring, zo), (x, spring, depth), (x, y, depth)],
+                                          ARCH_SHADOW), np.array([f, 0.0, 0.0])))
+        cap = Polygon([(wx[0] - COPING_OVER_M, zi - s * COPING_OVER_M), (wx[-1] + COPING_OVER_M, zi - s * COPING_OVER_M),
+                       (wx[-1] + COPING_OVER_M, zo + s * COPING_OVER_M), (wx[0] - COPING_OVER_M, zo + s * COPING_OVER_M)])
+        cap = cap.segmentize(0.5)
+        lift = lambda h: (lambda x, z: deck_at(np.asarray(x, np.float64)) + h + 0.0 * np.asarray(z, np.float64))
+        parts.append(prism(cap, lift(PARAPET_M - COPING_M), lift(PARAPET_M), PALE_STONE))
+        parts.append(flipped(lid(cap, lift(PARAPET_M - COPING_M), PALE_STONE)))
+    def sheet(xs_, zs_):
+        X, Z = np.meshgrid(xs_, zs_, indexing="ij")
+        P = np.stack([X, surface_at(X, Z) + 0.03, Z], -1)
+        q = [P[:-1, :-1], P[1:, :-1], P[1:, 1:], P[:-1, 1:]]
+        return faceted(np.concatenate([np.stack([q[0], q[1], q[2]], -2).reshape(-1, 3, 3),
+                                       np.stack([q[0], q[2], q[3]], -2).reshape(-1, 3, 3)]), DECK, up=True)
+    zl, zr = -extent[-1.0], extent[1.0]
+    parts.append(sheet(deck_x, np.linspace(zl, zr, max(int((zr - zl) / 1.0), 1) + 1)))   # the deck over the road
+    inside = np.unique(np.concatenate([[wx[0]], deck_x[(deck_x >= wx[0]) & (deck_x <= wx[-1])], [wx[-1]]]))
+    parts.append(sheet(inside, np.array([zr, face[1.0] - PARAPET_THICK_M])))    # and its verges, between the walls
+    parts.append(sheet(inside, np.array([-(face[-1.0] - PARAPET_THICK_M), zl])))
+    for z, f in ((zl, -1.0), (zr, 1.0)):                                          # its edges, down to the ground
+        ys = surface_at(deck_x, np.full_like(deck_x, z))
+        gz = g(deck_x, np.full_like(deck_x, z)) - 0.3
+        skirt = [panel([(xa_, ya, z), (xb_, yb, z), (xb_, gb, z), (xa_, ga, z)], RUBBLE)
+                 for xa_, xb_, ya, yb, ga, gb in zip(deck_x[:-1], deck_x[1:], ys[:-1], ys[1:], gz[:-1], gz[1:])
+                 if max(ya - ga, yb - gb) > 0.35]
+        if skirt:
+            parts.append(toward(concat(skirt), np.array([0.0, 0.0, f])))
+    rot, shift = frame(c, axis, 0.0)
+    return [placed(concat(parts), rot, shift)]
 
 
 def bridges(scene):
-    return [p for c, axis, half, ends in crossings(scene) for p in bridge(scene, c, axis, half, ends)]
+    stream = sd_bytes(decode(scene.tex["locB"])[..., CHANNELS["locB"].index("stream")])
+    return [p for c, axis, half, ends in crossings(scene) for p in bridge(scene, c, axis, half, ends, stream)]
 
 
 # ---------------------------------------------------------------- family hooks (build_meshes.massing)
@@ -1224,8 +1625,10 @@ def build_extras(scene):
     kept = [g for p in field_polygons(hedge_field, scene.local, HEDGE_LEVEL)
             for g in getattr(p.difference(fence), "geoms", [p.difference(fence)])
             if g.geom_type == "Polygon" and not g.is_empty]
-    return {"grounds-walls": coped(scene, field_polygons(walls, scene.local, -WALL_IN), WALL_HEIGHT_M),
-            "field-boundaries": hedges(scene, kept),
+    paths = road_ink_polygon(scene)
+    runs = [g.simplify(0.1, preserve_topology=True) for g in joined(field_polygons(walls, scene.local, -WALL_IN), WALL_JOIN_M, paths)]
+    return {"grounds-walls": coped(scene, runs, WALL_HEIGHT_M),
+            "field-boundaries": hedges(scene, kept, paths),
             "gates": gates(scene),
             "tomb": tomb(scene),
             "harbour-mouth": harbour(scene),

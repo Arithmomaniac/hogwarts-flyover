@@ -37,6 +37,9 @@ BLEND_M = 5.0                           # the share of its ground falls from nin
 INTERLEAVE = 0.2                        # and along at least this share of the lines across its edge the two interleave
 SCRUB = 2                               # the surface class of the maps' rough scrubland (frag4.glsl classCol)
 OVERGROWN = 8                           # the surface class of an overgrown garden's ground
+FLOOR = 5                               # the woods' floor
+WOOD_M = 16.0                           # the woods' floor lies in woods this wide or more: under a lone tree or a clump
+                                        # the grass grows on, where litter the size of a crown would read as a stain
 LINEAR = {      # the clearings that follow a linear feature, and the manifest decision that gives each one's reason
     "the railway's earthworks, and its lineside within 10 m of the open line": "railway-regrade",
     "the Forest's corridors along the A890 and the Kyle railway": "forest-corridors-a890-railway",
@@ -116,6 +119,24 @@ def blend(sc, cls, texel, seed, soft, barrier=None, may=None, width_m=ECOTONE_M,
     out[lost] = sc[across[0], across[1]][lost]
     gained = ~whole & own & open_ground & ~kept[nearest[0], nearest[1]]
     out[gained if may is None else gained & may] = cls
+    return out
+
+
+def woods_floor(sc, trees, texel, wood_m=WOOD_M, soft=(0, 1, SCRUB)):
+    """The surface classes `sc`, on a grid of texels `texel` metres apart, with the woods' floor only in woods wood_m
+    across or more and within wood_m / 2 of one: ground under `trees` of half density or more, or under the floor,
+    that holds a disc wood_m across (the grid's edge taken to run on). The floor of a lone tree or a clump takes the
+    `soft` ground nearest it."""
+    r = int(round(wood_m / 2 / texel))
+    y, x = np.ogrid[-r:r + 1, -r:r + 1]
+    disc = x * x + y * y <= r * r
+    woods = ndi.binary_opening((sc == FLOOR) | (trees > 0.5), structure=disc, border_value=1)
+    stray = (sc == FLOOR) & ~ndi.binary_dilation(woods, structure=disc)
+    if not stray.any():
+        return sc
+    near = ndi.distance_transform_edt(~np.isin(sc, soft), return_distances=False, return_indices=True)
+    out = sc.copy()
+    out[stray] = sc[near[0], near[1]][stray]
     return out
 
 

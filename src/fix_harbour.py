@@ -7,11 +7,12 @@ navigable tunnel beyond.
 
 The mouth is found from the data, so it follows the terrain wherever the scene is anchored: from White Hound's mapped
 mouth (the manifest's traced harbour-mouth, map 1f), the nearest cliff foot (a dry texel within FOOT_M of the lake
-that stands CLIFF_M or more above it) within SEARCH_M; the channel runs up the slope there, from the waterline into the
-cliff. Inside the declared rectangle (WIDTH_M across, from APRON_M out in the lake to DEPTH_M into the cliff) the bed
-is lowered to CHANNEL_M under the lake surface and becomes lake water of the surrounding lake's surface class; nothing
-outside it changes. The mouth, the axis and the rectangle are recorded as meta.extras.harbour, and a second run
-reuses that record, so it changes nothing.
+that stands CLIFF_M or more above it) within SEARCH_M; the channel runs from the waterline into the cliff there, square
+to the lake's edge within SHORE_M of the foot (not up the bed's slope, which what stands on the cliff above can bend:
+the castle's walls hold the cliff top's level, castle_base.HOLD_M). Inside the declared rectangle (WIDTH_M across, from
+APRON_M out in the lake to DEPTH_M into the cliff) the bed is lowered to CHANNEL_M under the lake surface and becomes
+lake water of the surrounding lake's surface class; nothing outside it changes. The mouth, the axis and the rectangle
+are recorded as meta.extras.harbour, and a second run reuses that record, so it changes nothing.
 
 Usage: python -X utf8 src/fix_harbour.py [data.js]
 """
@@ -27,7 +28,7 @@ from shapely.geometry import Polygon
 from mesh_source import DATA_JS, Grid, decode, encode_height, encode_u8, load_georef, sample
 
 MANIFEST = Path(__file__).with_name("mesh_scene.json")
-SEARCH_M, FOOT_M, CLIFF_M = 60.0, 8.0, 15.0
+SEARCH_M, FOOT_M, CLIFF_M, SHORE_M = 60.0, 8.0, 15.0, 15.0
 WIDTH_M, DEPTH_M, APRON_M, CHANNEL_M = 8.0, 12.0, 2.0, 2.0
 HEIGHT_Q = 0.02                       # pack.py's locBed / locW quantum
 
@@ -45,7 +46,7 @@ def texel_world(grid):
 
 
 def find_mouth(meta, grid, bed, wd, mapped):
-    """(waterline origin (x, z), unit (x, z) axis up into the cliff) of the cliff foot nearest the mapped mouth."""
+    """(waterline origin (x, z), unit (x, z) axis into the cliff) of the cliff foot nearest the mapped mouth."""
     lake = float(meta["lake"])
     e, n = texel_world(grid)
     spacing = float(np.hypot(*np.subtract(grid.to_world(0, 1), grid.to_world(0, 0))))
@@ -57,9 +58,14 @@ def find_mouth(meta, grid, bed, wd, mapped):
         raise ValueError(f"no cliff foot within {SEARCH_M} m of the mapped harbour mouth")
     k = np.unravel_index(np.argmin(np.where(foot, reach, np.inf)), reach.shape)
     f = np.array([e[k], n[k]])
-    g = lambda p: float(sample(bed, grid, np.array([p[0]]), np.array([p[1]]))[0])
-    grad = np.array([g(f + (2.0, 0.0)) - g(f - (2.0, 0.0)), g(f + (0.0, 2.0)) - g(f - (0.0, 2.0))])
-    u = grad / np.linalg.norm(grad) if np.linalg.norm(grad) > 1e-6 else (f - mapped) / np.linalg.norm(f - mapped)
+    edge = wet & ~ndi.binary_erosion(wet) & (np.hypot(e - f[0], n - f[1]) < SHORE_M)
+    shore = np.stack([e[edge], n[edge]], -1)
+    if len(shore) < 3:
+        raise ValueError(f"no line of the lake's edge within {SHORE_M} m of the harbour's cliff foot")
+    along = np.linalg.svd(shore - shore.mean(axis=0), full_matrices=False)[2][0]
+    u = np.array([-along[1], along[0]])
+    if u @ (f - shore.mean(axis=0)) < 0:            # away from the water
+        u = -u
     origin = f
     for step in np.arange(0.0, 30.0, 0.5):                 # down the slope to the waterline
         p = f - u * step

@@ -89,8 +89,10 @@ START_ATTEMPTS = 20                # how many of those the probe waits through f
 # subject in the same stretch of the tour, by the framing test's grid (src/test_render_tour.py): the castle, the ship,
 # the station and train, the greenhouses. trees-65 went to the heaviest view of the castle and trees together, and
 # trees-60 to the heaviest that keeps it and look-pan, half a second after it as before, at least 2 s from the others.
-WINDOWS = {"castle": 58.65, "lake-ship": 51.65, "station-train": 92.4, "greenhouses": 138.6, "hogsmeade": 435.45,
-           "trees-60": 60.65, "trees-65": 54.65, "look-pan": 61.15}
+# Raising the Gryffindor Tower waypoint (tour-gryffindor-close) lifted the camera 14 to 20 m at the castle, trees and
+# pan windows, so those were picked again by the same rules on the new tour.
+WINDOWS = {"castle": 59.15, "lake-ship": 52.4, "station-train": 92.25, "greenhouses": 138.8, "hogsmeade": 435.55,
+           "trees-60": 61.15, "trees-65": 54.65, "look-pan": 61.65}
 PANNED = {"look-pan"}
 # name: (page, meshes, debug bits): the frozen baseline; the candidate's landscape alone (meshes off, a diagnostic); the
 # candidate as it ships, its meshes the scene's objects; and the same again, an A/A control whose ratio to the first

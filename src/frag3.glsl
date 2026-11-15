@@ -76,8 +76,16 @@ struct Res {
 #define SUN_NEAR 3200.0
 #define SUN_TREF 5000.0
 // the ground normal's finite-difference step (m): wider within the water layer's reach, where a bank drops through one
-// 2 m texel and the bilinear cells would otherwise shade as a staircase along the shore
-#define GNORM_E(t, s) max(clamp((t) * 0.0018, 0.3, 45.), (s).g.wd > -0.9 ? 2. : 0.)
+// 2 m texel and the bilinear cells would otherwise shade as a staircase along the shore. It eases back inland as the
+// layer's depth falls from -0.9 to -3, since a step that switched at once would crease the ground along that contour
+#define GNORM_E(t, s) max(clamp((t) * 0.0018, 0.3, 45.), 2. * smoothstep(-3., -0.9, (s).g.wd))
+// a rising ray still skimming the ground when its march's budget runs out goes on for up to CONT_N steps more, each at
+// least CONT_PX pixels long, so one that clears a long crest ends in the sky or on the far ground beyond it rather than
+// as a strip of ground in mid-air (debug bit 262144: called ground at once). A falling ray is called ground at once, as
+// it was: it seldom clears the ground, and going on cost the march five times as much at Hogsmeade. Steps that grew as
+// the ray went on hopped ridges
+#define CONT_N 160
+#define CONT_PX 2.0
 #ifdef SPLIT_P1
 float sunCache(vec2 xz) {
   vec2 x = xz / 7. + TREE_G0 - 0.5, i = floor(x), f = x - i;
@@ -107,7 +115,7 @@ Res trace(vec3 ro, vec3 rd) {
     float tc = uintBitsToFloat(u & ~511u);          // start t_k (low bits truncated: never later than t_k)
     if (u != 0u && tc > t && tc <= TMAX) { t = tc; tPrev = tc; cnt = int(u & 511u); }   // skipped steps stay charged to maxM
   }
-  int nIt = maxM + maxR + 16;
+  int nIt = maxM + CONT_N + maxR + 16, cont = (uDbg & 262144) != 0 ? 0 : CONT_N;
   for (int i = ZERO; i < nIt; i++) {
     // ---- transitions that need no scene sample
     if (st == ST_SHINIT) {                           // where the shadow pass starts the sun march, or the sun term itself
@@ -150,12 +158,14 @@ Res trace(vec3 ro, vec3 rd) {
       // a mesh is nearer than anything found so far: its own pass fills the pixel. The step bounds cannot pass over a
       // tree, and terrain crossed on the way is bisected above, so nothing in front of the mesh is missed
       else if (t >= tMesh) st = ST_DONE;
-      else if (++cnt >= maxM) {                      // out of steps: grazing ray, call it ground
+      else if (++cnt >= maxM + (rd.y > 0. ? cont : 0)) {   // out of steps even so: grazing ray, call it ground
         r.t = t; r.mat = 1; r.s = s; hp = p; g0 = s.gy; e = GNORM_E(t, s); cnt = 0; st = ST_GNORM;
       } else {
         tPrev = t;
         float k = mix(0.55, 0.85, smoothstep(900., 7000., t));
         t += min(min(max(k * dy, 0.0016 * t + 0.03), max(dE, eps)), max(0.8 * s.vd, max(eps, 0.0012 * t)));   // 0.8: trees ride the terrain slope
+        // past the budget: steps of at least CONT_PX pixels, still bounded by the local grid's edge
+        if (cnt >= maxM) t = tPrev + min(max(t - tPrev, CONT_PX * 2. * uTanHalf / uRes.y * tPrev), max(dE, eps));
       }
     } else if (st == ST_BISECT) {
       if (dy < 0.) tb = t; else ta = t;

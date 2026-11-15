@@ -9,7 +9,7 @@ from playwright.async_api import async_playwright, expect
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
-from pagetest import check_adapter, gpu_args  # noqa: E402
+from pagetest import START_TIMEOUT_MS, check_adapter, gpu_args  # noqa: E402
 
 INSTALL_STEPPED_CLOCK = """async () => {
   const native = window.requestAnimationFrame.bind(window);
@@ -59,7 +59,7 @@ class OverlayTests(unittest.IsolatedAsyncioTestCase):
         await self.page.wait_for_function(
             "window.__hog && __hog.ready && __hog.frames >= 30"
             " && getComputedStyle(document.getElementById('load')).opacity === '0'",
-            timeout=120000,
+            timeout=START_TIMEOUT_MS,
         )
 
     async def asyncTearDown(self):

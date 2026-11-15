@@ -6,6 +6,7 @@ import shapely
 import castle_base
 
 import clearings
+import features
 import forest_extent
 import forest_places
 import grounds_grade
@@ -30,6 +31,8 @@ WILLOW_LINE_M = 4.0                                        # each greenhouse's l
 SHACK_VIEW_DEG = 2.0                                       # the Shack's window sees the castle's breadth and this either
 SHACK_WINDOW_M = 3.0                                       # side, from anywhere this near its line to the castle
 PLANTED = 9                                                # the planted woods' floor, a class of its own while it blends
+BEDS_GAP_M = 12.0                                          # the beds of a plot run on across gaps narrower than this,
+BEDS_GRADE = 0.15                                          # on ground no steeper than this
 
 DECOR_G = [(990, 2170, 1900, 2300), (1580, 1840, 1960, 2180), (740, 2270, 900, 2330)]
 DECOR_H = [(1260, 2150, 1660, 2240), (1290, 1070, 1650, 1430), (1430, 1460, 1590, 1520)]
@@ -187,7 +190,7 @@ def extract_train(red):
 def main():
     cg = np.load(P("build", "cls_g.npy")); ch = np.load(P("build", "cls_h.npy")); cff = np.load(P("build", "cls_ff.npy"))
     mg = dict(np.load(P("build", "native_g.npz"))); mh = dict(np.load(P("build", "native_h.npz")))
-    for k in ("tree_ink", "wall", "build", "earth", "white", "wood", "water", "red"):
+    for k in ("tree_ink", "wall", "build", "earth", "white", "wood", "water", "red", "beds"):
         mg[k] = blank(mg[k], DECOR_G); mh[k] = blank(mh[k], DECOR_H)
     blk_g = blank(cg == C_BLACK, DECOR_G); blk_h = blank(ch == C_BLACK, DECOR_H)
 
@@ -322,6 +325,9 @@ def main():
     near_p = (np.abs(px_) < pa + 150.0) & (np.abs(py_) < pb + 150.0)   # as far as the pitch's earthworks may reach
     beyond = np.full(E.shape, np.inf)                         # metres outside the stands' outer edge, 0 within it
     beyond[near_p] = shapely.distance(stands_edge, shapely.points(px_[near_p], py_[near_p]))
+    # the grounds map draws the stands in the colour of its paths: they are built, and no path runs on the pitch or
+    # under them
+    road = np.where(beyond <= 0.0, 0.0, road)
 
     # ---------------- trees ----------------
     def tree_density(m):
@@ -359,6 +365,7 @@ def main():
     sc[(trees > 0.55) & (sc <= 2)] = 5
     sc[rpitch < 1.0] = 6
     near_lake = (lake_sd > 0) & (lake_sd < 3.5) & (sc != 3)
+    inland_sc = sc.copy()           # what the shingle covers, for the ground the castle's walls hold above the water
     sc[near_lake] = 7
 
     # ---------------- terrain ----------------
@@ -385,23 +392,33 @@ def main():
         glass = (bcode // 16 == KIND_GLASS) & (bsd < 0.5)
         garden = ndi.binary_fill_holes(patch) | glass                                     # and its greenhouses
         dry = (bsd < 4.0) | (road > 0.3)               # buildings, their pads and the paths stand clear of the flood
-        F, cliff, garden_hollow = castle_base.shape(SITE["base"], F, E, N, cm_l, lake_sd, Bc, LAKE,
-                                                    toward / np.hypot(*toward), garden, dry, glass)
+        F, cliff, garden_hollow, held = castle_base.shape(SITE["base"], F, E, N, cm_l, lake_sd, Bc, LAKE,
+                                                          toward / np.hypot(*toward), garden, dry, glass)
+        sc = np.where(held, inland_sc, sc)      # no shingle on the cliff's top
     else:
         wc = np.clip(ndi.gaussian_filter(cz_l.astype(np.float32), 6.0) * 1.6, 0, 1)
         F = F * (1 - wc) + Bc * wc
-        cliff = np.zeros(F.shape, bool)
+        cliff = held = np.zeros(F.shape, bool)
     barred = cz_l | (lake_sd < 2.0) | (bsd < 2.0) | (wall_sd < 1.5) | (beyond < TREE_CROWN_M + TEXEL_REACH_M)
     if SITE["graded"]:          # where the castle's base buries the lake's outflow, it runs under the base, not over it
         buried = (F - F_open > 1.0) & (F > LAKE - 0.3)
-        course = buried & (stream < 3.0)        # with the margin its ink kept clear of trees
         stream = np.where(buried, np.maximum(stream, 50.0), stream)
-        # and leaves no treeless line over it: its course is wooded as the ground round it, where trees may grow at all
-        round_it = ndi.gaussian_filter(np.where(course, 0.0, trees), 3.0) / \
-            np.maximum(ndi.gaussian_filter((~course).astype(np.float32), 3.0), 1e-6)
-        trees = np.where(course & ~barred, round_it, trees)
-        sc[(trees > 0.55) & (sc <= 2)] = 5
-        accounted |= course
+    # the maps' hatched plots (the vegetable patch, 5c) are beds throughout, but for the buildings and paths on them and
+    # the banks the castle's base builds round its level ground, which are lawn, and run on across gaps narrower than
+    # BEDS_GAP_M, such as over the outflow the castle's base buries: read texel by texel, the hatching's strokes and the
+    # paler strokes across them made a lattice of beds and lawn. The specks of its colour beyond the plots, and any scrap
+    # of a plot smaller than a plot that its buildings cut off, are no beds: they take the soft ground round them
+    gap = disk(int(round(BEDS_GAP_M / 2 / RES)))
+    plot = np.where(useH, sample(mh["beds"], hu, hv), np.where(useG, sample(mg["beds"], gu, gv), 0.0)) > 0.5
+    plots = ndi.binary_opening(ndi.binary_closing(plot, structure=gap), structure=np.ones((3, 3), bool))
+    beds = plots & (np.hypot(*np.gradient(F, RES)) <= BEDS_GRADE)
+    sc[beds & np.isin(sc, (0, 1, 2, 5)) & (bsd >= 1.0)] = 4
+    lab, n = ndi.label(ndi.binary_closing((sc == 4) & beds, structure=gap), structure=np.ones((3, 3), bool))
+    scraps = (sc == 4) & ((np.bincount(lab.ravel(), minlength=n + 1) * RES * RES < features.PLOT_M2)[lab] | ~beds)
+    soft = ndi.distance_transform_edt(~np.isin(sc, (0, 1, 2)), return_distances=False, return_indices=True)
+    sc[scraps] = sc[soft[0], soft[1]][scraps]
+    trees = np.where(plots, 0.0, trees)             # and no tree stands on the plots, banks, paths and all: the hatching
+    accounted |= plots                              # read as undergrowth stood trees all over them
     # no patch of ground ends at a line (clearings.blend): the maps' scrub fades into the meadow and lawn round it, the
     # woods' floor into the meadow, lawn and scrub under their thinning edge (only under the canopy: beyond it, tufts of
     # the floor read as specks on open ground), and the lawns into the meadow beyond the grounds, but along the wall
@@ -414,7 +431,7 @@ def main():
     # which reaches a texel past a stream's ink and over the lake's shallows, the roads and the buildings), and off the
     # vegetable patch and its hollow
     stand = ~barred & (stream >= 2.5) & (lake_sd >= 5.0) & (road < 0.05) & (bsd >= 2.5) & ~garden_hollow & \
-        ~ndi.binary_dilation(sc == 4, iterations=2)
+        ~ndi.binary_dilation(plots, iterations=2)
     if SITE["willow_lawn"]:     # the Willow "stood alone": a lawn opens to it from the northern greenhouses, clear of trees
         willow = np.array(g2w(*WILLOW_G), float)
         scene = json.load(open(P("src", "mesh_scene.json"), encoding="utf-8"))
@@ -493,12 +510,17 @@ def main():
     depth = 0.8 + 11.5 * (1 - np.exp(-np.maximum(-s, 0) / 50.0))
     near_castle = ndi.gaussian_filter(cz_l.astype(np.float32), 10.0) > 0.02
     kmax = np.where(cliff, castle_base.FACE_GRADE, np.where(near_castle, 3.0, 0.45))
-    land = s >= 0
+    # beside the lake, a ledge of shingle one texel wide at the shore's level parts the ground the castle's walls hold
+    # from the water: the lake's edge is drawn between texels, and so tall a bank beside it would lift its surface
+    ledge = (s < 0) & ndi.binary_dilation(held & (s >= 0), np.ones((3, 3), bool))
+    sc = np.where(ledge, 7, sc).astype(np.uint8)
+    land = (s >= 0) | ledge
     channel = (stream < 0) | river
     sp = np.maximum(s, 0)
     lo = LAKE + 0.35 + 0.05 * sp; hi = LAKE + 0.35 + kmax * sp
     raise_w = np.clip(1 - sp / 25.0, 0, 1) * (~channel)
-    Fl = np.minimum(F, hi); Fl = np.maximum(Fl, lo * raise_w + Fl * (1 - raise_w))
+    Fl = np.where(held & ~ledge, F, np.minimum(F, hi))  # no face under the castle's walls: it drops sheer from beyond them
+    Fl = np.maximum(Fl, lo * raise_w + Fl * (1 - raise_w))
     keep_w = np.clip((sp - 50.0) / 110.0, 0, 1); keep_w = keep_w * keep_w * (3 - 2 * keep_w)
     Fl = Fl * (1 - keep_w) + F * keep_w
     if SITE["bank"]:            # a perched lake: banked up level for a crest's width, then sloping down to the ground
@@ -540,6 +562,9 @@ def main():
         sc[sc == PLANTED] = 5
         if SITE["fill_pits"]:   # the hollows the rises enclose are made up too, keeping their trees
             F = grounds_grade.made_up(F, fill(F, ~land), land & unnatural & ~garden_hollow)
+    # the woods' floor lies in woods clearings.WOOD_M across or more, as the clearings and plantings leave them: under a
+    # lone tree or a clump the grass grows on
+    sc = clearings.woods_floor(sc, trees, RES)
     lost = clearings.unaccounted(drawn, trees, accounted)
     if lost.any():
         raise RuntimeError(f"trees removed where no rule or recorded clearing accounts for them: {lost.sum() * RES * RES:.0f}"

@@ -35,7 +35,8 @@ def fragment():
 
 def part_b():
     """The script that builds the programs, with the registry's reflection albedos and lamp glow filled in."""
-    return materials.fill(read(SRC, "template_b.html"), materials.REFL_MARKER, materials.LAMP_MARKER)
+    return materials.fill(read(SRC, "template_b.html"), materials.REFL_MARKER, materials.LAMP_MARKER,
+                          materials.LAMP_CODES_MARKER)
 
 
 def page(meshes_js=None):

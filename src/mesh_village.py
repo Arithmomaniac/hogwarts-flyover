@@ -9,9 +9,11 @@ steps, hanging signs) are separate pieces, so integration can drop them with dis
 Plan space is each footprint part's frame (mesh_village_plan.Frame): plan X, Y with height Z above the part's
 reference ground, mapped to world by a proper rotation. Heights come from the sampled ground, never from fixed levels.
 
-Every footprint is built but one whose plan is only specks (a sliver of a wing), which keeps the generic massing. So
-that the Shrieking Shack stands a little way above the rest of the village (PoA 14), the manifest leaves the hamlet on
-the hill to its north-west unbuilt, and two cottages are built across their lane from where the map draws them (MOVED).
+Every footprint is built but one whose plan is only specks: a single texel of the map, touching the building it belongs
+to but cut off from it by the map's 2 m grid, which the village leaves out (the generic massing stood there as a
+flat-topped pier as tall as the house's eaves). So that the Shrieking Shack stands a little way above the rest of the
+village (PoA 14), the manifest leaves the hamlet on the hill to its north-west unbuilt, and two cottages are built
+across their lane from where the map draws them (MOVED).
 The village keeps to its share of the payload by spending fine detail where the flyover, passing 50 m and more above it,
 can see it: stacks are capped flush, a raised door's steps are one block, and off the High Street a stack carries one
 pot and a back wall one window.
@@ -66,8 +68,10 @@ REVEAL_M = 0.16                 # windows and doors stand this far behind the wa
 MARGIN_M, MARGIN_DEPTH_M = 0.12, 0.025
 BAY_M = 2.7
 STACK = {"across": 0.62, "along": 1.15, "spare": 0.07,      # a stack keeps `spare` inside the walls it stands on,
-         "over": 0.95, "clear": 2.3}                         # and its top `over` above every roof `clear` near it
-SMOOTH_DEG = 50.0               # thatch shades smoothly across edges sharper than this
+         "over": 0.95, "clear": 2.3,                         # its top `over` above every roof within `clear` of it,
+         "free": 1.5}                                        # and at most `free` above the roof it rises out of
+RIM = np.column_stack([f(np.linspace(0.0, 2.0 * math.pi, 720, endpoint=False)) for f in (np.cos, np.sin)])
+                                # the unit circle every half degree: 2 cm apart at STACK['clear']
 SLIVER_M = 0.004                # no triangle is thinner than this: 16-bit quantization could turn it over
 WELD_M = 2 * SLIVER_M           # corners this near each other are joined...
 NEEDLE_M = 0.025                # ...and so are the ends of a sliver's shortest edge, if it is shorter than this
@@ -79,6 +83,7 @@ MIN_OPENING_M = 0.6             # a window the eaves would leave lower than this
 DOOR_MIN_M = 1.7
 CLEAR_M = 3.0                   # a window opens only where nothing of the village stands this near in front of it
 DOOR_CLEAR_M = 0.6              # ...and a door where nothing stands this near
+SIDE_M = 7.0                    # a free side wall under eaves takes a window, on each storey, for about every SIDE_M of it
 PARTY_SHARE = 0.5               # a wall standing against other buildings for this share of its length is a party wall
 NEIGHBOUR_M = 1.0               # buildings this near a building stop its eaves and verges...
 NEIGHBOUR_GAP_M = 0.005         # ...this far inside their walls
@@ -105,8 +110,9 @@ class Level(NamedTuple):
                         # kiln's ventilator, the owl loft, crow steps); the kirkyard's and the gardens' walls
     fittings: bool      # chimney pots, sills, steps, signs, fascias and the like; lamps and headstones
     casts: bool         # what stands out beyond the eaves and casts a shadow of its own, whatever else the level keeps:
-                        # the fittings hung to cast (_Building.cast: Gladrags' blind, the Shack's fence), the kirkyard's
-                        # wall, and the gardens' walls (where the level has no features, one slab along each garden)
+                        # the fittings hung to cast (_Building.cast: Gladrags' blind, the Shack's fence), the High
+                        # Street's lamps, the kirkyard's wall, and the gardens' walls (where the level has no features,
+                        # one slab along each garden)
 
 
 LEVELS = {
@@ -213,7 +219,7 @@ class Unit:
 def build_footprint(scene, asset, c, polygons):
     village = _village(scene)
     if c["id"] not in village.built:
-        return None
+        return {}                       # only specks: the building it touches stands for it, not the generic massing
     return village.component(c["id"])
 
 
@@ -293,6 +299,73 @@ class Village:
             self._ridges[key] = ridge(self.scene, u)
         return self._ridges[key]
 
+    def roof_near(self, xz, radius):
+        """The highest point (world height) of the roofs of the built buildings within `radius` of a world point, or
+        -inf. A roof's attic is planar facets, so its highest point within the circle is one of its corners inside the
+        circle or a point on the circle, which RIM samples every 2 cm or so. Its eaves and verges overhang its walls by
+        at most its covering's eave, and stand no higher than its attic along the walls they leave, so a roof also
+        counts its attic along each of its walls whose overhang reaches the circle."""
+        p = np.asarray(xz, np.float64)
+        rim = p + radius * RIM
+        tree, everyone = self._index
+        best = -math.inf
+        for i in sorted(tree.query(Point(p).buffer(radius + THATCH["eave"]))):
+            u = everyone[i]
+            f, top = u.fp.frame, self.attic(u)
+            over = (THATCH if u.style.roof == "thatch" else SLATE)["eave"]
+            inside = np.hypot(*(f.world(top.corners[:, :2]) - p).T) <= radius
+            walls = np.asarray(shapely.segmentize(u.outline.exterior, 0.05).coords)
+            reach = np.hypot(*(f.world(walls) - p).T) <= radius + over
+            heights = np.concatenate([top(f.plan(rim)), top.corners[inside, 2], top(walls[reach])])
+            if np.isfinite(heights).any():
+                best = max(best, float(heights[np.isfinite(heights)].max()) + self.eave(u))
+        return best
+
+    def roofs_over(self, u, pts):
+        """The highest roof (world height) over each plan point `pts` of unit u's footprint part, of the buildings of that
+        part standing there (within a centimetre), or -inf."""
+        roof = np.full(len(pts), -np.inf)
+        for w in self.units[u.cid]:
+            if w.part == u.part:
+                inside = shapely.contains_xy(w.outline.buffer(0.01), pts[:, 0], pts[:, 1])
+                if inside.any():
+                    roof = np.where(inside, np.maximum(roof, self.attic(w)(pts) + self.eave(w)), roof)
+        return roof
+
+    def stack_free(self, u, c, t):
+        """How far a stack of unit u centred on plan point c, its long side along t, would stand above the roof it rises
+        out of: from its top, STACK['over'] above every roof within STACK['clear'] of it, down to the highest roof along
+        its middle line (2 cm either side of it: a party wall's stack straddles the wall)."""
+        top = self.roof_near(u.fp.frame.world(c), STACK["clear"]) + STACK["over"]
+        n = np.array([-t[1], t[0]])
+        middle = np.array([c + t * a + n * b for a in (-STACK["along"] / 2, 0.0, STACK["along"] / 2)
+                           for b in (-0.02, 0.02)])
+        return top - float(self.roofs_over(u, middle).max())
+
+    def party_point(self, u, a, b):
+        """Where unit u's stack on its party wall a-b stands: the point of the longest stretch of the wall that another
+        building of its footprint part stands along where the roofs over it rise highest (nearest the stretch's middle
+        on a tie), with room for a stack within the stretch with STACK['spare'] and a hand's breadth to spare; else
+        None. The buildings either side find it within a few centimetres of each other."""
+        others = [w.outline for w in self.units[u.cid] if w.part == u.part and w is not u]
+        if not others:
+            return None
+        shared = LineString([a, b]).intersection(shapely.union_all(others).buffer(0.05))
+        pieces = [g for g in getattr(shared, "geoms", [shared]) if g.geom_type == "LineString" and not g.is_empty]
+        best = max(pieces, key=lambda g: g.length, default=None)
+        if best is None or best.length < STACK["along"] + 2 * STACK["spare"] + 0.1:
+            return None
+        p, q = sorted((np.asarray(best.coords[0]), np.asarray(best.coords[-1])), key=tuple)
+        span, room = float(np.linalg.norm(q - p)), STACK["along"] / 2 + STACK["spare"] + 0.05
+        t = (q - p) / span
+        s = np.linspace(room, span - room, max(2, int((span - 2 * room) / 0.05) + 1))
+        line = p + np.outer(s, t)
+        roof = np.full(len(s), -np.inf)
+        for w in (w for w in self.units[u.cid] if w.part == u.part):
+            for side in (-0.02, 0.02):                       # either side of the wall, each building's own roof
+                roof = np.maximum(roof, self.attic(w)(line + side * np.array([-t[1], t[0]])) + self.eave(w))
+        return line[max(range(len(s)), key=lambda i: (round(float(roof[i]), 2), -abs(s[i] - span / 2)))]
+
     def eave(self, u):
         """A building's eaves (world height): its floor's, FLOOR_OVER_M above the highest ground along its front, and
         its style's eaves above that."""
@@ -304,13 +377,6 @@ class Village:
         if key not in self._attics:
             self._attics[key] = attic_top(u.outline, roof_angles(u))
         return self._attics[key]
-
-    def ridges_near(self, xz, radius):
-        """The ridges (world heights) of the built buildings within `radius` of a world point."""
-        tree, everyone = self._index
-        hits = tree.query(Point(xz).buffer(radius))
-        return [self.ridge(everyone[i]) for i in sorted(hits)
-                if everyone[i].fp.frame.to_world(everyone[i].outline).distance(Point(xz)) <= radius]
 
     def open_ahead(self, xz, out, clear=CLEAR_M):
         """Whether nothing of the village stands within `clear` in front of a wall's point xz facing `out` (world)."""
@@ -454,12 +520,13 @@ class Village:
 
     def small(self, level=FULL):
         """{asset: [pieces]} of the structures on no mapped footprint that a level of detail keeps: the lamps and the
-        headstones are fittings, the kirkyard's wall and the garden walls features; both walls cast, the gardens' as
-        one slab along each garden where the level keeps no features."""
+        headstones are fittings, the kirkyard's wall and the garden walls features; the lamps and both walls cast, the
+        gardens' as one slab along each of a garden's runs where the level keeps no features. Every level keeps the High
+        Street's footway as built."""
         import mesh_village_small as small
         gardens = small.garden_walls(self) if level.features else small.garden_walls(self, whole=True) if level.casts \
             else []
-        return {"street-furniture": small.lamps(self) if level.fittings else [],
+        return {"street-furniture": (small.lamps(self) if level.fittings or level.casts else []) + small.footway(self),
                 "kirk": (small.kirkyard_wall(self) if level.features or level.casts else [])
                 + (small.headstones(self) if level.fittings else []),
                 HOUSE: gardens}
@@ -629,8 +696,11 @@ def placed_world(mesh, frame, y_ref):
 
 def _shaded(v, f, tri_id, specs, frame, y_ref):
     """The solid's triangles (plan space) as a world Mesh: each face's (material, aux) from its solid's spec, judged
-    on its plan normal; flat-shaded, thatch smoothed across its softer edges. A triangle with no area, which covers
-    nothing and has no normal to give its corners, is left out, as the payload's encoder would leave it out."""
+    on its plan normal; flat-shaded, thatch too. The thatch's straw streaks run across each fragment's normal from the
+    world's origin (frag4.glsl's faceCoord), so a triangle's corners must agree on its normal exactly once the payload
+    rounds them to int8, or its straw swirls: no normals smoothed to different tilts, and faces so nearly alike that
+    their corners are welded (indexed) share one normal. A triangle with no area, which covers nothing and has no
+    normal to give its corners, is left out, as the payload's encoder would leave it out."""
     tris = v[f]
     n = np.cross(tris[:, 1] - tris[:, 0], tris[:, 2] - tris[:, 0])
     area = np.linalg.norm(n, axis=1)
@@ -639,34 +709,13 @@ def _shaded(v, f, tri_id, specs, frame, y_ref):
     attr = np.array([specs[t](nn) for t, nn in zip(tri_id, n)], np.uint8).reshape(-1, 2)
     tris = frame.world3(tris.reshape(-1, 3), y_ref).reshape(-1, 3, 3)
     n = n @ frame.rot3.T
-    thatch = np.isin(attr[:, 1], [code("village-thatch")[1], code("village-thatch-new")[1]]) & (attr[:, 0] == 7)
+    _, first, same = np.unique(np.round(n * 1e4).astype(np.int64), axis=0, return_index=True, return_inverse=True)
+    n = n[first][same.ravel()]          # faces whose corners indexed() would weld share one normal exactly
     meshes = []
     for mat in np.unique(attr, axis=0):
         sel = (attr == mat).all(axis=1)
-        if thatch[sel].all():
-            meshes.append(_smooth(tris[sel], n[sel], tuple(int(x) for x in mat)))
-        else:
-            meshes.append(indexed(tris[sel], n[sel][:, None, :], tuple(int(x) for x in mat)))
+        meshes.append(indexed(tris[sel], n[sel][:, None, :], tuple(int(x) for x in mat)))
     return concat(meshes)
-
-
-def _smooth(tris, n, attr):
-    """Triangles sharing a corner position average their normals where they turn by less than SMOOTH_DEG."""
-    corners = tris.reshape(-1, 3)
-    key = np.round(corners * 1000).astype(np.int64)
-    _, inv = np.unique(key, axis=0, return_inverse=True)
-    inv = inv.ravel()
-    face_n = np.repeat(n, 3, axis=0)
-    out = np.empty_like(face_n)
-    cos = math.cos(math.radians(SMOOTH_DEG))
-    order = np.argsort(inv, kind="stable")
-    bounds = np.flatnonzero(np.diff(inv[order])) + 1
-    for group in np.split(order, bounds):
-        g = face_n[group]
-        sim = (g @ g.T) > cos
-        acc = sim.astype(np.float64) @ g
-        out[group] = acc / np.linalg.norm(acc, axis=1, keepdims=True)
-    return indexed(tris, out.reshape(-1, 3, 3), attr)
 
 
 # ---------------------------------------------------------------- one building
@@ -740,7 +789,7 @@ def bays(length):
 
 def attic_top(outline, angles):
     """The height of the roof over `outline` (roofs.roof with `angles`, its eaves at 0) above plan points (n, 2), as a
-    function of them; -inf off it."""
+    function of them, -inf off it; the function's `corners` are the roof's vertices (plan X, Y and height)."""
     v, f = roofs.roof(outline, angles)
     tris = v[f]
     a, e1, e2 = tris[:, 0], tris[:, 1] - tris[:, 0], tris[:, 2] - tris[:, 0]
@@ -755,6 +804,7 @@ def attic_top(outline, angles):
         z = a[:, 2] + u * e1[:, 2] + w * e2[:, 2]
         inside = (u >= -1e-9) & (w >= -1e-9) & (u + w <= 1.0 + 1e-9)
         return np.where(inside, z, -np.inf).max(axis=1)
+    at.corners = v
     return at
 
 
@@ -884,7 +934,20 @@ def _cut(back, reveal, out):
     return lambda n: bk if n @ o > 0.9 else rv
 
 
-class _Building:
+class _Facades:
+    """A unit's walls as the named buildings' chimney hooks read them (bespoke.chimneys, stack_gables), whether it is
+    being built or only planned: its unit, style, wall edges and pitches, and each wall's frame."""
+
+    def __init__(self, u):
+        self.u, self.st, self.edges, self.angles = u, u.style, plan.edges(u.outline), roof_angles(u)
+
+    def _facade(self, k):
+        a, b = self.edges[k]
+        t = (b - a) / np.linalg.norm(b - a)
+        return a, t, plan.outward(a, b), float(np.linalg.norm(b - a))
+
+
+class _Building(_Facades):
     """One building's records, from which every level of detail is cut (at): its solids, each tagged with its role
     ("walls", "attic", "skin", "stack" or "feature"), the cutters of its openings, its fittings (those its features
     include among them, and those that cast a shadow of their own), its openings' faces, the notches cut from its eaves
@@ -1077,11 +1140,6 @@ class _Building:
         return moved, True
 
     # openings: per bay and storey on the front; fewer behind
-    def _facade(self, k):
-        a, b = self.edges[k]
-        t = (b - a) / np.linalg.norm(b - a)
-        return a, t, plan.outward(a, b), float(np.linalg.norm(b - a))
-
     def _hole(self, k, s, z0, w, h, back, reveal, depth=REVEAL_M, panel=True):
         """Cut an opening of width w and height h into facade k, centred s along it from its start, from z0 up."""
         a, t, n, _ = self._facade(k)
@@ -1102,9 +1160,15 @@ class _Building:
         if panel:
             self.panels.append((c, t, n, z0, [(-w / 2, 0.0), (w / 2, 0.0), (w / 2, h), (-w / 2, h)], back))
 
-    def _glass(self):
-        r = self.rng.random()
+    def _glass(self, rng=None):
+        r = (rng or self.rng).random()
         return "glass-lit" if r < LIT else "glass-dim" if r < LIT + DIM else "glass-dark"
+
+    def _at_night(self, glass, z0):
+        """The glass of a window from z0 up: on the High Street the ground floors are dark at night, the shops shut
+        (HBP 27: "the darkness complete but for a few streetlamps and lit upper windows"; HBP 25: "Lights twinkled from
+        windows over shops"), whatever its draw was."""
+        return "glass-dark" if self.u.high and z0 < self.z_floor + STOREY_M else glass
 
     def _head(self, k):
         """The highest an opening's head (and its margin) may reach on facade k: under the soffit of an eave there."""
@@ -1115,6 +1179,7 @@ class _Building:
     def _openings(self):
         if bespoke.openings(self):
             return
+        self._sides()
         st, u = self.st, self.u
         k = u.front
         _, _, _, length = self._facade(k)
@@ -1166,7 +1231,7 @@ class _Building:
                 w = min(0.9, win_w)
                 for s in ([blen / 2] if blen < 6.0 or not u.high else [blen / 3, 2 * blen / 3]):
                     if self._open(back, s, w):
-                        self._hole(back, s, zf + SILL_M, w, h, self._glass(), reveal)
+                        self._hole(back, s, zf + SILL_M, w, h, self._at_night(self._glass(), zf + SILL_M), reveal)
 
     def _open(self, k, s, w=0.0, clear=CLEAR_M):
         """Whether nothing of the village stands within `clear` in front of an opening w wide on facade k, s along it."""
@@ -1203,12 +1268,39 @@ class _Building:
         cands = [c for c in cands if c[0] < -0.9]
         return min(cands)[1] if cands else None
 
-    def _window(self, k, s, z0, w, h):
+    def _sides(self):
+        """Windows in its free side walls under eaves, neither its front nor its back, at least SIDE_M long, on each
+        storey under the eaves: about one for every SIDE_M of the wall, each in the middle of its share of the wall, or
+        else in the nearest bay with room before it and a window's width from the others. A gable-fronted house's long
+        flanks are not left blank. Their glass draws from a stream of its own, so the rest of the building's draws are
+        as they were without them."""
+        st, u = self.st, self.u
+        ahead = plan.outward(*self.edges[u.front])
+        rng = np.random.default_rng([u.cid, u.part, u.k, 13])
+        heights = [self.z_floor + SILL_M] + ([self.z_floor + STOREY_M + SILL_M - 0.1] if st.storeys >= 2.0 else [])
+        win_h = 1.15 if st.family in ("cottage", "outshot") else 1.45
+        for k, (a, b) in enumerate(self.edges):
+            length = float(np.linalg.norm(b - a))
+            if (k in u.party or k == u.front or self.angles[k] >= 89.999 or length < SIDE_M
+                    or abs(float(plan.outward(a, b) @ ahead)) > 0.5):
+                continue
+            centres, spots, want = bays(length)[0], [], max(1, round(length / SIDE_M))
+            for j in range(want):
+                share = length * (j + 0.5) / want
+                tries = [share] + [centres[i] for i in np.argsort([abs(s - share) for s in centres])]
+                s = next((s for s in tries if all(abs(s - o) > 1.5 for o in spots) and self._open(k, s, 1.0)), None)
+                if s is not None:
+                    spots.append(s)
+            for s in sorted(spots):
+                for z0 in heights:
+                    self._window(k, s, z0, 0.9, win_h, self._glass(rng))
+
+    def _window(self, k, s, z0, w, h, glass=None):
         h = min(h, self._head(k) - z0)
         if h < MIN_OPENING_M or not self._open(k, s, w):
             return
         self._margin(k, s, z0, w, h)
-        self._hole(k, s, z0, w, h, self._glass(), self.st.wall)
+        self._hole(k, s, z0, w, h, self._at_night(glass or self._glass(), z0), self.st.wall)
         if k == self.u.front:
             bespoke.dress(self, k, s, z0, w, h, REVEAL_M, "pale-stone")
         if self.u.high or self.st.family in ("shop", "villa"):
@@ -1265,11 +1357,13 @@ class _Building:
 
     def _chimneys(self):
         """Stacks on the gables: on each free gable end at least 2.5 m long but the front, flush with the gable, and
-        once on each party wall shared with another building of this footprint part, straddling it, built from the
-        side whose outward normal points the frame's positive way. A building with no gable stack of its own or its
+        once on each party wall shared with another building of this footprint part, straddling it where the roofs over
+        it rise highest, built from the side whose outward normal points the frame's positive way, unless only this side
+        takes the wall for a party wall (at a T) or would build there. A building with no gable stack of its own or its
         neighbour's gets one straddling its ridge, where the ridge lies deepest inside its plan. A stack's top rises
-        STACK['over'] above the higher of the ridges beside it. A named building may keep its stacks to some of its
-        gables (mesh_village_named)."""
+        STACK['over'] above every roof within STACK['clear'] of it, and none is built that would stand more than
+        STACK['free'] above the roof it rises out of: a pillar carried up beside a taller roof. A named building may
+        keep its stacks to some of its gables (mesh_village_named)."""
         if self.st.family == "outshot" or not bespoke.chimneys(self):
             return
         allowed = bespoke.stack_gables(self)
@@ -1281,19 +1375,21 @@ class _Building:
             n = plan.outward(a, b)
             if k in self.u.party:
                 c = self._shared(a, b)
-                if c is None:
+                if c is None or not self._rises(c, (b - a) / length):
                     continue
-                if not (n[0] > 0.5 or (abs(n[0]) <= 0.5 and n[1] > 0.0)):
+                if not (n[0] > 0.5 or (abs(n[0]) <= 0.5 and n[1] > 0.0)) and self._served(a, b):
                     served = True                             # the neighbour builds this one
                     continue
             elif length < 2.5 or k == self.u.front:
                 continue
             else:
                 c = (a + b) / 2 - n * STACK["across"] / 2
+                if not self._rises(c, (b - a) / length):
+                    continue
             spots.append((c, (b - a) / length, None if k in self.u.party else n))
         if not spots and not served:
             spot = self._ridge_spot()
-            if spot is not None:
+            if spot is not None and self._rises(*spot):
                 spots.append((*spot, None))
         for c, t, flush in spots:
             self._stack(c, t, flush)
@@ -1326,27 +1422,12 @@ class _Building:
         return np.asarray(inland.coords[0]), np.array([1.0, 0.0])
 
     def _stack(self, c, t, flush=None):
-        """A stack centred on plan point c, its long side along t, capped flush in pale stone (a cope's few
-        centimetres of overhang are lost from the flyover's height), with a pot, or on the High Street a pot or two.
-        It starts 0.3 m above its eaves, or lower, 0.1 m under the lowest of the roofs below its foot (at its corners,
-        its ends' middles and 2 cm either side of its middle line: a neighbour may slope down to a party wall), so that
-        it rises out of every roof under it. A stack flush with a free gable (`flush`, the gable's outward normal)
-        stands DEPTH_GAP_M inside it where it stands apart from the shell as a box (boxes), out of the gable's plane."""
-        near = self.v.ridges_near(self.fp.frame.world(c), STACK["clear"])
-        top = max([self.z_ridge] + [r - self.y_ref for r in near]) + STACK["over"]
+        """A stack centred on plan point c, its long side along t, as high as _stack_height has it, capped flush in
+        pale stone (a cope's few centimetres of overhang are lost from the flyover's height), with a pot, or on the
+        High Street a pot or two. A stack flush with a free gable (`flush`, the gable's outward normal) stands
+        DEPTH_GAP_M inside it where it stands apart from the shell as a box (boxes), out of the gable's plane."""
+        top, z0 = self._stack_height(c, t)
         ang = math.degrees(math.atan2(t[1], t[0]))
-        n = np.array([-t[1], t[0]])
-        foot = np.array([c + t * a + n * b for a in (-STACK["along"] / 2, 0.0, STACK["along"] / 2)
-                         for b in (-STACK["across"] / 2, -0.02, 0.02, STACK["across"] / 2)])
-        roof = np.full(len(foot), -np.inf)
-        for w in self.v.units[self.u.cid]:
-            inside = shapely.contains_xy(w.outline.buffer(0.01), foot[:, 0], foot[:, 1]) if w.part == self.u.part \
-                else np.zeros(len(foot), bool)
-            if inside.any():
-                z = self.v.attic(w)(foot) + self.v.eave(w) - self.y_ref
-                roof = np.where(inside, np.maximum(roof, z), roof)
-        under = roof[np.isfinite(roof)]
-        z0 = min(self.z_eave + 0.3, float(under.min()) - 0.1) if len(under) else self.z_eave + 0.3
         stack = (self.m3.Manifold.cube((STACK["along"], STACK["across"], top - z0), True)
                  .translate((0.0, 0.0, (top - z0) / 2)).rotate((0.0, 0.0, ang)).translate((c[0], c[1], z0)))
         self.solids.append((stack, _capped(bespoke.stack_wall(self) or self.st.wall, "pale-stone"), "stack"))
@@ -1358,15 +1439,49 @@ class _Building:
             p = c + t * ((j - (pots - 1) / 2) * 0.4)
             self.fittings.append(_pot(p, t, top))
 
+    def _stack_height(self, c, t):
+        """(its top, its foot) for a stack centred on plan point c, its long side along t. Its top stands
+        STACK['over'] above every roof within STACK['clear'] of it, so smoke clears them. It starts 0.3 m above its
+        eaves, or lower, 0.1 m under the lowest of the roofs below its foot (at its corners, its ends' middles and 2 cm
+        either side of its middle line: a neighbour may slope down to a party wall), so that it rises out of every roof
+        under it."""
+        top = self.v.roof_near(self.fp.frame.world(c), STACK["clear"]) - self.y_ref + STACK["over"]
+        n = np.array([-t[1], t[0]])
+        foot = np.array([c + t * a + n * b for a in (-STACK["along"] / 2, 0.0, STACK["along"] / 2)
+                         for b in (-STACK["across"] / 2, -0.02, 0.02, STACK["across"] / 2)])
+        roof = self.v.roofs_over(self.u, foot) - self.y_ref
+        under = roof[np.isfinite(roof)]
+        z0 = min(self.z_eave + 0.3, float(under.min()) - 0.1) if len(under) else self.z_eave + 0.3
+        return top, z0
+
+    def _rises(self, c, t):
+        """Whether a stack at plan point c, its long side along t, would stand at most STACK['free'] above the roof it
+        rises out of."""
+        return self.v.stack_free(self.u, c, t) <= STACK["free"]
+
     def _shared(self, a, b):
-        """The middle of the longest stretch of edge a-b that another building of this footprint part stands along, if
-        a stack fits within it with STACK['spare'] and a hand's breadth to spare; else None."""
-        others = [w.outline for w in self.v.units[self.u.cid] if w.part == self.u.part and w is not self.u]
-        if not others:
-            return None
-        shared = LineString([a, b]).intersection(shapely.union_all(others).buffer(0.05))
-        pieces = [g for g in getattr(shared, "geoms", [shared]) if g.geom_type == "LineString" and not g.is_empty]
-        best = max(pieces, key=lambda g: g.length, default=None)
-        if best is None or best.length < STACK["along"] + 2 * STACK["spare"] + 0.1:
-            return None
-        return (np.asarray(best.coords[0]) + np.asarray(best.coords[-1])) / 2
+        return self.v.party_point(self.u, a, b)
+
+    def _served(self, a, b):
+        """Whether the building across party wall a-b builds the stack on it: one of its own party gables runs back
+        along this wall, it may carry a stack there, and the stack it would build stands on this wall and rises out of
+        its roofs as a stack should. At a T only the building whose end meets the other's side takes the wall for a
+        party wall, and it builds the stack itself."""
+        line, n = LineString([a, b]), plan.outward(a, b)
+        for w in self.v.units[self.u.cid]:
+            if w.part != self.u.part or w is self.u or w.style.family == "outshot":
+                continue
+            them = _Facades(w)
+            if not bespoke.chimneys(them):
+                continue
+            allowed = bespoke.stack_gables(them)
+            for e in sorted(w.party):
+                p, q = them.edges[e]
+                if (float(plan.outward(p, q) @ n) > -0.99 or them.angles[e] < 89.999
+                        or (allowed is not None and e not in allowed)):
+                    continue
+                c = self.v.party_point(w, p, q)
+                if (c is not None and line.distance(Point(c)) < 0.05
+                        and self.v.stack_free(w, c, (q - p) / np.linalg.norm(q - p)) <= STACK["free"]):
+                    return True
+        return False

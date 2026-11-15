@@ -319,7 +319,14 @@ def base_decisions():
         "castle-base-lake-cliff": decision(
             "Between the castle and the lake the base drops 36 m (about 118 ft) as White Hound's cliff: a foot-path slope"
             " (22 degrees) below the castle's walls, then a near-vertical face (81 degrees) to the water, with the 2e"
-            " wall at its lip.",
+            " wall at its lip. The ground under the castle's walls and 2 m beyond them keeps the platform's or the"
+            " foot-path's level, so no wall hangs down the face: where the walls stand nearer the water than the face"
+            " has room for, the cliff drops sheer from there, with the face below. That departs locally from White"
+            " Hound's upper part sloping back, his conclusion rather than the books': real curtain walls often rise"
+            " straight from sheer rock. Where that drop meets the lake, a ledge of shingle about 2 m wide at the"
+            " shore's level lies at its foot, so the lake's edge stays level beside so tall a bank: a landscape"
+            " deviation that moves the lake's edge out about 2 m (at most 2.8 m) along parts of the castle's lake front,"
+            " 528 m² of water in all.",
             q(G, "the lower part of the cliff either vertical or sloping back, and the upper part sloping back towards"
                  " the base of the castle"),
             q(G, "the cliff needs to be no more than about 120ft"), q(GM, "wall along edge of cliff overlooking lake")),
@@ -392,9 +399,10 @@ def tour_decisions():
             " the ship fills about 3.7% of the frame with the castle's cliff behind it. The old waypoint was 394 m"
             " off.", delegated),
         "tour-gryffindor-close": decision(
-            "The tour's Gryffindor Tower waypoint stands 105 m south-south-east of the tower, 34 m above the lake, high"
-            " enough to see it over the trees on the shore, where the castle fills about 17% of the frame. The old"
-            " waypoint was 170 m off.", delegated),
+            "The tour's Gryffindor Tower waypoint stands 105 m south-south-east of the tower, 55 m above the lake, high"
+            " enough that no tree on the shore stands in front of the castle, where the castle fills about 25% of the"
+            " frame. At 34 m up the shore's trees hid the tower's foot, 10% of the frame in front of the castle. The"
+            " old waypoint was 170 m off.", delegated),
         "tour-castle-east-transition": decision(
             "After Gryffindor Tower the tour turns east over the lake, 40 m up and south-east of the castle, looking"
             " back at it, before it flies north to the station; the old turn stood about 70 m up east of the castle."
@@ -445,8 +453,16 @@ def tour_decisions():
             " the castle's west front fills about 12% of the frame as the tour comes in from the forest. The old"
             " waypoint was 1,032 m off and 140 m up.", delegated),
         "tour-west-tower-close": decision(
-            "The tour's West Tower (Owlery) waypoint stands 154 m west of the tower, where the castle fills about 19%"
-            " of the frame. The old waypoint was 325 m off.", delegated),
+            "The tour's West Tower (Owlery) waypoint stands 154 m west of the tower, 100 m above the ground, where the"
+            " castle fills about 24% of the frame over the trees west of it, which cover 2.5% of the frame in front of"
+            " it. At 45 m up they filled the near foreground, 6% of the frame in front of the castle. The old"
+            " waypoint was 325 m off.", delegated),
+        "tour-opening-wide": decision(
+            "The tour opens on the castle in its setting, from 1.8 km south-east and 300 m up: the lake, the grounds,"
+            " the woods and the hills round them, the castle on its cliff about a tenth of the frame wide. The"
+            " waypoints after it close in on the castle, and only this wide view is exempt from the framing test's"
+            " limit on trees in front of the castle.",
+            delegated),
         "tour-hut-close": decision(
             "The tour's Hagrid's hut waypoint stands 50 m west-south-west of the hut, where the hut fills about 1.7% of"
             " the frame beside its pumpkin patch. The old waypoint was 74 m off.", delegated),
@@ -497,7 +513,7 @@ def tour_decisions():
             " afternoon and evening, and from 56 m its frame was dark cliff, the 4.5 m opening unreadable.",
             delegated),
         "tour-length": decision(
-            "The tour lasts about 574 s, under the ten minutes allowed for it: the camera slows when it flies low and"
+            "The tour lasts about 573 s, under the ten minutes allowed for it: the camera slows when it flies low and"
             " near what it looks at, so the closer waypoints lengthen it. Its speed formula stays as it was.",
             delegated),
     }
@@ -542,19 +558,31 @@ def grounds_decisions(choices):
             choice(choices["willow_site"])),
         "willow-lawn": decision(
             "A lawn opens from the northern greenhouses to the Willow, 2.4 ha (328 by 118 m), so that it stands alone on"
-            " its knoll: no tree stands over any of the seven greenhouses' lines to its crown, nor within 20 m of it. The"
-            " light woods White Hound's map draws beside those greenhouses lay over the lines from three of them. The"
-            " lawn's edge wanders, the woods thin out over 12 m beyond it, where the lawn gives way in tufts to such"
-            " leaf litter as lies under them, and four trees stand scattered on it, clear of"
-            " the lines, the paths and the vegetable patch, which it takes in round the greenhouses with its beds and"
-            " hollow as they were. From each greenhouse the trees now hide none of the points on the Willow's top quarter"
-            " (8.6 to 11.5 m above its knoll) that the ground leaves in sight: 60, 9, 22, 7, 8, 6 and 12 of 60 show."
-            " Through the 20 m sight line it replaces they hid all 60 from one greenhouse, all 7 from another and 4 of 6"
-            " from a third.",
+            " its knoll: no tree stands over any of the seven greenhouses' lines to its crown, nor within 20 m of it."
+            " White Hound's map draws lawn there, the hillock between them (4h) and the vegetable patch round the"
+            " greenhouses, which the lawn takes in with its beds and hollow as they were. Four trees stand scattered on"
+            " it, clear of the lines, the paths and the vegetable patch, and its edge wanders. From each greenhouse the"
+            " trees hide none of the points on the Willow's top quarter (8.6 to 11.5 m above its knoll) that the ground"
+            " leaves in sight: 60, 9, 22, 7, 8, 6 and 12 of 60 show. The lawn was cut through light woods over the lines"
+            " from three of the greenhouses, which were the patch's hatching read as undergrowth (vegetable-patch-beds).",
             q(G, "so you wouldn't expect there to be other trees near it to obscure it from view"),
             q(G, "Harry spotted the Whomping Willow in the distance"),
             {"source": "user", "quote": CLEARINGS_PLAUSIBLE},
             choice(choices["willow_site"])),
+        "vegetable-patch-beds": decision(
+            "White Hound hatches the vegetable patch, with paler strokes across the hatching: no tree stands on it, and"
+            " its beds are one plot on the level terrace the castle's base lays for it, running on over the outflow"
+            " where the base buries it. His hatching runs on over the base's banks round the terrace, 1 in 2.2, where"
+            " the patch is lawn: beds lie on no ground steeper than 1 in 6.7. The beds are 1.2 m wide, crops in rows"
+            " between narrow paths, plot by plot a different crop or dug-over soil. Read texel by texel, the hatching"
+            " and the grass between its strokes made a lattice of beds and lawn, and read as undergrowth it stood trees"
+            " all over the patch.",
+            q(GM, "vegetable patch"), q(G, "splashed across the flooded vegetable patch to double Herbology")),
+        "dashed-outlines": decision(
+            "White Hound outlines landforms with dashed lines, the hillocks (4f, 4g and 4h) and the howe (4i): no tree"
+            " stands on them. Read as his tree ink, their dashes stood a ring of trees on the Willow's lawn round the"
+            " hillock between it and the greenhouses, and one round the howe, with the woods' floor under them.",
+            q(GM, "hillock obscuring view from greenhouses to Whomping Willow"), q(GM, "howe")),
         "station-wood": decision(
             "From the platform and all the way down the walk to the lake the castle stays hidden, but for glimpses through"
             " the pines, until the path rounds its last bend and opens on to the lake. At this site the station terrace"
@@ -654,8 +682,9 @@ def grounds_decisions(choices):
             " the Forest map draws fields."
             " Every patch of ground, the scrub, the woods' floor and the lawns as well as the clearings' ground, gives"
             " way to the ground round it in tufts across 16 m of its edge rather than ending at a line, but where a wall,"
-            " a path, the railway's works or the shore explains its line. The woods' floor lies only under their canopy,"
-            " beyond which its tufts would read as specks on open ground; the station wood and the train's screen stand"
+            " a path, the railway's works or the shore explains its line. The woods' floor, leaf litter and moss, lies only"
+            " under the canopy of woods 16 m across or more: beyond it its tufts would read as specks on open ground, and"
+            " under a lone tree or a clump of a few the grass grows on. The station wood and the train's screen stand"
             " dense to a line, so their floor gives way within it, to grass under their outer trees.",
             q(H, "Rough scrubland, not suitable for farming."),
             q(H, "scrubby patch of ground which rose to meet the rocky foot of the mountain"),

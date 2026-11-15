@@ -38,7 +38,7 @@
     [1100, -1500, 300, 0, 0, 40, "Hogwarts Castle"],
     [550, -880, 110, 0, -40, 45, "The Lake"],
     [53, -362, 20, -58, -252, 15, "Durmstrang ship"],
-    [40, -262, 34, -2, -166, 30, "Gryffindor Tower"],
+    [40, -262, 55, -2, -166, 30, "Gryffindor Tower"],
     [230, -260, 40, 80, -90, 30, null],
     [420, 200, 30, 330, 150, 6, "Hogsmeade station"],
     [150, 262, 32, 64, 181, 30, "North Tower"],
@@ -49,7 +49,7 @@
     [-1620, 730, 110, -1700, 650, 0, "Grawp's clearing"],
     [-1900, 350, 250, -5018, 888, 0, "Sirius's cave"],
     [-330, -68, 60, -18, -72, 40, "Entrance Hall & Great Hall"],
-    [-260, 10, 45, -107, -9, 35, "West Tower (Owlery)"],
+    [-260, 10, 100, -107, -9, 35, "West Tower (Owlery)"],
     [-340, -205, 26, -291.5, -191.8, 3, "Hagrid's hut"],
     [-168, -202, 45, -26, -91, 55, "Astronomy Tower"],
     [-150.4, -487.9, 26, -175.4, -487.4, 14.48, "Quidditch pitch"],
@@ -398,6 +398,7 @@
     gl.bindVertexArray(null); gl.disable(gl.DEPTH_TEST);
   }
   function drawGlass(pos, rot, tanH, jit, sw, sh, L) {         // into the shaded image (fbo), depth-tested, no depth writes
+    if (dbg & 65536) return;                         // debug: no glazing
     const tx = tanH * sw / sh * 1.05, ty = tanH * 1.05, panes = meshChunks.filter((c) => c.glass && chunkVisible(c, pos, rot, tx, ty));
     if (!panes.length) return;
     gl.useProgram(glassP);
@@ -406,7 +407,7 @@
     gl.uniform3fv(UG.uSunDir, L.dir); gl.uniform3fv(UG.uSunCol, L.sunCol); gl.uniform3fv(UG.uSkyCol, L.skyCol); gl.uniform3fv(UG.uHorCol, L.horCol);
     gl.enable(gl.DEPTH_TEST); gl.depthFunc(gl.LESS); gl.depthMask(false);
     gl.enable(gl.BLEND); gl.colorMask(true, true, true, false);
-    for (const [k, src, dst] of [[0, gl.ZERO, gl.SRC_COLOR], [1, gl.ONE, gl.ONE]]) {
+    for (const [k, src, dst] of [[0, gl.ZERO, gl.SRC_COLOR], [1, gl.ONE_MINUS_DST_COLOR, gl.ONE]]) {   // multiply, then screen
       gl.uniform1i(UG.uGlassPass, k); gl.blendFunc(src, dst);
       for (const c of panes) {
         gl.uniform3fv(UG.uLo, c.lo); gl.uniform3fv(UG.uHi, c.hi);
@@ -415,6 +416,24 @@
     }
     gl.bindVertexArray(null);
     gl.disable(gl.BLEND); gl.colorMask(true, true, true, true); gl.depthMask(true); gl.disable(gl.DEPTH_TEST);
+  }
+  let lightsDrawn = 0;
+  // small lights (lightVs) into the shaded image, depth-tested: each pixel keeps the brighter of a light and what lies
+  // behind it, so overlapping lights (a lantern's faces seen together) shine as one, never brighter than their panes
+  function drawLights(pos, rot, tanH, jit, sw, sh, L) {
+    const pts = meshChunks.lights;
+    lightsDrawn = 0;
+    if (!pts || !pts.count || L.dusk <= 0 || dbg & 131072) return;   // debug: no light points
+    gl.useProgram(lightP);
+    gl.uniform2f(ULt.uRes, sw, sh); gl.uniform2fv(ULt.uJitter, jit); gl.uniform3fv(ULt.uCamPos, pos);
+    gl.uniformMatrix3fv(ULt.uCamRot, false, rot); gl.uniform1f(ULt.uTanHalf, tanH);
+    gl.uniform1f(ULt.uDusk, L.dusk); gl.uniform1f(ULt.uExposure, L.exposure);
+    gl.enable(gl.DEPTH_TEST); gl.depthFunc(gl.LESS); gl.depthMask(false);
+    gl.enable(gl.BLEND); gl.blendEquation(gl.MAX); gl.colorMask(true, true, true, false);
+    gl.bindVertexArray(pts.vao); gl.drawArrays(gl.POINTS, 0, pts.count);
+    gl.bindVertexArray(null);
+    gl.blendEquation(gl.FUNC_ADD); gl.disable(gl.BLEND); gl.colorMask(true, true, true, true); gl.depthMask(true); gl.disable(gl.DEPTH_TEST);
+    lightsDrawn = pts.count;
   }
   let jIdx = 0, prevPos = null, prevRot = null, prevSig = "", accN = 0, hn = 0;
   // the shading pass's sun term over the last rendered frame (its debug bit 64), drawn again into a target of its own
@@ -502,7 +521,8 @@
       }
       gl.drawArrays(gl.TRIANGLES, 0, 3);
     }
-    if (meshOn && meshChunks.length) drawGlass(pos, rot, tanH, jit, sw, sh, L);
+    if (meshOn && meshChunks.length) { drawGlass(pos, rot, tanH, jit, sw, sh, L); drawLights(pos, rot, tanH, jit, sw, sh, L); }
+    else lightsDrawn = 0;
     gl.activeTexture(gl.TEXTURE16); gl.bindTexture(gl.TEXTURE_2D, fTex);
     let outUnit = 16;
     if (cbf) {
@@ -595,7 +615,8 @@
     meshes(on) { meshOn = !!on; meshGen++; },
     async loadMeshes(payload) { const old = meshChunks; meshChunks = await uploadMeshes(payload); freeMeshes(old); meshGen++; return meshChunks.length; },
     meshStats: () => ({ on: meshOn, chunks: meshChunks.length, drawn: meshDrawn, reflected: meshReflected,
-                        levels: mainLevels, mirrorLevels, casters: shCasters, near: nearDrawn }),
+                        levels: mainLevels, mirrorLevels, casters: shCasters, near: nearDrawn, lights: lightsDrawn,
+                        lightPoints: meshChunks.lights ? meshChunks.lights.count : 0 }),
     groups: () => (meshChunks.groups || []).map((g) => ({ asset: g.levels[0][0].asset, lo: g.lo, hi: g.hi,
       switch: g.switch.map((d) => (Number.isFinite(d) ? d : null)), has: g.levels.map((l) => l.length > 0),
       main: g.pick.main ?? 0, mirror: g.pick.mirror ?? 0, refRows: meshChunks.refRows })),

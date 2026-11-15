@@ -185,6 +185,14 @@ class SiteMutationTests(unittest.TestCase):
                 self.assertEqual((ROOT / m.file).read_text(encoding="utf-8").count(m.old), 1, m.file)
 
 
+class InspectionMutationTests(unittest.TestCase):
+    def test_every_inspection_mutation_finds_its_text_exactly_once(self):
+        from tools.inspection import mutate
+        for m in mutate.MUTATIONS:
+            with self.subTest(mutation=m.name):
+                self.assertEqual((ROOT / m.file).read_text(encoding="utf-8").count(m.old), 1, m.file)
+
+
 class FamilyMutationTests(unittest.TestCase):
     def test_every_recorded_mutation_finds_its_text_exactly_once(self):
         # tools.mutate.run checks them before a run; this sees a stale one when the code it anchors on is edited

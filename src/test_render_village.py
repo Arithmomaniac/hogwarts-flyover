@@ -1,5 +1,5 @@
 """The village family's codes in the production path: thatch, slate, harl, rubble and paint by day, and its windows'
-lamplight at dusk."""
+lamplight at dusk, which the shut shops' windows lack."""
 from pathlib import Path
 import sys
 import unittest
@@ -36,12 +36,14 @@ class VillageRenderTests(RenderTestCase):
         self.assertGreater(wall["village-thatch"][0], wall["village-thatch"][2])      # warm straw
         self.assertLess(lum["village-thatch"], lum["harl-white"])
 
-    async def test_village_windows_glow_with_lamplight_at_dusk_and_shops_brightest(self):
+    async def test_village_windows_glow_with_lamplight_at_dusk_but_the_shut_shops_do_not(self):
+        """HBP 27, as White Hound quotes it: "the darkness complete but for a few streetlamps and lit upper windows".
+        A lit window glows at dusk; a shop window, the shop shut, stays as dark as an unlit one."""
         hour = await self.light_at(lambda light: light["dusk"] > 0.99)
         lum = {n: float(np.median((await self.castle_box(code(n), hour, sunlit=False))["wall"], axis=0) @ LUM)
                for n in ("glass-dark", "glass-lit", "glass-shop")}
         self.assertGreater(lum["glass-lit"], 4.0 * lum["glass-dark"])
-        self.assertGreater(lum["glass-shop"], lum["glass-lit"])
+        self.assertLess(lum["glass-shop"], 2.0 * lum["glass-dark"])
 
 
 if __name__ == "__main__":

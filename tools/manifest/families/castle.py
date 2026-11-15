@@ -61,7 +61,7 @@ def assets(ctx):
             inferred=["arch forms", "roof pitches", "turret placement", "slate roofs", "window sizes, storeys and spacing",
                       "door and pend sizes", "the pend's gate bay", "the Head's tower's round form and height",
                       "the Physick Garden's place and layout", "court house sizes", "chimney stacks"],
-            decisions=["wh-skyline", "towers-flat-battlemented", "warm-masonry", "castle-colour-red-cast",
+            decisions=["wh-skyline", "towers-flat-battlemented", "north-tower-stands-clear", "warm-masonry", "castle-colour-red-cast",
                        "ravenclaw-battlements", "small-scottish-turrets", "court-buildings-as-houses",
                        "castle-norman-openings", "mont-orgueil-roofed-wall-walks", "castle-speck-threshold",
                        "castle-plan-interiors-excluded", "astronomy-beside-doors", "lamplit-windows"]),
@@ -81,6 +81,12 @@ def decisions(ctx):
                  " had flat tops."),
             q(C, "the West Tower definitely has a flat top and battlements, in the standard English/Welsh style"),
             images=["castle_Orford.jpg", "castle_Alnwick.jpg"]),
+        "north-tower-stands-clear": decision(
+            "The North Tower's overhanging top stands clear of the buildings round it, which are cut back from it, since"
+            " the skyline keeps it below Ravenclaw and Gryffindor: a thin column and its top beside them, not fused into"
+            " their roofs.",
+            q(C, "both the North Tower and the Astronomy Tower have a long thin column topped by a wider, overhanging top"),
+            q(C, "the three highest Towers – Ravenclaw, Astronomy and Gryffindor"), inferred=True),
         "warm-masonry": decision(
             "Castle masonry is warm brown-grey: (0.26, 0.228, 0.19) in the shading pass, chosen against the earlier"
             " (0.25, 0.235, 0.21).", defaults, offered, choice(choices["masonry_colour"]),

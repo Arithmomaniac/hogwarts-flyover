@@ -1,10 +1,12 @@
 """The tour frames what its captions name: at each waypoint whose caption names an object, that object is the visible
 surface over at least MIN_SHARE of the frame as the flyover shows it, so trees, terrain and buildings in front of it
-count against it. A caption that names a clearing in the Forest names its ground within the clearing's recorded outline
-(meta.clearings), which, being dry ground in the Forest, must also show more than any water in its frame; and one that
-names a spot the scene does not model, Sirius's cave, is held to showing that spot: in the frame, EDGE of it inside
-each edge, and not hidden. A caption the test does not know fails, so a new waypoint says what it shows. The path's
-clearance follows the ground and the trees, not the meshes, so the camera is also kept out of every building's box."""
+count against it. Where it names a part of the castle, but for the opening's wide view of it in its setting, trees in
+front of the castle cover at most TREES_AHEAD of the frame, so it reads over them. A caption that names a clearing in
+the Forest names its ground within the clearing's recorded outline (meta.clearings), which, being dry ground in the
+Forest, must also show more than any water in its frame; and one that names a spot the scene does not model, Sirius's
+cave, is held to showing that spot: in the frame, EDGE of it inside each edge, and not hidden. A caption the test does
+not know fails, so a new waypoint says what it shows. The path's clearance follows the ground and the trees, not the
+meshes, so the camera is also kept out of every building's box."""
 from pathlib import Path
 import sys
 from typing import NamedTuple
@@ -48,6 +50,8 @@ SPOTS = {"Sirius's cave"}           # points of interest (meta.extras.poi) on th
 EDGE = 0.1                          # a spot lies at least this share of the frame inside each of its edges
 HIDDEN = 0.05                       # and the first surface along its ray within this share of its distance
 MATERIALS = {"castle": 4, "lake": 2, "forest": 3}
+WIDE = {"Hogwarts Castle"}          # the opening: the castle in its setting (tour-opening-wide)
+TREES_AHEAD = 0.04                  # trees nearer than the castle's nearest tenth, as a share of the frame
 GROUND = 1
 NOT_AN_OBJECT = (0, 1, 2, 3)        # sky, ground, water and trees: an asset's box holds some of them around it
 CLEAR_M = 3.0                       # how near a building's box the camera may pass
@@ -101,6 +105,16 @@ def share(frame, subject):
     return float(np.mean(inside & ~np.isin(mats, NOT_AN_OBJECT)))
 
 
+def trees_ahead(frame):
+    """The share of the probed frame whose visible surface is a tree nearer than the nearest tenth of the castle in it."""
+    samples = np.array(frame["out"], dtype=float)
+    mats = samples[:, 3].astype(int)
+    castle = samples[mats == MATERIALS["castle"], 2]
+    if not castle.size:
+        return 0.0
+    return float(np.mean((mats == MATERIALS["forest"]) & (samples[:, 2] < np.quantile(castle, 0.1))))
+
+
 class TourFramingTests(PageTestCase):
     QUERY = "?t=0&pause=1&scale=0.35&hud=0"
     OPENING_T = 0                               # the tour's start, as the flyover shows it
@@ -149,6 +163,10 @@ class TourFramingTests(PageTestCase):
                 frame = await self.page.evaluate(GRID)
                 got, least = share(frame, subject), MINIMUM.get(caption, MIN_SHARE)
                 self.assertGreaterEqual(got, least, f"{caption} covers {100 * got:.2f} % of the frame at {t:.0f} s")
+                if SUBJECTS[caption] == "castle" and caption not in WIDE:
+                    ahead = trees_ahead(frame)
+                    self.assertLessEqual(ahead, TREES_AHEAD, f"trees in front of the castle cover {100 * ahead:.1f} %"
+                                                             f" of {caption}'s frame at {t:.0f} s")
                 if isinstance(SUBJECTS[caption], Clearing):     # dry ground in the Forest, not a loch beside it
                     water = share(frame, "lake")
                     self.assertLess(water, got, f"{caption}'s frame shows more water ({100 * water:.2f} %) than its "

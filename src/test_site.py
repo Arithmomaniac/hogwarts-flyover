@@ -47,20 +47,30 @@ LUMA = np.array([0.3, 0.55, 0.15])     # the luminance weights frag4.glsl's grou
 
 def class_colours(text=None):
     """classCol by surface class, in GLSL `text` (src/frag4.glsl by default): {class: (the RGB colours its albedo mixes,
-    the frequencies per metre of the noise in it)}."""
+    the frequencies per metre of the noise in it)}, with those of the shader's own colour functions it calls."""
     text = (ROOT / "src" / "frag4.glsl").read_text(encoding="utf-8") if text is None else text
-    start = text.index("vec3 classCol(")
-    body = text[text.index("{", start) + 1: text.index("\n}\n", start)]
-    code = " ".join(line.split("//")[0] for line in body.splitlines())
+
+    def body(signature):
+        start = text.index(signature)
+        return " ".join(line.split("//")[0] for line in text[text.index("{", start) + 1: text.index("\n}\n", start)].splitlines())
+
+    def parse(expression):
+        number = r"\s*(-?[\d.]+)\s*"
+        colours = [tuple(float(v) for v in m) for m in re.findall(rf"vec3\({number},{number},{number}\)", expression)]
+        frequencies = [float(f) for f in re.findall(r"vnoise\(xz \* ([\d.]+)", expression)]
+        for name in re.findall(r"\b(\w+)\(", expression):
+            if name != "classCol" and f"vec3 {name}(" in text:
+                more, faster = parse(body(f"vec3 {name}("))
+                colours, frequencies = colours + more, frequencies + faster
+        return colours, frequencies
+
     out, after = {}, 0
-    for statement in filter(str.strip, code.split(";")):
+    for statement in filter(str.strip, body("vec3 classCol(").split(";")):
         branch = re.fullmatch(r"\s*if \(c < (\d+)\.5\) return (.*)", statement)
         last = re.fullmatch(r"\s*return (.*)", statement)
         cls, expression = (int(branch[1]), branch[2]) if branch else (after, last[1])
         after = cls + 1
-        number = r"\s*(-?[\d.]+)\s*"
-        out[cls] = ([tuple(float(v) for v in m) for m in re.findall(rf"vec3\({number},{number},{number}\)", expression)],
-                    [float(f) for f in re.findall(r"vnoise\(xz \* ([\d.]+)", expression)])
+        out[cls] = parse(expression)
     return out
 
 
@@ -952,9 +962,12 @@ class CastleBaseTests(unittest.TestCase):
         return np.hypot(gn, ge)
 
     def test_a_base_only_adds_ground_and_holds_the_castle_level_on_its_platform(self):
+        from scipy import ndimage as ndi
+
+        platform = ndi.binary_dilation(self.castle, iterations=2)          # the castle and two texels round it
         for kind, z in self.bases.items():
             self.assertGreaterEqual(float((z - self.ground).min()), 0.0, kind)
-            np.testing.assert_array_equal(z[self.castle], self.PLATFORM, err_msg=kind)
+            np.testing.assert_array_equal(z[platform], self.PLATFORM, err_msg=kind)
 
     def test_the_mounds_lawns_can_be_walked_and_fall_most_gently_toward_the_cabin_and_pitch(self):
         g, z = self.grade(self.bases["mound"]), self.bases["mound"]
@@ -985,6 +998,29 @@ class CastleBaseTests(unittest.TestCase):
             self.cb.shape("plinth", self.ground, self.E, self.N, self.castle, self.lake_sd, self.PLATFORM, self.LAKE,
                           np.array([-1.0, 0.0]))
 
+    def test_walls_too_near_the_lake_for_the_face_keep_their_ground_and_the_cliff_drops_sheer_beyond_them(self):
+        """A wall nearer the water than the face has room for (the cliff-edge wall, 2e, here 5 m from it) keeps the
+        foot-path's level under it and HOLD_M round it, so no wall hangs down the face: the cliff drops sheer from
+        beyond that margin (`held`, which build_final's lake shaping leaves alone), and the face still runs to the water."""
+        from scipy import ndimage as ndi
+
+        cb = self.cb
+        leg = (np.abs(self.E - 59.0) < 1.0) & (self.N < -40.0) & (self.N > -56.0)    # down from the castle's corner,
+        run = (np.abs(self.N + 55.0) < 1.0) & (self.E > 58.0) & (self.E < 100.0)      # then along the lake, 5 m off
+        castle = self.castle | leg | run
+        reach = round(cb.HOLD_M / cb.TEXEL_M)
+        margin = ndi.binary_dilation(castle, np.ones((3, 3), bool), iterations=reach)
+        beyond = (self.E > 58.0) & (self.E < 100.0) & (self.N < -55.0) & ~margin & (self.lake_sd >= 0.0)
+        for kind in ("mound", "crag"):
+            out = cb.shape(kind, self.ground, self.E, self.N, castle, self.lake_sd, self.PLATFORM, self.LAKE,
+                           np.array([-1.0, 0.0]))
+            z = out[0]
+            drop = (z - ndi.minimum_filter(z, size=2 * reach + 1))[castle]
+            self.assertLessEqual(float(drop.max()), cb.PATH_GRADE * cb.HOLD_M * np.sqrt(2.0) + 1e-3, kind)
+            np.testing.assert_array_equal(out[3], margin, err_msg=kind)
+            face = self.LAKE + 0.35 + cb.FACE_GRADE * self.lake_sd[beyond]
+            self.assertLessEqual(float((z[beyond] - face).max()), 1e-3, kind)
+
     def test_the_vegetable_patch_lies_level_in_its_own_little_hollow_below_the_castle(self):
         """White Hound: "The vegetable patch must be either quite low-lying relative to the rest of the grounds, or in its
         own little hollow, because it can flood in heavy rain" (OotP: "splashed across the flooded vegetable patch")."""
@@ -993,8 +1029,8 @@ class CastleBaseTests(unittest.TestCase):
         cb = self.cb
         garden = np.hypot(self.E, self.N - 105.0) <= 35.0                               # 30 to 100 m north of it
         shed = (np.abs(self.E - 10.0) <= 6.0) & (np.abs(self.N - 105.0) <= 4.0)            # a greenhouse in it
-        z, _, hollow = cb.shape("mound", self.ground, self.E, self.N, self.castle, self.lake_sd, self.PLATFORM, self.LAKE,
-                                np.array([-1.0, 0.0]), garden, shed)
+        z, _, hollow, _ = cb.shape("mound", self.ground, self.E, self.N, self.castle, self.lake_sd, self.PLATFORM,
+                                   self.LAKE, np.array([-1.0, 0.0]), garden, shed)
         floor = z[hollow & (ndi.distance_transform_edt(hollow) * cb.TEXEL_M > cb.GARDEN_RIM_M)]
         self.assertLess(float(np.ptp(floor)), 0.01)                                        # level
         pond = common.fill(z) - z                                                         # rain, run off as it would
@@ -1213,6 +1249,19 @@ class ClearingTests(unittest.TestCase):
         self.assertEqual(clearings.parallel_edges(wedge), [])
         turn = np.linspace(0.0, 2 * np.pi, 400)
         self.assertEqual(clearings.straight_edges(np.column_stack([40.0 * np.cos(turn), 40.0 * np.sin(turn)])), [])
+
+    def test_the_woods_floor_lies_in_a_wood_but_not_under_a_lone_tree(self):
+        """Under a wood WOOD_M across or more the floor stays, even where the wood runs on past the grid's edge; under a
+        lone tree's crown the ground takes the lawn's round it."""
+        import clearings
+
+        sc, trees = np.ones((60, 60), np.uint8), np.zeros((60, 60))
+        for rows, cols in ((slice(10, 30), slice(0, 6)), (slice(10, 30), slice(30, 50)), (slice(45, 48), slice(10, 13))):
+            sc[rows, cols], trees[rows, cols] = clearings.FLOOR, 1.0      # 12 m to the edge, 40 m across, a 6 m crown
+        out = clearings.woods_floor(sc, trees, 2.0)
+        self.assertTrue((out[10:30, 0:6] == clearings.FLOOR).all())
+        self.assertTrue((out[10:30, 30:50] == clearings.FLOOR).all())
+        self.assertTrue((out[45:48, 10:13] == 1).all())
 
     def test_trees_removed_where_no_rule_may_remove_them_are_found(self):
         import clearings
@@ -1452,6 +1501,34 @@ class GroundColourTests(unittest.TestCase):
                 self.assertTrue(0.6 <= float(np.mean(mixed, axis=0) @ LUMA) / float(np.asarray(meadow) @ LUMA) < 1.0)
                 self.assertGreater(max(frequencies), 0.5)
 
+    def test_the_woods_floor_is_litter_and_moss_not_a_flat_colour(self):
+        """Under the woods lies leaf and needle litter with moss in patches, not one flat dark brown, which read as stains
+        on the lawns (tours 6, 15 and 23): its colours run from browns to greens (hues from 20 to 110 degrees, some below
+        50 and some above 65), their mean half to two thirds as bright as the meadow's, and noise finer than 2 m
+        textures it."""
+        import colorsys
+
+        colours = class_colours()
+        (meadow,), _ = colours[0]
+        mixed, frequencies = colours[5]
+        hues = [colorsys.rgb_to_hsv(*rgb)[0] * 360.0 for rgb in mixed]
+        self.assertTrue(all(20.0 <= h <= 110.0 for h in hues), hues)
+        self.assertTrue(min(hues) < 50.0 and max(hues) > 65.0, hues)
+        self.assertTrue(0.5 <= float(np.mean(mixed, axis=0) @ LUMA) / float(np.asarray(meadow) @ LUMA) <= 2 / 3)
+        self.assertGreater(max(frequencies, default=0.0), 0.5)
+
+    def test_the_vegetable_beds_are_crops_on_soil_not_a_striped_carpet(self):
+        """The vegetable beds read as cultivated ground, not as a flat striped carpet (site/ground-vegetable-beds): they
+        mix brown soil (hues from 25 to 45 degrees) and green crops (65 to 120 degrees), and noise finer than 2 m
+        textures the leaves and the soil."""
+        import colorsys
+
+        mixed, frequencies = class_colours()[4]
+        hues = [colorsys.rgb_to_hsv(*rgb)[0] * 360.0 for rgb in mixed]
+        self.assertTrue(any(25.0 <= h <= 45.0 for h in hues), hues)
+        self.assertTrue(any(65.0 <= h <= 120.0 for h in hues), hues)
+        self.assertGreater(max(frequencies, default=0.0), 0.5)
+
 
 class RailwayEarthworksTests(unittest.TestCase):
     """fix_railway's rules on synthetic ground: a second run must decide as the first did."""
@@ -1600,9 +1677,11 @@ class PackedSiteTests(unittest.TestCase):
         where = [[round(float(e)), round(float(n))] for e, n in zip(E[perched][:5], N[perched][:5])]
         self.assertEqual((int(perched.sum()), where), (0, []))
 
-    def test_trees_grow_over_the_buried_outflow_as_round_it(self):
+    def test_the_buried_outflow_leaves_no_line_in_the_trees_or_the_ground_round_it(self):
         """Where the castle's base buries the lake's outflow it runs under the base, so the grounds map's water ink there
-        draws no stream above ground and leaves no treeless strip through the woods round it."""
+        draws no stream above ground and leaves no line where it ran: the trees over its course are as dense as those
+        round it, and its ground is theirs, as where the vegetable patch's beds run on over it. (At X no trees stand
+        round it, so the trees' part guards against a cleared line should any grow there.)"""
         if not self.site["graded"]:
             self.skipTest("the site keeps the original carve")
         from scipy import ndimage as ndi
@@ -1616,15 +1695,19 @@ class PackedSiteTests(unittest.TestCase):
         near = (np.abs(E) < 1000.0) & (np.abs(N) < 1000.0)
         E, N = E[near], N[near]
         at = lambda field, e, n: self.ms.sample(field, self.grid, e, n)
-        trees = self.layer("locA")[..., 1] / 255.0
+        trees, surface = self.layer("locA")[..., 1] / 255.0, self.layer("locN")[..., 0]
         stream = self.ms.sd_bytes(self.layer("locB")[..., 1])
         shore = ndi.distance_transform_edt(self.layer("locW") <= 0.0) * self.grid.texel_size()[0]
         buried = (at(stream, E, N) >= 1.0) & (at(shore, E, N) > 6.0)        # a stream the build no longer draws there
-        ring = np.mean([at(trees, E + 8.0 * np.cos(a), N + 8.0 * np.sin(a)) for a in np.arange(8) * np.pi / 4], axis=0)
-        wooded = buried & (ring > 0.1)
-        bare = wooded & (at(trees, E, N) < 0.05)
-        self.assertGreater(int(wooded.sum()), 300)
-        self.assertLess(float(bare.sum() / wooded.sum()), 0.2)
+        E, N = E[buried], N[buried]
+        self.assertGreater(len(E), 300)
+        turn = np.arange(8) * np.pi / 4
+        ring = np.mean([at(trees, E + 8.0 * np.cos(a), N + 8.0 * np.sin(a)) for a in turn], axis=0)
+        self.assertLess(float(np.mean(np.abs(at(trees, E, N) - ring) > 0.25)), 0.2)
+        texel = lambda e, n: tuple(np.rint(v).astype(int) for v in self.grid.to_texel(e, n))
+        round_it = np.stack([surface[texel(E + 8.0 * np.cos(a), N + 8.0 * np.sin(a))] for a in turn])
+        commonest = np.array([np.bincount(c).argmax() for c in round_it.T])
+        self.assertGreater(float(np.mean(surface[texel(E, N)] == commonest)), 0.8)
 
     def grounds_points(self):
         """Hagrid's cabin, the gates' centre and the drive from them to the castle's front, in castle-relative metres."""
@@ -2014,9 +2097,6 @@ class PackedSiteTests(unittest.TestCase):
                 self.assertGreaterEqual(int(standing.sum()), 2)
                 if len(rises) >= 20:                    # points 2 m apart
                     self.assertGreaterEqual(float(np.median(rises)), F / 3)
-                    thinned.append(r["id"])
-        if self.site["willow_lawn"]:
-            self.assertIn("willow-lawn", thinned)
 
     def test_each_tree_left_standing_in_a_clearing_grows_and_none_on_the_vegetable_patch(self):
         """Every texel of the local layer at full density inside a clearing, which only its scattered trees hold, is
@@ -2262,6 +2342,94 @@ class PackedSiteTests(unittest.TestCase):
         rows, cols = np.nonzero(deep & (surface != 5))
         self.assertEqual(np.round(np.column_stack(self.grid.to_world(rows, cols))).tolist()[:10], [])
 
+    WOOD_M = 16.0           # the woods' floor lies in woods this wide or more
+    PLOT_M2 = 1000.0        # beds lie in plots this big or more,
+    BEDS_GAP_M = 12.0       # across gaps narrower than this,
+    BEDS_GRADE = 0.2        # on ground no steeper than this
+
+    def test_the_woods_floor_lies_in_woods_not_under_a_lone_tree(self):
+        """The woods' floor, their litter, lies in woods WOOD_M across or more: under a lone tree or a clump of a few
+        the grass grows on, where a patch of litter the size of a crown read as a dark stain (the lawns' blotches in
+        tours 4, 6, 14, 15 and 23). A wood is ground under trees of half density or more, or under the floor, that holds
+        a disc WOOD_M across; every texel of floor lies within WOOD_M / 2 of one, as far again as the floor's edge
+        blends (half clearings.ECOTONE_M), and a texel."""
+        from scipy import ndimage as ndi
+
+        import build_final
+        import clearings
+
+        surface, trees = self.layer("locN")[..., 0], self.layer("locA")[..., 1] / 255.0
+        texel = self.grid.texel_size()[0]
+        woods = ndi.binary_opening((trees >= 0.5) | (surface == 5), border_value=1,
+                                   structure=build_final.disk(int(round(self.WOOD_M / 2 / texel))))
+        reach = self.WOOD_M / 2 + clearings.ECOTONE_M / 2 + texel
+        rows, cols = np.nonzero((surface == 5) & (ndi.distance_transform_edt(~woods) * texel > reach))
+        self.assertEqual(np.round(np.column_stack(self.grid.to_world(rows, cols))).tolist()[:10], [],
+                         f"{len(rows)} texels of floor away from any wood")
+
+    # dashes of White Hound's dashed outlines (grounds-map pixels, each at least 15 m from his tree symbols): round the
+    # hillock between the greenhouses and the Willow (4h), outside the Willow's lawn, and round the howe (4i); and tree
+    # symbols beside them
+    DASHES = {"4h": ((1133, 549), (1138, 562), (1176, 559), (1173, 571), (1167, 579), (1160, 585), (1142, 590),
+                     (1150, 591)),
+              "4i": ((1526, 118), (1578, 116), (1588, 119), (1599, 123), (1612, 128), (1641, 155), (1654, 182),
+                     (1655, 237), (1644, 268), (1637, 278), (1622, 297), (1586, 314), (1512, 308), (1479, 288))}
+    TREE_SYMBOLS = ((1071, 558), (1566, 210), (1593, 219), (1575, 236))
+    WOODS = ((1132, 180), (565, 155))       # in woods he scribbles in one-pixel strokes
+
+    def test_white_hounds_dashed_outlines_grow_no_trees(self):
+        """White Hound outlines landforms with dashed lines: the hillock between the greenhouses and the Willow (4h) and
+        the howe (4i). Read as tree ink, their dashes stood a ring of trees on the Willow's lawn and one round the howe,
+        with the woods' floor under them (site/clearing-willow-lawn, site/hill-howe-4i). No tree stands on a dash and the
+        ground there is not the woods' floor, while his tree symbols beside them keep their trees, and his woods, drawn
+        in strokes of a pixel's width, theirs."""
+        import build_final
+
+        trees, surface = self.layer("locA")[..., 1] / 255.0, self.layer("locN")[..., 0]
+        world = lambda points: np.array(build_final.g2w(*np.array(points, float).T), float)
+        for outline, dashes in self.DASHES.items():
+            e, n = world(dashes)
+            i, j = (np.rint(v).astype(int) for v in self.grid.to_texel(e, n))
+            with self.subTest(outline=outline):
+                self.assertLess(float(self.ms.sample(trees, self.grid, e, n).max()), 0.1)
+                self.assertNotIn(5, surface[i, j].tolist())
+        self.assertGreater(float(self.ms.sample(trees, self.grid, *world(self.TREE_SYMBOLS)).min()), 0.9)
+        self.assertGreater(float(self.ms.sample(trees, self.grid, *world(self.WOODS)).min()), 0.8)
+
+    def test_the_vegetable_patch_is_one_plot_of_beds_with_no_tree_on_it(self):
+        """White Hound draws the vegetable patch (5c) as hatching, crossed by paler strokes. Read texel by texel, the
+        strokes and the grass between them made a lattice of beds and lawn (tour 8's triangles, the dashes on the
+        Willow's knoll), and the hatching read as undergrowth stood trees all over it (site/vegetable-patch). Its beds are
+        one plot on the level ground the castle's base lays for it (1.5 ha): two texels in from its outline every texel of
+        open ground is beds, and no bed lies steeper than BEDS_GRADE, so the base's banks round it, over which his
+        hatching runs on, are lawn. No tree stands on his hatched plots, banks and all, four metres in from their
+        outline. Nor do specks of the hatching's colour elsewhere lie as beds: every texel of beds lies in a plot of
+        PLOT_M2 or more, across gaps narrower than BEDS_GAP_M."""
+        from scipy import ndimage as ndi
+
+        import build_final
+        import features
+
+        surface, trees = self.layer("locN")[..., 0], self.layer("locA")[..., 1] / 255.0
+        texel_m2 = float(np.prod(self.grid.texel_size()))
+        gap = build_final.disk(int(round(self.BEDS_GAP_M / 2 / self.grid.texel_size()[0])))
+        lab, _ = ndi.label(ndi.binary_fill_holes(ndi.binary_closing(surface == 4, structure=gap)),
+                           structure=np.ones((3, 3), bool))
+        sizes = np.bincount(lab.ravel()) * texel_m2
+        patch = lab == 1 + int(np.argmax(sizes[1:]))
+        self.assertGreater(float(sizes[1:].max()), 1.2e4)
+        self.assertGreaterEqual(float(sizes[lab[surface == 4]].min()), self.PLOT_M2)
+        inner = ndi.binary_erosion(patch, iterations=2)
+        built = (self.ms.sd_bytes(self.layer("locA")[..., 3]) < 1.0) | (self.layer("locW") > -0.9)
+        open_ground = inner & ~built & (surface != 3)
+        self.assertGreater(float(np.mean(surface[open_ground] == 4)), 0.98)
+        slope = np.hypot(*np.gradient(self.layer("locBed"), self.grid.texel_size()[0]))
+        self.assertLess(float(slope[ndi.binary_erosion(surface == 4)].max()), self.BEDS_GRADE)
+        hatched = np.load(inputs.require("original-intermediates") / "build" / "cls_g.npy") == common.C_UNDER
+        v, u = np.nonzero(ndi.binary_erosion(features.plots(hatched), iterations=6))
+        E, N = (np.asarray(c, float) for c in build_final.g2w(u + 0.5, v + 0.5))
+        self.assertLess(float(self.ms.sample(trees, self.grid, E, N).max()), 0.05)
+
     def test_the_lake_front_wall_stands_at_the_top_of_a_cliff(self):
         """White Hound's 2e, "wall along edge of cliff overlooking lake": the castle's base carries it on the cliff's
         top, its upper part "sloping back towards the base of the castle", its lower part near "vertical"."""
@@ -2396,6 +2564,15 @@ class PackedSiteTests(unittest.TestCase):
         E, N = self.pitch_points(build_final.TREE_CROWN_M)
         trees = self.ms.sample(self.layer("locA")[..., 1].astype(np.float64), self.grid, E, N)
         self.assertEqual(float(trees.max()), 0.0)
+
+    def test_no_path_paints_the_pitch_or_the_ground_under_its_stands(self):
+        """White Hound's grounds map draws the pitch's stands in the colour of his paths. Read as a path, the ring
+        painted soft, pale smears of trodden earth on the turf along the stands' inner edge (grounds/pitch,
+        site/ground-quidditch-pitch). The stands are built: no path runs on the pitch or under them, a texel and a half
+        in from their outer edge, where the four texels round each point lie within it."""
+        E, N = self.pitch_points(-1.5 * self.grid.texel_size()[0])
+        road = self.ms.sample(self.layer("locA")[..., 0].astype(np.float64), self.grid, E, N)
+        self.assertEqual(float(road.max()), 0.0)
 
     def test_the_ground_under_the_pitch_and_its_stands_lies_at_the_playing_level(self):
         E, N = self.pitch_points(0.0)

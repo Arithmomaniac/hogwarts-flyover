@@ -20,17 +20,65 @@ MESH_FAULTS = {"winding": {}, "collapsed": {}}
 
 
 class GreenhouseTests(unittest.TestCase):
+    @staticmethod
+    def stone_tops(opaque):
+        """{height: area} of the stone's upward faces: the floor and the dwarf wall's top."""
+        first = opaque.idx[:, 0]
+        stone_up = np.flatnonzero((opaque.nrm[first, 1] > 0.99) & np.all(opaque.attr[first] == mesh_greenhouses.WALL_STONE, axis=1))
+        heights = np.round(opaque.pos[first[stone_up], 1], 4)
+        return {float(y): float(triangle_areas(opaque, stone_up[heights == y]).sum()) for y in np.unique(heights)}
+
     def test_benches_stand_on_a_floor_inside_a_dwarf_wall(self):
         footprint, ground = Polygon([(0.0, 0.0), (20.0, 0.0), (20.0, 6.0), (0.0, 6.0)]), world.datum()
         opaque, _ = mesh_greenhouses.greenhouse([footprint], lambda x, z: np.full(np.shape(x), ground))
-        first = opaque.idx[:, 0]
-        stone_up = np.flatnonzero((opaque.nrm[first, 1] > 0.99) & np.all(opaque.attr[first] == mesh_greenhouses.WALL_STONE, axis=1))
-        top_at = lambda y: triangle_areas(opaque, stone_up[np.isclose(opaque.pos[first[stone_up], 1], y)]).sum()
-        self.assertLess(top_at(ground + mesh_greenhouses.DWARF_M), 0.25 * footprint.area)   # a wall ring, not a slab
-        self.assertGreater(top_at(ground), 0.5 * footprint.area)                            # the floor the benches stand on
+        tops = self.stone_tops(opaque)
+        floor = max(tops, key=tops.get)
+        self.assertGreater(tops[floor], 0.5 * footprint.area)                               # the floor the benches stand on
+        self.assertLess(tops.get(round(floor + mesh_greenhouses.DWARF_M, 4), 0.0), 0.25 * footprint.area)   # a wall ring
+        self.assertAlmostEqual(floor, ground + mesh_greenhouses.FLOOR_GAP_M, places=6)
+
+    def test_the_floor_stands_clear_of_the_ground_under_it(self):
+        # the floor is level with the highest ground inside the dwarf wall, a little above it. Laid at the corners'
+        # median ground, it lay under the lawn where the ground rose inside, which then showed through it, and where the
+        # two met (a terrace graded to it) each showed in turn, in rings
+        footprint = Polygon([(0.0, 0.0), (20.0, 0.0), (20.0, 6.0), (0.0, 6.0)])
+        base = world.datum()
+        ground = lambda x, z: base + 0.1 * np.asarray(x) + 0.3 * np.exp(-((np.asarray(x) - 12.0) ** 2 + (np.asarray(z) - 3.0) ** 2) / 4.0)
+        opaque, _ = mesh_greenhouses.greenhouse([footprint], ground)
+        tops = self.stone_tops(opaque)
+        floor = max(tops, key=tops.get)
+        x, z = np.meshgrid(np.linspace(0.3, 19.7, 98), np.linspace(0.3, 5.7, 28))
+        self.assertLessEqual(float(ground(x, z).max()), floor - 0.5 * mesh_greenhouses.FLOOR_GAP_M)
+        self.assertGreater(float(ground(x, z).max()), floor - 2.0 * mesh_greenhouses.FLOOR_GAP_M, "no higher than it needs")
+
+    def test_the_dwarf_wall_meets_the_ground_under_a_raised_floor(self):
+        # on a slope and over a hump the floor stands level with the highest ground inside, up to 0.6 m above the lowest:
+        # the dwarf wall round it still runs down into the ground along every face, so no gap opens beneath it
+        footprint = Polygon([(0.0, 0.0), (20.0, 0.0), (20.0, 6.0), (0.0, 6.0)])
+        base = world.datum()
+        ground = lambda x, z: base + 0.015 * np.asarray(x) + 0.3 * np.exp(-((np.asarray(x) - 12.0) ** 2 + (np.asarray(z) - 3.0) ** 2) / 4.0)
+        opaque, _ = mesh_greenhouses.greenhouse([footprint], ground)
+        tops = self.stone_tops(opaque)
+        floor = max(tops, key=tops.get)
+        self.assertGreater(floor - float(ground(np.array([0.0]), np.array([0.0]))[0]), 0.5, "the floor is not raised here")
+        tri = opaque.pos[opaque.idx]
+        stone = np.all(opaque.attr[opaque.idx[:, 0]] == mesh_greenhouses.WALL_STONE, axis=1)
+        n = np.cross(tri[:, 1] - tri[:, 0], tri[:, 2] - tri[:, 0])
+        side = stone & (np.abs(n[:, 1]) < 1e-6 * np.linalg.norm(n, axis=1))
+        u, v = np.meshgrid(np.linspace(0.0, 1.0, 41), np.linspace(0.0, 1.0, 41))
+        inside = (u + v <= 1.0).ravel()
+        u, v = u.ravel()[inside, None, None], v.ravel()[inside, None, None]
+        f = tri[side]
+        pts = (f[None, :, 0] + u * (f[None, :, 1] - f[None, :, 0]) + v * (f[None, :, 2] - f[None, :, 0])).reshape(-1, 3)
+        cell = np.round(pts[:, [0, 2]] / 0.25).astype(np.int64)            # each 0.25 m of the upright faces' plan
+        keys, at = np.unique(cell, axis=0, return_inverse=True)
+        bottom = np.full(len(keys), np.inf)
+        np.minimum.at(bottom, at.ravel(), pts[:, 1])
+        xz = keys * 0.25
+        self.assertLess(float(np.max(bottom - ground(xz[:, 0], xz[:, 1]))), -0.5)   # each runs down into the ground
 
     def test_walls_on_a_steep_slope_wind_with_their_normals(self):
-        # the floor sits at the corners' median ground, so uphill the sunk base of the wall and floor rises above them
+        # on a steep slope the sunk bases of the wall and floor run far below them downhill and close under them uphill
         footprint, ground = Polygon([(0.0, 0.0), (20.0, 0.0), (20.0, 6.0), (0.0, 6.0)]), world.datum()
         opaque, _ = mesh_greenhouses.greenhouse([footprint], lambda x, z: ground + 0.5 * np.asarray(x))   # 1 in 2
         self.assertEqual(int(world.turned(opaque.pos, opaque.idx, opaque.nrm).sum()), 0)
