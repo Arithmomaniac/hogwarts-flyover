@@ -10,6 +10,7 @@ import features
 import forest_extent
 import forest_places
 import grounds_grade
+import mesh_castle
 import railway
 from mesh_source import load_georef
 
@@ -33,6 +34,11 @@ SHACK_WINDOW_M = 3.0                                       # side, from anywhere
 PLANTED = 9                                                # the planted woods' floor, a class of its own while it blends
 BEDS_GAP_M = 12.0                                          # the beds of a plot run on across gaps narrower than this,
 BEDS_GRADE = 0.15                                          # on ground no steeper than this
+SHORE_RISE_M = 0.35                                        # a low shore's level above the lake, from which its floor falls
+BEACH_GRADE = 0.25                                         # at this grade through the water's edge to the lake's depth
+SOURCE_M = 40.0                                            # a burn cut off by its map's edge narrows to nothing across this
+FORECOURT_SIDE_M = 2.0                                     # the main doors' forecourt reaches this far beyond their steps'
+                                                           # sides, past the edge noise (frag4.glsl groundAlb's 1.2 m)
 
 DECOR_G = [(990, 2170, 1900, 2300), (1580, 1840, 1960, 2180), (740, 2270, 900, 2330)]
 DECOR_H = [(1260, 2150, 1660, 2240), (1290, 1070, 1650, 1430), (1430, 1460, 1590, 1520)]
@@ -52,6 +58,22 @@ def sdf(mask, px_m):
     out = ndi.distance_transform_edt(~mask) * px_m
     ins = ndi.distance_transform_edt(mask) * px_m
     return np.where(mask, -ins + 0.5 * px_m, out - 0.5 * px_m).astype(np.float32)
+
+
+def cut_off(stream, source, res, reach=SOURCE_M):
+    """`stream` (metres from the water, negative in it) with every burn a map draws off its edge, where no other map nor a
+    real watercourse carries it on, narrowed to nothing at the edge across `reach`: it rises from a spring there, or
+    sinks into the bog, rather than ending in a squared slab. `source`: which map draws each texel (0: none)."""
+    wet = stream < 0
+    cross = ndi.generate_binary_structure(2, 1)
+    edge = np.zeros(wet.shape, bool)
+    for s in np.unique(source[source > 0]):
+        edge |= wet & (source == s) & ndi.binary_dilation((source != s) & ~wet, structure=cross)
+    if not edge.any():
+        return stream
+    near = np.clip(1.0 - ndi.distance_transform_edt(~edge) * res / reach, 0.0, 1.0)
+    half = np.maximum(-ndi.minimum_filter(stream, size=2 * int(round(reach / 4 / res)) + 1), 0.0)
+    return (stream + half * near).astype(np.float32)
 
 
 def sample(img, u, v, order=1, cval=0.0):
@@ -242,6 +264,9 @@ def main():
     if not SITE["carve_in_maps"]:       # inside White Hound's maps, the maps' own streams stand for the real ones
         river &= useF; river_sd = np.where(useF, river_sd, 50.0)
     stream = np.minimum(stream, river_sd)
+    # the maps' burns that run off their edges with nothing beyond to carry them on rise or sink there: Hogsmeade's two
+    # burns met at its map's edge in a broad slab that ended square in the meadow (renderer/streams)
+    stream = cut_off(stream, np.where(useH, 1, np.where(useG, 2, 0)), RES)
     stream = np.where(lake_sd < 3.0, 50.0, stream)
 
     # ---------------- boundary wall, inside-grounds polygon ----------------
@@ -362,9 +387,32 @@ def main():
     ffc = np.zeros(cff.shape, np.uint8); ffc[cff == C_SCRUB] = 2; ffc[(cff == C_DENSE) | (cff == C_UNDER)] = 5
     sc = np.where(useF, sample(ffc, FU, FV, order=0), sc).astype(np.uint8)
     sc[(sc == 0) & inside] = 1
+    # the drive's end: the grounds map's roads stop where the castle's zone begins, short of the main doors' steps,
+    # while its ink there, read as the surface, is a blot under them: a splat with spiky arms below them, broken by a
+    # strip of grass and veiled by the road's soft edge. One forecourt joins the doors to the drive from the gates, as
+    # wide as the steps and FORECOURT_SIDE_M either side; and a road inked as two lines keeps no grass between them
+    named = json.load(open(P("build", "castle_named.json")))
+    gates = np.mean(gates_gap(mg["wall"]), axis=0)
+    scene = json.load(open(P("src", "mesh_scene.json"), encoding="utf-8"))
+    traced = {t["id"]: t for t in next(a for a in scene["assets"] if a["id"] == "castle")["traced"]}
+    plan, _ = mesh_castle.plan_fit(traced["plan-fit"]["plan_px"], named)
+    width = mesh_castle.DOOR.width + 2.0 * (mesh_castle.STAIR_MARGIN_M + FORECOURT_SIDE_M)
+    paved = grounds_grade.forecourt(road, E, N, plan(*traced["front-steps"]["plan_px"]), gates, width) <= 0.0
+    paved |= grounds_grade.specks((sc == 3) | (road >= 0.5), RES)
+    paved &= beyond > 0.0                   # but no path runs under the pitch's stands, whose ring the specks would mend
+    sc[paved] = 3
+    road = np.where(paved, 1.0, road)
     sc[(trees > 0.55) & (sc <= 2)] = 5
     sc[rpitch < 1.0] = 6
-    near_lake = (lake_sd > 0) & (lake_sd < 3.5) & (sc != 3)
+    # the grounds map draws the castle's outline in the earth colour (the roads leave the castle zone out for it), and
+    # read texel by texel it leaves chains of single texels of paving round the castle, each a blot at its walls' foot
+    # (tour/04): paving in the castle zone that is in no 2 x 2 block of paving takes the soft ground round it. The
+    # courtyards and the paths that reach the walls are wider
+    lone = (sc == 3) & ~ndi.binary_opening(sc == 3, structure=np.ones((2, 2), bool))
+    lone &= np.where(inG, sample(castle_zone.astype(np.float32), gu, gv, order=0), 0.0) > 0.5
+    soft = ndi.distance_transform_edt(~np.isin(sc, (0, 1, 2)), return_distances=False, return_indices=True)
+    sc[lone] = sc[soft[0], soft[1]][lone]
+    near_lake = (lake_sd > -SHORE_RISE_M / BEACH_GRADE - RES) & (lake_sd < 3.5) & (sc != 3)   # and the beach's dry foot
     inland_sc = sc.copy()           # what the shingle covers, for the ground the castle's walls hold above the water
     sc[near_lake] = 7
 
@@ -434,7 +482,6 @@ def main():
         ~ndi.binary_dilation(plots, iterations=2)
     if SITE["willow_lawn"]:     # the Willow "stood alone": a lawn opens to it from the northern greenhouses, clear of trees
         willow = np.array(g2w(*WILLOW_G), float)
-        scene = json.load(open(P("src", "mesh_scene.json"), encoding="utf-8"))
         north = next(a for a in scene["assets"] if a["id"] == "greenhouses-north")["components"]
         core = np.hypot(E - willow[0], N - willow[1]) < SITE["willow_lawn"]
         for c in north:         # each one's line to the Willow, kept clear either side
@@ -466,8 +513,7 @@ def main():
         sc[rank] = clearings.OVERGROWN                                              # giving way as the trees close in
         accounted |= overgrown < 1.0
     if SITE["cabin_terrace"]:   # White Hound: "The front gates are lower down than Hagrid's cabin."
-        drive = grounds_grade.drive_line(road, E, N, np.mean(gates_gap(mg["wall"]), axis=0),
-                                         json.load(open(P("build", "castle_named.json")))["EH"])
+        drive = grounds_grade.drive_line(road, E, N, gates, named["EH"])
         F = grounds_grade.cabin_terrace(F, E, N, hut_w, drive, SITE["cabin_terrace"], lake_sd, LAKE)
     if SITE["willow_knoll"]:    # "From the greenhouses it is possible to see at least the upper part of the Whomping Willow"
         F = grounds_grade.knoll(F, E, N, g2w(*WILLOW_G), SITE["willow_knoll"])
@@ -478,7 +524,8 @@ def main():
     if np.any((np.abs(F - level) > reach)[near_p & ~ndi.binary_erosion(near_p)]):
         raise RuntimeError("the pitch's batters run past the frame its earthworks are computed in")
     F = np.clip(F, level - reach, level + reach)
-    pitch_flat = beyond <= PITCH_FLAT_M                       # road cambers stop at it
+    pitch_flat = beyond <= PITCH_FLAT_M                       # road cambers stop at it, and at the ground the castle's
+                                                              # walls hold, which the main doors' forecourt reaches
     bm = bsd < 1.0
     lab, n = ndi.label(bm)
     if n:
@@ -488,7 +535,7 @@ def main():
         padh = np.where(near > 0, np.concatenate([[0], means])[near], F)
         wb = np.clip((3.0 - bsd) / 3.0, 0, 1)
         F = F * (1 - wb) + padh * wb
-    wr = np.where(pitch_flat, 0.0, np.clip(ndi.gaussian_filter(road, 1.5) * 1.5, 0, 1))
+    wr = np.where(pitch_flat | held, 0.0, np.clip(ndi.gaussian_filter(road, 1.5) * 1.5, 0, 1))
     F = F * (1 - wr) + (ndi.gaussian_filter(F, 4.0) - 0.12) * wr
     # station: level the platform + track corridor under the Hogwarts Express (red ink on the grounds map)
     train = extract_train(mg["red"])
@@ -517,7 +564,7 @@ def main():
     land = (s >= 0) | ledge
     channel = (stream < 0) | river
     sp = np.maximum(s, 0)
-    lo = LAKE + 0.35 + 0.05 * sp; hi = LAKE + 0.35 + kmax * sp
+    lo = LAKE + SHORE_RISE_M + 0.05 * sp; hi = LAKE + SHORE_RISE_M + kmax * sp
     raise_w = np.clip(1 - sp / 25.0, 0, 1) * (~channel)
     Fl = np.where(held & ~ledge, F, np.minimum(F, hi))  # no face under the castle's walls: it drops sheer from beyond them
     Fl = np.maximum(Fl, lo * raise_w + Fl * (1 - raise_w))
@@ -525,15 +572,22 @@ def main():
     Fl = Fl * (1 - keep_w) + F * keep_w
     if SITE["bank"]:            # a perched lake: banked up level for a crest's width, then sloping down to the ground
         crest, grade = SITE["bank"]
-        Fl = np.maximum(Fl, LAKE + 0.35 + 0.05 * np.minimum(sp, crest) - grade * np.maximum(sp - crest, 0.0))
-    F = np.where(land, Fl, LAKE - depth)
+        Fl = np.maximum(Fl, LAKE + SHORE_RISE_M + 0.05 * np.minimum(sp, crest) - grade * np.maximum(sp - crest, 0.0))
+    # the lake's floor runs on down from a low shore's level through the water's edge until it meets the lake's depth.
+    # Stepped down at the shore, the edge, drawn where the depth passes nought between a wet texel and a dry one, lay at
+    # one place between every such pair: teeth along the texels' grid at the foot of a pale step. Not at the foot of the
+    # castle's cliff, under the ground its walls hold and their ledge, nor at the streams' mouths, which run into the water
+    floor = LAKE - depth
+    beach = np.clip((ndi.distance_transform_edt(~(cliff | held | ledge | channel)) * RES - 2.0) / 6.0, 0.0, 1.0)
+    floor = floor + beach * np.maximum(LAKE + SHORE_RISE_M + BEACH_GRADE * s - floor, 0.0)
+    F = np.where(land, Fl, floor)
     if SITE["fill_pits"]:       # hollows the earthworks enclose fill to where they would spill, into the lake if need be
         filled, unnatural = fill(F, ~land), fill(F0, ~land) - F0 <= 0.05
         hollow = land & (filled - F > 0.05) & unnatural & ~garden_hollow   # but the patch floods
         F = np.where(hollow, filled, F).astype(np.float32)
     if SITE["station_wood"] or SITE["train_screen"]:
         # PS 6: "Yeh'll get yer firs' sight o' Hogwarts in a sec ... jus' round this bend here." Wooded rises keep it there
-        scene, georef = json.load(open(P("src", "mesh_scene.json"), encoding="utf-8")), load_georef()
+        georef = load_georef()
         al = railway.alignment(scene, {"train": train}, georef)
         terrace = shapely.contains_xy(al.terrace, E, N)
         room = grounds_grade.room(E, N, railway.lake_walk(al, scene, georef), (road > 0.3) & ~terrace)
@@ -585,7 +639,6 @@ def main():
     print("pitch level", level, "bed range", bed.min(), bed.max())
 
     # ---------------- castle layer ----------------
-    named = json.load(open(P("build", "castle_named.json")))
     cm = ndi.binary_closing(cmass, structure=disk(1))
     def local_thickness(mask, rmax):
         th_ = np.zeros(mask.shape, np.float32)
@@ -698,8 +751,9 @@ def main():
     rules = SITE.get("forest")
     ways = forest_extent.ways(osm, (CASTLE_E, CASTLE_N), rules)
     f_keep = forest_extent.keep(rules, Ef, Nf, ways, FRES)
-    if rules is not None:       # round the buildings the Forest covers, their homesteads' clearings
+    if rules is not None:       # round the buildings the Forest covers, which the scene doesn't draw, natural glades
         f_home = forest_extent.homesteads(Ef, Nf, ways, FRES)
+        f_field = np.maximum(f_field, np.clip(2.0 * (1.0 - f_home), 0.0, 1.0))    # of meadow, inside their outlines
         standing = f_den * forest_extent.ends(rules, Ef, Nf, ways, FRES)
         glades += clearings.record("homestead", "forest-homesteads", "forest", f_home, Ef, Nf,
                                    standing * (1 - f_home) > 0.05)

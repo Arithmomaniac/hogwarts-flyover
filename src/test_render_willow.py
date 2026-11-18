@@ -1,4 +1,6 @@
 """The Willow family's codes in the production path: bark, knot, tunnel mouth and leaves."""
+import json
+import math
 from pathlib import Path
 import sys
 import unittest
@@ -8,52 +10,84 @@ import numpy as np
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "src"))
 
+import build_meshes  # noqa: E402
+import mesh_willow  # noqa: E402
 from materials import code  # noqa: E402
-from materials.willow import BARK_AXES  # noqa: E402
+from materials.willow import BARK_AXES, TRUNK_AXIS  # noqa: E402
 from pagetest import smoke  # noqa: E402
-from render_testing import EAST, LAWN, RenderTestCase  # noqa: E402
+from render_testing import EAST, LAWN, SCENE, RenderTestCase  # noqa: E402
 
 
 class WillowRenderTests(RenderTestCase):
-    async def close_wall(self, attr, hour=16.0):
-        """Luminance (an internal-pixel grid, NaN off the wall) of the sunlit west face of a box tagged `attr`, 3.5 m in
-        front of a camera at eye height: close enough to see the bark."""
-        x, z = LAWN[0] + 26.0, LAWN[1]           # where castle_box's sunlit west wall stands: no shadow falls there
-        ground = await self.ground(x, z)
+    async def look(self, pos, yaw, pitch, hour, meshes=None):
+        """The camera at world `pos` facing `yaw`, `pitch` at `hour`, over the scene's meshes or the diagnostic `meshes`."""
         frames = await self.page.evaluate("(h) => { __hog.tod(h); return __hog.frames; }", hour)
+        await self.page.wait_for_function(f"__hog.frames >= {frames + 3}")
+        body = None
+        if meshes is not None:
+            body = json.loads(build_meshes.strip_js(build_meshes.encode_payload({"diagnostic": meshes}, SCENE)))
+        frames = await self.page.evaluate(
+            "async ([b, pos, yaw, pitch]) => { __hog.camera(pos, yaw, pitch); if (b) await __hog.loadMeshes(b); return __hog.frames; }",
+            [body, [float(v) for v in pos], yaw, pitch])
         await self.page.wait_for_function(f"__hog.frames >= {frames + 10}")
-        await self.show([(x + 3.5, ground - 0.5, z - 2.0, x + 4.5, ground + 4.0, z + 2.0)], at=(x, z), yaw=EAST,
-                        pitch=0.15, height=1.6, attr=attr)
-        found = await self.page.evaluate("""([aux]) => {
-            const [w, h] = __hog.probe(0, 0).res, s = Math.min(w, h) >> 2, x0 = (w >> 1) - s, y0 = (h >> 1) - s;
-            const g = __hog.probeRect(x0, y0, 2 * s, 2 * s), c = __hog.probeColorRect(x0, y0, 2 * s, 2 * s), out = [];
-            let lit = 0, shown = 0;
-            for (let i = 0; i < 4 * s * s; i++) {
-              const ok = g[i][0] === 7 && Math.abs(g[i][4] - aux) < 0.5 && g[i][1] < -0.9;
-              out.push(ok ? 0.2126 * c[4 * i] + 0.7152 * c[4 * i + 1] + 0.0722 * c[4 * i + 2] : NaN);
-              if (ok && i % 97 === 0) { shown++; lit += __hog.probeSun(x0 + i % (2 * s), y0 + Math.floor(i / (2 * s))) > 0.95; }
+
+    async def wood(self, auxes, facing):
+        """Luminance on an internal-pixel grid over the middle half of the frame's height (rows up the frame): NaN but
+        where it shows material 7 with an aux in `auxes`, in sunlight, facing within 45 degrees of `facing`."""
+        found = await self.page.evaluate("""([auxes, f]) => {
+            const [w, h] = __hog.probe(0, 0).res, y0 = h >> 2, H = h >> 1;
+            const g = __hog.probeRect(0, y0, w, H), c = __hog.probeColorRect(0, y0, w, H), out = [];
+            for (let i = 0; i < w * H; i++) {
+              const r = g[i], ok = r[0] === 7 && auxes.includes(Math.round(r[4])) && r[1] * f[0] + r[2] * f[1] + r[3] * f[2] > 0.7
+                && __hog.probeSun(i % w, y0 + Math.floor(i / w)) > 0.95;
+              out.push(ok ? 0.2126 * c[4 * i] + 0.7152 * c[4 * i + 1] + 0.0722 * c[4 * i + 2] : null);
             }
-            const mats = {}; for (const r of g) mats[r[0] + ":" + Math.round(r[4]) + ":" + Math.round(r[1])] = 1;
-            return { side: 2 * s, lum: out, lit: lit / Math.max(shown, 1), shown, mats: Object.keys(mats).slice(0, 12) }; }""",
-            [attr[1]])
-        self.assertGreater(found["lit"], 0.95, f"the test wall is not in sunlight: {found['shown']} samples, {found['mats']}")
-        grid = np.array([np.nan if v is None else v for v in found["lum"]], float).reshape(found["side"], -1)
-        self.assertGreater(np.isfinite(grid).mean(), 0.5, "the test wall does not fill the probed window")
-        return grid
+            return { w, lum: out }; }""", [list(auxes), [float(v) for v in facing]])
+        return np.array([np.nan if v is None else v for v in found["lum"]], float).reshape(-1, found["w"])
+
+    async def trunk_and_root(self, attr_of, hour=16.0):
+        """{"upright": (grid, axis up its furrows), "lying": ...}: diagnostic wood tagged attr_of(code), seen close up from
+        its sunlit side: a trunk on the Willow's own axis (its bark wraps round that axis), with no canopy to shade it, and
+        a root (a lying tube 20 degrees off its code's axis)."""
+        lit = await self.page.evaluate("(h) => __hog.light(h).dir", hour)
+        sun = np.array([lit[0], 0.0, lit[2]]) / math.hypot(lit[0], lit[2])
+        x0, y0, z0, lx, lz = TRUNK_AXIS
+        base = np.array([x0, y0 + await self.page.evaluate("DATA.meta.lake"), z0])
+        up = np.array([lx, 1.0, lz])
+        trunk = [mesh_willow.tube(np.array([base - up, base + 4.0 * up]), np.array([1.0, 1.0]), attr_of(120), 64, cap=False)]
+        eye = base + 1.7 * up + 2.5 * sun
+        out = {}
+        await self.look(eye, math.atan2(-sun[0], -sun[2]), 0.12, hour, trunk)
+        out["upright"] = (await self.wood([attr_of(120)[1]], sun), 0)
+        lying = next(aux for aux, axis in BARK_AXES.items() if abs(axis[2]) > 0.99)   # furrows along z: across the view
+        x, z = LAWN[0] + 26.0, LAWN[1]
+        ground = await self.ground(x, z)
+        a = np.array([math.sin(math.radians(20.0)), 0.0, math.cos(math.radians(20.0))])
+        mid = np.array([x + 1.2 + 0.36, ground + 1.2, z])
+        root = mesh_willow.tube(np.array([mid - 2.5 * a, mid + 2.5 * a]), np.array([0.36, 0.36]), attr_of(lying), 32)
+        await self.look((x, ground + 1.2, z), EAST, 0.0, hour, [root])
+        out["lying"] = (await self.wood([attr_of(lying)[1]], (-1.0, 0.0, 0.0)), 1)
+        return out
 
     async def test_bark_close_up_shows_lit_plates_and_dark_furrows_along_the_wood(self):
-        # the trunk, buttresses and roots read as smooth charcoal close up unless the bark has grey-brown plates split by
-        # deep furrows, and the furrows run along the wood: up an upright trunk, along a lying root
-        steps = lambda grid, axis: np.nanmean(np.abs(np.diff(grid, axis=axis)))   # axis 0: up the wall, 1: across it
-        sail = np.nanmean(await self.close_wall((7, 24)))
-        lying = next(aux for aux, axis in BARK_AXES.items() if abs(axis[2]) > 0.99)   # furrows along z: across the view
-        for name, attr, along in (("upright", code("willow-bark"), 0), ("lying", (7, lying), 1)):
-            grid = await self.close_wall(attr)
+        # the trunk, burl and roots read as smooth charcoal close up unless the bark has grey-brown plates split by deep
+        # furrows; the furrows run along the wood, up the trunk and along a root that bends away from its code, as long
+        # spindles, not polygons cut across them; a sailcloth trunk and root in their place set the light
+        import scipy.ndimage as ndi
+        steps = lambda grid, axis: np.nanmean(np.abs(np.diff(grid, axis=axis)))   # axis 0: up the frame, 1: across it
+        bark = await self.trunk_and_root(lambda aux: (7, aux))
+        sail = await self.trunk_and_root(lambda aux: (7, 24))
+        for name, (grid, along) in bark.items():
             lum = grid[np.isfinite(grid)]
             with self.subTest(bark=name):
-                self.assertGreater(lum.mean(), 0.62 * sail)                            # grey-brown, not charcoal
+                self.assertGreater(lum.size, 3000, "too little of the wood is lit and facing the camera")
+                self.assertGreater(lum.mean(), 0.62 * np.nanmean(sail[name][0]))       # grey-brown, not charcoal
                 self.assertLess(np.percentile(lum, 10), 0.5 * np.percentile(lum, 75))  # deep furrows between plates
                 self.assertLess(steps(grid, along), 0.65 * steps(grid, 1 - along))     # smoother along the furrows
+                labels, n = ndi.label(np.nan_to_num(grid, nan=np.inf) < 0.5 * np.percentile(lum, 75))
+                spans = [(sl[along].stop - sl[along].start) / (sl[1 - along].stop - sl[1 - along].start)
+                         for sl, size in zip(ndi.find_objects(labels), np.bincount(labels.ravel())[1:]) if size >= 40]
+                self.assertGreater(float(np.median(spans)), 4.0, len(spans))          # long spindles, not polygons
 
     @smoke
     async def test_willow_codes_shade_as_bark_knot_mouth_and_leaves(self):

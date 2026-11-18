@@ -5,10 +5,19 @@
    Also the Sentinel-2 cloudless colour of each level (S_*) and the plantation density of the M and A levels (SF_*)."""
 from common import *
 from PIL import ImageDraw
+from scipy.spatial import cKDTree
 import math
 
 LEVELS = {"M": (5000.0, 10.0), "A": (12000.0, 30.0), "B": (36000.0, 120.0)}
 NOWATER = -1000.0
+RIVER_M = 12.0              # a river's width where OpenStreetMap gives none
+RIVER_SINK_M = 0.55         # its water stands this far below the valley floor along it,
+RIVER_GRADE, RIVER_DEEP_M = 0.1, 1.05   # its bed falls from its edges at this slope to this deep, and its banks rise
+                                        # so across the texel beyond: a bilinear read of the water's depth, as the
+                                        # renderer's, then crosses nought where the water's edge is
+RIVER_BLEND_M = 30.0        # beyond that texel its banks give way to the ground as mapped over this far
+RIVER_MIN_TEXELS = 1.2      # no river is drawn narrower than this many texels: a bilinear read of the depth found no
+                            # water wherever a narrower one's line ran between the texels' centres
 
 
 def grid(R, st):
@@ -69,19 +78,63 @@ def water_raster(R=36000.0, st=10.0):
     return a[::-1].copy()          # south-up
 
 
-def river_raster(R, st):
-    d = json.load(open(P("osm_water_wide.json")))
-    n = int(round(2 * R / st)) + 1
-    img = Image.new("L", (n, n), 0); dr = ImageDraw.Draw(img)
+def osm_rivers(osm=None, anchor=(CASTLE_E, CASTLE_N)):
+    """OpenStreetMap's rivers (the build's water extract unless `osm` is given): (points (k, 2) relative to `anchor`,
+    half width), RIVER_M wide where it gives no width."""
+    d = osm if osm is not None else json.load(open(P("osm_water_wide.json")))
+    out = []
     for el in d["elements"]:
         t = el.get("tags", {})
         if el["type"] != "way" or t.get("waterway") != "river": continue
         g = el.get("geometry") or []
         e, nn = to_tm.transform([p["lon"] for p in g], [p["lat"] for p in g])
-        x = (np.array(e) - CASTLE_E + R) / st + 0.0; y = (R - (np.array(nn) - CASTLE_N)) / st
-        w = float(t.get("width", "12").split()[0]) if t.get("width", "").replace('.', '', 1).isdigit() else 12.0
-        dr.line(list(zip(x, y)), fill=255, width=max(1, int(round(w / st))))
-    return (np.asarray(img) > 127)[::-1].copy()
+        w = float(t.get("width", "12").split()[0]) if t.get("width", "").replace('.', '', 1).isdigit() else RIVER_M
+        out.append((np.column_stack([np.array(e) - anchor[0], np.array(nn) - anchor[1]]), w / 2))
+    return out
+
+
+def carve_rivers(bed, surf, R, st, rivers, wet, ground):
+    """A level's `bed` and water surface `surf` (its texel centres st apart from -R, rows running north) with `rivers`
+    carved into them, but not where it already has water (`wet`). Each river's water stands RIVER_SINK_M below the
+    valley floor along its line: the lowest ground across the line, out a texel beyond its half width either side, as
+    the elevation model has it (`ground`), before the level's water bodies are levelled. A water body's bed, levelled
+    below its water, had sunk the ground beside a loch into pits; its water, one level for the whole body, stands above
+    the ground at the lower end of a river's stretch mapped as one and below it at the upper; and the ground smoothed
+    over a texel stood metres above a narrow valley's bottom. The river is level across, out to its half width but at
+    least RIVER_MIN_TEXELS across; its bed falls from there at RIVER_GRADE to RIVER_DEEP_M, and its banks rise so across
+    the texel beyond, then give way to the ground as mapped over RIVER_BLEND_M. Where a water body's level, spread over
+    the shore beside it, stands below the river's water, the river's stands: below its bed, that level drew the river
+    dry beside the upper end of a stretch mapped as water. Measured from the line itself, its water's edge runs smooth
+    along it: carved round a raster of the line, a texel wide, it ran in a trench stepped wherever the raster stepped."""
+    if not rivers:
+        return bed, surf
+    pts, half, across = [], [], []
+    for xy, hw in rivers:
+        step = np.diff(xy, axis=0)
+        for start, d, m in zip(xy[:-1], step, np.maximum(np.ceil(np.hypot(*step.T)), 1).astype(int)):
+            pts.append(start + (np.arange(m) / m)[:, None] * d)          # points 1 m apart or less
+            half.append(np.full(m, hw))
+            across.append(np.tile(np.array([-d[1], d[0]]) / max(float(np.hypot(*d)), 1e-9), (m, 1)))
+        pts.append(xy[-1:])
+        half.append([hw])
+        across.append(across[-1][-1:] if len(xy) > 1 else np.zeros((1, 2)))
+    pts, half, across = (np.vstack(pts), np.maximum(np.concatenate(half), RIVER_MIN_TEXELS * st / 2.0),
+                         np.vstack(across))
+    at = pts + np.linspace(-1.0, 1.0, 17)[:, None, None] * ((half + st)[:, None] * across)    # across each point
+    low = map_coordinates(ground, [(at[..., 1] + R) / st, (at[..., 0] + R) / st], order=1, mode="nearest").min(axis=0)
+    water = low - RIVER_SINK_M
+    X, Y, _ = grid(R, st)
+    reach = float(half.max()) + st + RIVER_BLEND_M
+    d, k = cKDTree(pts).query(np.column_stack([X.ravel(), Y.ravel()]), distance_upper_bound=reach)
+    near = (d < reach).reshape(bed.shape) & ~wet
+    k = np.minimum(k, len(pts) - 1).reshape(bed.shape)
+    beyond = np.where(near, d.reshape(bed.shape) - half[k], 0.0)         # metres out from the water's edge
+    level = water[k]
+    banks = level + np.clip(RIVER_GRADE * beyond, -RIVER_DEEP_M, RIVER_GRADE * st)
+    t = np.clip((beyond - st) / RIVER_BLEND_M, 0.0, 1.0)
+    carved = banks + (bed - banks) * t * t * (3.0 - 2.0 * t)
+    return (np.where(near, carved, bed).astype(bed.dtype),
+            np.where(near & (beyond <= st), np.maximum(surf, level), surf).astype(surf.dtype))
 
 
 def main():
@@ -119,6 +172,7 @@ def main():
         else:
             bed = dem_sample(mos, X + CASTLE_E, Y + CASTLE_N, order=3 if name == "M" else 1)
         bed = bed.astype(np.float32)
+        ground = bed                                # the elevation model's, before the water bodies are levelled
         # sample water info from the 10 m raster (box-filtered to this level's cell size)
         k = max(1, int(round(st / stw)))
         ix = np.clip(((X + Rw) / stw).astype(int), 0, nw - 1); iy = np.clip(((Y + Rw) / stw).astype(int), 0, nw - 1)
@@ -145,15 +199,7 @@ def main():
             grow = ndi.binary_dilation(has) & ~has & (bed >= near - 0.05)
             surf = np.where(grow, near, surf); has = has | grow
         if name == "M":
-            riv = river_raster(R, st)
-            riv &= ~is_w
-            rd = ndi.distance_transform_edt(~riv) * st
-            carve = np.clip(1 - rd / 12.0, 0, 1)
-            smooth = ndi.gaussian_filter(bed, 1.0)
-            bed = np.where(carve > 0, smooth - 1.6 * carve, bed)
-            rs = smooth - 0.55
-            wmask = (rd <= 2 * st) & (surf <= NOWATER + 1)
-            surf = np.where(wmask, rs, surf)
+            bed, surf = carve_rivers(bed, surf, R, st, osm_rivers(), is_w, ground)
         np.save(P("build", f"R_{name}_bed.npy"), bed.astype(np.float32))
         np.save(P("build", f"R_{name}_surf.npy"), surf.astype(np.float32))
         print(f"level {name}: {n}x{n} @ {st} m, bed {bed.min():.1f}..{bed.max():.1f}, water texels {(surf > bed).mean() * 100:.2f}%")

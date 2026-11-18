@@ -19,8 +19,12 @@ FALL = 1 / 3.0                  # ... then falls 1 in 3, as do the drive's emban
 CREST_M = 12.0                  # half the drive embankment's level top
 LAWN_M = 20.0                   # half the width of the lawn kept at the terrace's level from it to the castle's front
 RAMP_START_M = 0.3              # the drive leaves the gates this far below their ground, so they keep their own
+ROUND_M = 12.0                  # the terrace's shoulders round over this far either side of where they turn down,
+ROUND_FILL_M = 3.0              # and its banks round into each other and the ground round them across this much height
 SHORE_M, SHORE_GRADE, SHORE_REACH_M = 0.35, 0.45, 160.0     # the lake's shore rule away from the castle (build_final)
 OFF_ROAD_COST = 20.0            # what a texel off the essay map's roads costs the drive's path, against 1 on them
+SPECK_M2 = 40.0                 # ground a road closes round smaller than this is its ink's two lines, not a lawn: the
+                                # drive's fork by the main doors leaves 20 m2, the village's smallest plot is 88 m2
 KNOLL_TOP_M, KNOLL_ROUND_M = 18.0, 6.0   # a knoll: the radius of its top, and how softly its shoulder rounds
 KNOLL_FALL = 1 / 2.6            # the grade of its flanks
 KNOLL_TOE_M = 8.0               # how broadly its toe blends into the ground round it
@@ -80,7 +84,9 @@ def cabin_terrace(F, E, N, cabin, drive, rise, lake_sd, lake):
     level within TERRACE_REACH_M of the cabin, then falling 1 in 3; the drive carried up to it from the gates on an
     embankment, and on at the terrace's level until the ground round it rises higher; a lawn kept at least at that level
     from the cabin to the castle's front (the drive's last point), so the lawns fall from the castle to the cabin without
-    a hollow below it; nowhere by the lake steeper than its shore rule. Only ever raises the ground."""
+    a hollow below it; nowhere by the lake steeper than its shore rule. Only ever raises the ground. Its shoulders round
+    over across ROUND_M either side of where they turn down, and its banks round into each other and into the ground:
+    as planes they met in straight creases, the lawn's sides a straight-edged dark band before the Forest."""
     s = np.concatenate([[0.0], np.cumsum(np.hypot(*np.diff(drive, axis=0).T))])
     t = np.arange(0.0, s[-1], 1.0)
     line = np.column_stack([np.interp(t, s, drive[:, 0]), np.interp(t, s, drive[:, 1])])
@@ -88,14 +94,21 @@ def cabin_terrace(F, E, N, cabin, drive, rise, lake_sd, lake):
     gates = float(F[i, j]) - RAMP_START_M
     level = gates + RAMP_START_M + rise
     reach = float(t[int(np.argmax(np.hypot(*(line - np.asarray(cabin)).T) <= TERRACE_REACH_M))])
-    plateau = level - FALL * np.maximum(np.hypot(E - cabin[0], N - cabin[1]) - TERRACE_REACH_M, 0.0)
+    fall = lambda beyond, r: FALL * castle_base.smooth_max(beyond, 0.0, r)
+    plateau = level - fall(np.hypot(E - cabin[0], N - cabin[1]) - TERRACE_REACH_M, ROUND_M)
     crest = np.minimum(gates + (level - gates) * t / reach, level)
     d, k = cKDTree(line).query(np.column_stack([E.ravel(), N.ravel()]), distance_upper_bound=150.0)
     d, k = d.reshape(E.shape), np.minimum(k.reshape(E.shape), len(line) - 1)
-    embankment = np.where(np.isfinite(d), crest[k] - FALL * np.maximum(d - CREST_M, 0.0), -np.inf)
-    lawn = level - FALL * np.maximum(segment_distance(E, N, cabin, line[-1]) - LAWN_M, 0.0)
+    embankment = np.where(np.isfinite(d), crest[k] - fall(d - CREST_M, ROUND_M / 2), -np.inf)
+    lawn = level - fall(segment_distance(E, N, cabin, line[-1]) - LAWN_M, ROUND_M)
+
+    def join(a, b):             # where two banks cross, below the terrace's level, so its level parts never bulge
+        return castle_base.smooth_max(a, b, np.clip(level - np.maximum(a, b), 0.0, ROUND_FILL_M))
     shore = np.where(lake_sd < SHORE_REACH_M, lake + SHORE_M + SHORE_GRADE * np.maximum(lake_sd, 0.0), np.inf)
-    raised = np.maximum(F, np.minimum(np.maximum.reduce([plateau, embankment, lawn]), shore))
+    top = np.minimum(join(join(plateau, embankment), lawn), shore)
+    # the gates keep their own ground (RAMP_START_M): the rounding into it fades in over ROUND_M from them
+    fillet = ROUND_FILL_M * np.clip(np.hypot(E - line[0, 0], N - line[0, 1]) / ROUND_M, 0.0, 1.0)
+    raised = castle_base.smooth_max(F, top, fillet)
     return np.clip(_edges_blurred(F, raised), F, np.maximum(F, shore)).astype(np.float32)
 
 
@@ -188,9 +201,27 @@ def made_up(F, filled, may):
     return np.where(may & (filled - F > 0.05), filled, F).astype(np.float32)
 
 def segment_distance(E, N, a, b):
-    """Metres from each (E, N) to the segment from a to b."""
+    """Metres from each (E, N) to the segment from a to b (to the point a, if b is a)."""
     a, b = np.asarray(a, float), np.asarray(b, float)
     ab = b - a
-    t = np.clip(((E - a[0]) * ab[0] + (N - a[1]) * ab[1]) / float(ab @ ab), 0.0, 1.0)
+    t = np.clip(((E - a[0]) * ab[0] + (N - a[1]) * ab[1]) / max(float(ab @ ab), 1e-12), 0.0, 1.0)
     return np.hypot(E - (a[0] + t * ab[0]), N - (a[1] + t * ab[1]))
+
+
+def forecourt(road, E, N, door, start, width):
+    """Metres beyond the edge (< 0 within) of a forecourt `width` across, with round ends, from `door` (world east,
+    north) to the nearest texel of the roads (`road` a half or more) that reach `start`, such as the gates."""
+    roads = road >= 0.5
+    lab, _ = ndi.label(roads, structure=np.ones((3, 3), bool))
+    reach = lab == lab.flat[int(np.argmin(np.where(roads, np.hypot(E - start[0], N - start[1]), np.inf)))]
+    k = int(np.argmin(np.where(reach, np.hypot(E - door[0], N - door[1]), np.inf)))
+    return segment_distance(E, N, door, (E.flat[k], N.flat[k])) - width / 2.0
+
+
+def specks(paths, res):
+    """The patches of ground smaller than SPECK_M2 that `paths` closes round (`res` m texels): a road inked as two
+    lines, with a strip of grass between them."""
+    holes = ndi.binary_fill_holes(paths) & ~paths
+    lab, n = ndi.label(holes)
+    return holes & (np.bincount(lab.ravel(), minlength=n + 1) * res * res < SPECK_M2)[lab]
 

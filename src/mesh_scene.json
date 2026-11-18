@@ -1197,7 +1197,7 @@
       "basis": [{"source": "user", "choice": "boats: exclude"}]
     },
     "court-glasshouse": {
-      "text": "The small white T-shaped building in the castle's walled north court is a small glasshouse, following the map's white-means-greenhouse convention.",
+      "text": "The small white T-shaped building in the castle's walled north court is a small glasshouse, following the map's white-means-greenhouse convention: a range with a narrower wing on the T traced from the map.",
       "basis": [
         {"source": "user", "choice": "court: glasshouse"},
         {"source": "wh-grounds-map", "note": "white fill marks the greenhouses (5b)"}
@@ -1788,11 +1788,15 @@
       ]
     },
     "forest-homesteads": {
-      "text": "Each building the Forest still covers stands in its homestead's clearing, not in a cutout round its walls: its yard, 10 m round it, is clear, and the clearing spreads on beyond as the homestead's ground, its edge wandering and the Forest thinning out over 24 m beyond it. Six clear Forest that stands, each 0.55 to 1.8 ha.",
+      "text": "The Forest covers a few of site X's real buildings, which the scene does not draw. Round each it opens in a natural glade of meadow, as the Forest's own clearings open among its trees: the building's yard, 10 m round it, is clear, the glade spreads on beyond it, its edge wandering, and the Forest thins out over 48 m beyond that edge, trees standing scattered across the band, rather than standing in a wall of crowns. Its ground is tinted green as the Forest map's fields are, not left as the imagery's pale yard. Ten clear Forest that stands: nine of 1.1 to 2.4 ha, round one to four buildings each, and one of 11.5 ha round some 40 buildings at Achnasheen.",
       "basis": [
         {
           "source": "wh-forest",
           "quote": "everything which lies north and north-west of Aragog's nest is just a \"for instance\""
+        },
+        {
+          "source": "wh-forest",
+          "quote": "Continuing slowly down the path, they come to a clearing where they meet two centaurs."
         },
         {
           "source": "user",
@@ -1801,6 +1805,10 @@
         {
           "source": "user",
           "quote": "the clearings, wherever they are, are large enough to be plausible and not look suspiciously like cutouts created just for line of sight purposes"
+        },
+        {
+          "source": "user",
+          "note": "orchestrated choice: inspection round 1 found the homesteads' clearings read as unexplained holes in the Forest, with no homestead in them and a wall of crowns at their edges; the orchestrator ruled them natural glades with no buildings"
         }
       ]
     },
@@ -2114,7 +2122,7 @@
       ]
     },
     "clearings-plausible": {
-      "text": "Every clearing in the trees either follows a feature that explains it or reads as a place. The railway clears its earthworks and its lineside, within 10 m of the open line; the Forest has corridors along the A890 and the Kyle railway, and ends short of the A832 and round Achnasheen. The places are the Willow's lawn, the Shack's garden, the homesteads round the buildings the Forest covers, Aragog's hollow and Grawp's clearing. Each is at least 0.25 ha in area and 30 m across, with no straight stretch of edge 60 m long and no two that run parallel and face each other across it, and the wood thins out towards it. In the two cleared for lines of sight a few trees stand, and their ground does not end at a line either: it gives way to the ground round it in tufts across 16 m of that edge, and no patch of ground ends at a line (scrubland-as-scrub). In Grawp's clearing a few small pines stand, and Aragog's hollow is bare, as the books have them. The ground of the homesteads and of those two places is the real ground's, under Forest that thins out over 24 m or 16 m. The hollows the station's wooded rises enclose are made up keeping their trees, not as meadow. Otherwise trees are only kept off streams, the lake's edge, walls, buildings' plots and the ground within a crown's reach of the pitch's stands.",
+      "text": "Every clearing in the trees either follows a feature that explains it or reads as a place. The railway clears its earthworks and its lineside, within 10 m of the open line; the Forest has corridors along the A890 and the Kyle railway, and ends short of the A832 and round Achnasheen. The places are the Willow's lawn, the Shack's garden, the glades round the real buildings the Forest covers, Aragog's hollow and Grawp's clearing. Each is at least 0.25 ha in area and 30 m across, with no straight stretch of edge 60 m long and no two that run parallel and face each other across it, and the wood thins out towards it. In the two cleared for lines of sight a few trees stand, and their ground does not end at a line either: it gives way to the ground round it in tufts across 16 m of that edge, and no patch of ground ends at a line (scrubland-as-scrub). In Grawp's clearing a few small pines stand, and Aragog's hollow is bare, as the books have them. The glades round the buildings are meadow, under Forest that thins out over 48 m; the ground of those two places is the real ground's, under Forest that thins out over 16 m. The hollows the station's wooded rises enclose are made up keeping their trees, not as meadow. Otherwise trees are only kept off streams, the lake's edge, walls, buildings' plots and the ground within a crown's reach of the pitch's stands.",
       "basis": [
         {
           "source": "user",
@@ -2210,7 +2218,7 @@
       ]
     },
     "tour-station-close": {
-      "text": "The tour's Hogsmeade station waypoint stands 123 m east-north-east of the station, 30 m up, where it fills about 8% of the frame, the train along its platform and the castle above. The old waypoint was 168 m off and about 47 m up.",
+      "text": "The tour's Hogsmeade station waypoint stands 123 m east-north-east of the station, 30 m up, where it fills about 8% of the frame, the train along its platform and the castle above. It aims 18 m above the ground just short of the station, so the castle's towers clear the frame's top. The old waypoint was 168 m off and about 47 m up.",
       "basis": [
         {"source": "user", "note": "decided by the orchestrator under the user's delegation of look choices"}
       ]
@@ -3063,6 +3071,17 @@
       ],
       "inputs": ["locA.bsd", "locN.bcode"],
       "components": [{"id": 19, "at": [-49.25, 61.37]}],
+      "traced": [
+        {
+          "id": "court-glasshouse",
+          "frame": "wh-grounds-map",
+          "feature": "the white T's range and its wing (tools.trace.court_glasshouse)",
+          "plan_px": {
+            "range": [[1237.5, 760.5], [1253.5, 760.5], [1253.5, 766.5], [1237.5, 766.5]],
+            "wing": [[1241.5, 766.5], [1247.5, 766.5], [1247.5, 772.5], [1241.5, 772.5]]
+          }
+        }
+      ],
       "decisions": ["court-glasshouse", "greenhouse-glass", "greenhouse-design-inferred"]
     },
     {

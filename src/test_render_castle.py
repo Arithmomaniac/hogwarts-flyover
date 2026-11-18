@@ -10,7 +10,7 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "src"))
 
 from pagetest import smoke  # noqa: E402
-from render_testing import LAWN, ray, RenderTestCase  # noqa: E402
+from render_testing import LAWN, castle_floor, ray, RenderTestCase  # noqa: E402
 
 
 class CastleRenderTests(RenderTestCase):
@@ -63,6 +63,35 @@ class CastleRenderTests(RenderTestCase):
                 return out; }""")
             self.assertGreater(len(glow[attr]), 200)
         self.assertGreater(np.median(glow[(4, 41)]), 4.0 * np.median(glow[(4, 40)]))
+
+    async def test_masonry_turned_down_takes_less_of_the_sky_than_a_wall(self):
+        # the North Tower's corbel, facing down, was shaded as pale as the wall above it (north-battlements, round 3)
+        for hour in np.arange(6.0, 12.0, 0.25):                  # a morning sun, so neither face it sees is sunlit
+            sun = (await self.page.evaluate("(h) => __hog.light(h)", float(hour)))["dir"]
+            if sun[0] > 0.3 and sun[1] > 0.15:
+                break
+        else:
+            self.fail("no morning sun in the east")
+        x, z = LAWN
+        ground = await self.ground(x, z)
+        lift = max(castle_floor() - ground, 0.0)
+        frames = await self.page.evaluate("(h) => { __hog.tod(h); return __hog.frames; }", float(hour))
+        await self.page.wait_for_function(f"__hog.frames >= {frames + 10}")
+        box = (x + 30.0, ground + lift + 18.0, z - 12.0, x + 50.0, ground + lift + 30.0, z + 12.0)
+        await self.show([], at=(x - 15.0, z), height=lift + 2.0, pitch=0.35, soffits=[box], attr=(4, 22))
+        faces = await self.page.evaluate("""() => {
+            const [w, h] = __hog.probe(0, 0).res, out = { under: [], wall: [] };
+            for (let y = 1; y < h; y += 3) for (let x = 1; x < w; x += 3) {
+              const p = __hog.probe(x, y), c = __hog.probeColor(x, y);
+              if (p.mat !== 4) continue;
+              if (p.n[1] < -0.9) out.under.push(0.2126 * c[0] + 0.7152 * c[1] + 0.0722 * c[2]);
+              else if (p.n[0] < -0.9) out.wall.push(0.2126 * c[0] + 0.7152 * c[1] + 0.0722 * c[2]);
+            }
+            return out; }""")
+        self.assertGreater(len(faces["under"]), 200)
+        self.assertGreater(len(faces["wall"]), 200)
+        # horizon light alone leaves the underside at about 0.85 of the wall; the corbel's occlusion takes it to about 0.57
+        self.assertLess(np.median(faces["under"]), 0.7 * np.median(faces["wall"]))
 
     async def test_reflections_take_the_castle_materials(self):
         view = await self.lake_view(-0.6)

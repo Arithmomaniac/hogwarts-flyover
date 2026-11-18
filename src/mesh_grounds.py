@@ -1348,7 +1348,9 @@ CROSSING_GAP_M, ROAD_DENSITY = 25.0, 0.5            # the widest road between tw
 DECK_HALF_M, PARAPET_THICK_M, PARAPET_M = (1.2, 5.0), 0.45, 1.05   # the deck's clear half-width range; parapets
 RING_M, COVER_M, ABUT_M = 0.22, 0.3, 1.0             # the arch ring; the stone over it, under the deck; wall past it
 SPAN_M, RISE = (1.2, 6.5), (0.45, 1.1)               # the arch's span and rise ranges
-FACE_REACH_M = 4.0                                  # how far past the road's edge a face may stand, out to the burn
+FACE_REACH_M = 7.5                                  # how far past the road's edge a face may stand, out to the burn
+HOUSE_CLEAR_M = 1.0                                 # how far its faces and walls keep from a mapped building
+STREET_M = 4.0                                      # a building this near: a street, whose deck lies level with it
 RAMP_GRADE = 7.0                                    # a raised deck's approaches: 1 in RAMP_GRADE
 
 
@@ -1457,6 +1459,11 @@ def bridge(scene, c, axis, half_width, ends, stream=None):
     at = lambda x, z: c + np.asarray(x)[..., None] * axis + np.asarray(z)[..., None] * side
     g = lambda x, z: np.asarray(scene.ground(*np.moveaxis(at(x, z), -1, 0)), np.float64)
     road_density = scene.locA[..., CHANNELS["locA"].index("road")] / 255.0
+    bsd = getattr(scene, "bsd", None)
+    house = (lambda x, z: sample(bsd, scene.local, *np.moveaxis(at(x, z), -1, 0))) if bsd is not None \
+        else (lambda x, z: np.full(np.shape(x), np.inf))                           # the distance to a building
+    X, Z = np.meshgrid(np.arange(-16.0, 16.1, 0.5), np.arange(-10.0, 10.1, 0.5), indexing="ij")
+    street = float(house(X, Z).min()) <= STREET_M      # between houses: the burn passes under the street's own level
     zs = np.arange(0.0, 8.01, 0.25)
     extent, face, arch = {}, {}, {}
     for s in (1.0, -1.0):                       # the road's edge each side: where its ink ends across it
@@ -1465,10 +1472,17 @@ def bridge(scene, c, axis, half_width, ends, stream=None):
             d = sample(road_density, scene.local, *np.moveaxis(at(np.full_like(zs, x), s * zs), -1, 0))
             edge.append(zs[np.argmax(d < ROAD_DENSITY)] if (d < ROAD_DENSITY).any() else zs[-1])
         extent[s] = float(np.clip(max(edge), *DECK_HALF_M)) + 0.1
+        if street:                                  # the village's road ink runs to its fronts: the deck stops short
+            zx = np.arange(-12.0, 12.1, 0.5)
+            while extent[s] > DECK_HALF_M[0] and house(zx, np.full_like(zx, s * extent[s])).min() < HOUSE_CLEAR_M:
+                extent[s] -= 0.25
         mine = [e for e in ends if float((e - c) @ side) * s > 0]
         z0 = abs(float((mine[0] - c) @ side)) if mine else 0.0
         face[s] = float(np.clip(z0, extent[s] + PARAPET_THICK_M, extent[s] + FACE_REACH_M))
         x_end = float((mine[0] - c) @ axis) if mine else 0.0
+        near = np.linspace(x_end - 4.0, x_end + 4.0, 17)                       # the face stands short of the houses
+        while face[s] > extent[s] + PARAPET_THICK_M and house(near, np.full_like(near, s * face[s])).min() < HOUSE_CLEAR_M:
+            face[s] = max(face[s] - 0.25, extent[s] + PARAPET_THICK_M)
         run = burn_run(stream, scene, at, x_end, s * face[s]) if stream is not None else None
         lo, hi = run or (x_end - 0.8, x_end + 0.8)
         span = float(np.clip(hi - lo + 0.5, *SPAN_M))
@@ -1476,7 +1490,7 @@ def bridge(scene, c, axis, half_width, ends, stream=None):
         xa = np.linspace(x0 - half, x0 + half, 9)
         bank = g(xa, np.full_like(xa, s * face[s]))
         spring = float(np.median(bank)) + 0.05             # on the banks; the opening runs down to the channel's bed
-        rise = float(np.clip(0.22 * span, *RISE))
+        rise = RISE[0] if street else float(np.clip(0.22 * span, *RISE))   # in a street, the lowest, under its setts
         radius = (half ** 2 + rise ** 2) / (2 * rise)
         arch[s] = (x0, half, spring, rise, radius, spring + rise - radius, (xa, np.minimum(bank - 0.15, spring)))
     xs = np.arange(-40.0, 40.01, 0.5)
@@ -1484,37 +1498,55 @@ def bridge(scene, c, axis, half_width, ends, stream=None):
     a_hi = max(a[0] + a[1] + RING_M for a in arch.values())
     over = lambda x: np.maximum(np.maximum(a_lo - np.asarray(x), np.asarray(x) - a_hi), 0.0)   # beyond the arches
     road = lambda x, z: g(x, np.clip(z, -extent[-1.0], extent[1.0]))   # the road's own cross-fall, carried to the walls
-    hump = max(0.0, *(a[2] + a[3] + RING_M + COVER_M - float(road(np.array([a[0]]), np.array([s * extent[s]]))[0])
-                      for s, a in arch.items()))
-    bump = lambda x: np.maximum(hump - over(x) / RAMP_GRADE, 0.0)
+    cover = 0.0 if street else COVER_M                 # a street's setts lie on the ring itself
+    need = {s: max(0.0, a[2] + a[3] + RING_M + cover - float(road(np.array([a[0]]), np.array([s * extent[s]]))[0]))
+            for s, a in arch.items()}
+    hump = max(need.values())
+    if street:                                         # each arch's own hump, so it rises no further along the street
+        own = {s: (lambda x, a=a: np.maximum(np.maximum(a[0] - a[1] - RING_M - np.asarray(x),
+                                                        np.asarray(x) - a[0] - a[1] - RING_M), 0.0))
+               for s, a in arch.items()}
+        bump = lambda x: np.max([np.maximum(need[s] - own[s](x) / RAMP_GRADE, 0.0) for s in arch], axis=0)
+    else:
+        bump = lambda x: np.maximum(hump - over(x) / RAMP_GRADE, 0.0)
     keep = (over(xs) <= ABUT_M) | (bump(xs) > 0.02)
     i0, i1 = np.flatnonzero(keep)[[0, -1]]
     deck_x = xs[max(i0 - 1, 0): i1 + 2]
     surface_at = lambda x, z: road(np.asarray(x, np.float64), np.asarray(z, np.float64)) + bump(x)
-    walled = (over(xs) <= ABUT_M) | (bump(xs) > 0.25)             # parapets over the arches and wherever it stands proud
-    w0, w1 = xs[np.flatnonzero(walled)[[0, -1]]]
     other = ink_polygon(scene, c, 30.0)                 # paths and bends leaving it: the walls stop short of them
     rect = Polygon([at(x, z) for x, z in ((-40, -extent[-1.0]), (40, -extent[-1.0]), (40, extent[1.0]), (-40, extent[1.0]))])
     beyond = max(face.values()) + 1.0               # a path leaves the road: ink reaching past the faces, not the
     other = unary_union([g for g in pieces_of(other.difference(rect.buffer(0.3)))   # road's own ragged edge
                          if max(abs((np.asarray(g.exterior.coords) - c) @ side)) > beyond])
     other = other.buffer(0.5) if not other.is_empty else other
+    reach = {}
     for s in (1.0, -1.0):                           # the walls stop short of it, but never while the deck stands proud
+        lo, hi = (arch[s][0] - arch[s][1] - RING_M, arch[s][0] + arch[s][1] + RING_M) if street else (a_lo, a_hi)
+        walled = (np.maximum(np.maximum(lo - xs, xs - hi), 0.0) <= ABUT_M) | (bump(xs) > 0.25)   # over its arches and
+        w0, w1 = xs[np.flatnonzero(walled)[[0, -1]]]                              # wherever it stands proud
         line = lambda x: Point(*at(x, s * (face[s] - PARAPET_THICK_M / 2)))
-        for x in np.arange(a_hi, w1 + 0.25, 0.25):
-            if not other.is_empty and other.intersects(line(x)):
-                end = max(x - 0.5, a_hi + 0.3)
-                w1 = end if bump(np.array([end]))[0] <= 0.25 else w1
+        by_house = lambda x: float(np.min(house(np.full(2, x), s * np.array([face[s], face[s] - PARAPET_THICK_M])))) \
+            < HOUSE_CLEAR_M
+        blocked = lambda x: (not other.is_empty and other.intersects(line(x))) or by_house(x)
+        for x in np.arange(hi, w1 + 0.25, 0.25):
+            if blocked(x):
+                end = max(x - 0.5, hi + 0.3)
+                w1 = end if bump(np.array([end]))[0] <= 0.25 or by_house(x) else w1
                 break
-        for x in np.arange(a_lo, w0 - 0.25, -0.25):
-            if not other.is_empty and other.intersects(line(x)):
-                end = min(x + 0.5, a_lo - 0.3)
-                w0 = end if bump(np.array([end]))[0] <= 0.25 else w0
+        for x in np.arange(lo, w0 - 0.25, -0.25):
+            if blocked(x):
+                end = min(x + 0.5, lo - 0.3)
+                w0 = end if bump(np.array([end]))[0] <= 0.25 or by_house(x) else w0
                 break
-    wx = np.unique(np.concatenate([np.arange(w0, w1, 0.5), [w1]]))
+        reach[s] = (w0, w1)
+    if not street:                                  # one length both sides; in a street each face's own, between houses
+        w0, w1 = max(r[0] for r in reach.values()), min(r[1] for r in reach.values())
+        reach = {s: (w0, w1) for s in reach}
+    walls = {s: np.unique(np.concatenate([np.arange(w0, w1, 0.5), [w1]])) for s, (w0, w1) in reach.items()}
     parts = []
     for s in (1.0, -1.0):
         x0, half, spring, rise, radius, centre, floor = arch[s]
+        wx = walls[s]
         deck_at = lambda x: surface_at(x, np.full_like(np.asarray(x, np.float64), s * extent[s]))
         th = np.linspace(-math.asin(min(half / radius, 1.0)), math.asin(min(half / radius, 1.0)), 15)
         zo, zi = s * face[s], s * (face[s] - PARAPET_THICK_M)
@@ -1555,9 +1587,10 @@ def bridge(scene, c, axis, half_width, ends, stream=None):
                                        np.stack([q[0], q[2], q[3]], -2).reshape(-1, 3, 3)]), DECK, up=True)
     zl, zr = -extent[-1.0], extent[1.0]
     parts.append(sheet(deck_x, np.linspace(zl, zr, max(int((zr - zl) / 1.0), 1) + 1)))   # the deck over the road
-    inside = np.unique(np.concatenate([[wx[0]], deck_x[(deck_x >= wx[0]) & (deck_x <= wx[-1])], [wx[-1]]]))
-    parts.append(sheet(inside, np.array([zr, face[1.0] - PARAPET_THICK_M])))    # and its verges, between the walls
-    parts.append(sheet(inside, np.array([-(face[-1.0] - PARAPET_THICK_M), zl])))
+    for s, edge in ((1.0, zr), (-1.0, zl)):                                       # and its verges, between the walls
+        wx = walls[s]
+        inside = np.unique(np.concatenate([[wx[0]], deck_x[(deck_x >= wx[0]) & (deck_x <= wx[-1])], [wx[-1]]]))
+        parts.append(sheet(inside, np.array(sorted([edge, s * (face[s] - PARAPET_THICK_M)]))))
     for z, f in ((zl, -1.0), (zr, 1.0)):                                          # its edges, down to the ground
         ys = surface_at(deck_x, np.full_like(deck_x, z))
         gz = g(deck_x, np.full_like(deck_x, z)) - 0.3

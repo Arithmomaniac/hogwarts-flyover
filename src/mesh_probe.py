@@ -91,7 +91,7 @@ START_ATTEMPTS = 20                # how many of those the probe waits through f
 # trees-60 to the heaviest that keeps it and look-pan, half a second after it as before, at least 2 s from the others.
 # Raising the Gryffindor Tower waypoint (tour-gryffindor-close) lifted the camera 14 to 20 m at the castle, trees and
 # pan windows, so those were picked again by the same rules on the new tour.
-WINDOWS = {"castle": 59.15, "lake-ship": 52.4, "station-train": 92.25, "greenhouses": 138.8, "hogsmeade": 435.55,
+WINDOWS = {"castle": 59.15, "lake-ship": 52.4, "station-train": 93.05, "greenhouses": 140, "hogsmeade": 436.95,
            "trees-60": 61.15, "trees-65": 54.65, "look-pan": 61.65}
 PANNED = {"look-pan"}
 # name: (page, meshes, debug bits): the frozen baseline; the candidate's landscape alone (meshes off, a diagnostic); the

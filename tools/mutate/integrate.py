@@ -10,7 +10,8 @@ lake cannot show,
 levels of detail picked by the wrong pixels, without hysteresis, apart in the pre-pass and the G-buffer pass, kept
 from the shadow layers, nearer than their guards allow or from the simplifier where a lane built its own, a
 glasshouse's floor in its lawn or its dwarf wall short of the ground, glazing without its sheen or tint, small lights
-missing, shown through walls, over near panes, too dim or with a lantern's faces merged, a skimming ray called ground
+missing, shown through walls, over near panes, too dim or with a lantern's faces merged, the lake mirroring none or
+mirroring their display values, a skimming ray called ground
 in mid-air or stepping over ridges, the far canopy a lawn, the burns painted beds and stars in a civil-dusk sky.
 
 The page mutations rebuild the copy's page and need a browser (set HOG_GPU):
@@ -46,7 +47,9 @@ GREENHOUSE = "test_assets_greenhouses.GreenhouseTests."
 GLAZING = "test_render_integrated.GlazingTests."
 LIGHTS = "test_render_integrated.LightPointTests."
 SMALL_LIGHTS = (LIGHTS + "test_panes_too_small_for_a_pixel_show_as_lights",)
+MIRRORED_LIGHT = LIGHTS + "test_a_lit_window_across_the_lake_shines_in_it"
 FAR = "test_render_integrated.FarTerrainTests."
+CLIFF = "test_render_integrated.CliffTreeTests."
 MUTATIONS = [
     Mutation("meshes off by default", "template_c.html",
              'let meshOn = Q.get("meshes") !== "0"', 'let meshOn = Q.get("meshes") === "1"',
@@ -345,7 +348,7 @@ MUTATIONS = [
              "const GLASS_T = `vec3(0.6, 0.74, 0.66)`", "const GLASS_T = `vec3(0.78, 0.86, 0.8)`",
              (GLAZING + "test_a_pane_tints_what_it_covers_green",)),
     Mutation("no small lights", "template_c.html",
-             "if (!pts || !pts.count || L.dusk <= 0 || dbg & 131072) return;", "return;",
+             "if (!pts || !pts.count || L.dusk <= 0 || dbg & 131072) return 0;", "return 0;",
              SMALL_LIGHTS + (LIGHTS + "test_the_castle_reads_as_inhabited_at_night",)),
     Mutation("small lights shine through walls", "template_c.html",
              "gl.uniform1f(ULt.uDusk, L.dusk); gl.uniform1f(ULt.uExposure, L.exposure);\n    gl.enable(gl.DEPTH_TEST);",
@@ -360,8 +363,13 @@ MUTATIONS = [
              "const facing = cr.reduce((b, v, j) => b * 3 + Math.round(side * v / (2 * area)) + 1, 0);", "const facing = 0;",
              (LIGHTS + "test_a_lamps_lantern_shows_from_above",)),
     Mutation("a small light at its pane's face", "template_b.html",
-             "vec3 v = transpose(uCamRot) * (aPos - d / t * (0.25 + 0.001 * t) - uCamPos);", "vec3 v = transpose(uCamRot) * d;",
+             "vec3 v = transpose(uCamRot) * (p - d / t * (0.25 + 0.001 * t) - uCamPos);", "vec3 v = transpose(uCamRot) * d;",
              SMALL_LIGHTS),
+    Mutation("the lake mirrors no small lights", "template_c.html",
+             "lightsMirrored = drawLights(pos, rot, tanH, jit, sw, sh, L, 1);", "lightsMirrored = 0;",
+             (MIRRORED_LIGHT, LIGHTS + "test_the_lake_mirrors_the_lit_castle_at_night")),
+    Mutation("the lake mirrors a light's display value, tone-mapped again", "template_b.html",
+             "  if (mirror) vCol = c;\n", "", (MIRRORED_LIGHT,)),
     Mutation("a skimming ray called ground when its budget runs out", "frag3.glsl",
              "cont = (uDbg & 262144) != 0 ? 0 : CONT_N;", "cont = 0;", (FAR + "test_no_sky_shows_under_far_terrain",)),
     Mutation("a skimming ray's steps grow as it goes on", "frag3.glsl",
@@ -378,9 +386,21 @@ MUTATIONS = [
     Mutation("the burns painted beds", "frag5.glsl",
              "  if (burn > 0. && (uDbg & 524288) == 0) {", "  if (false) {",
              ("test_render_integrated.BurnTests.test_a_burn_mirrors_the_sky_through_its_riffles",)),
+    Mutation("a burn mirrors no sky", "frag5.glsl",
+             "col = mix(col, skyBase(rr), fr * burn) + ", "col = col + ",
+             ("test_render_integrated.BurnTests.test_a_burn_mirrors_the_sky_through_its_riffles",)),
+    Mutation("a burn's riffles flat", "frag5.glsl",
+             "float k = 1. - smoothstep(0.25, 1.5, pix / max(abs(dot(gn, rd)), 0.25));", "float k = 0.;",
+             ("test_render_integrated.BurnTests.test_a_burn_mirrors_the_sky_through_its_riffles",)),
     Mutation("stars in a civil-dusk sky", "frag4.glsl",
              "(1. - smoothstep(STARS_SUN_Y.x, STARS_SUN_Y.y, uSunDir.y))", "uDusk",
              ("test_render_integrated.NightSkyTests.test_stars_come_out_only_as_the_twilight_fades",)),
+    Mutation("trees grow over sheer drops", "frag5.glsl",
+             "      if (k == 12 && !treeStands(ctr, r)) d = 0.;\n", "",
+             (CLIFF + "test_no_tree_hangs_off_a_cliff", CLIFF + "test_the_tree_table_grows_the_trees_the_site_tests_see")),
+    Mutation("trees drop from smooth steep banks too", "frag5.glsl",
+             "  return drop <= TREE_DROP_M || steep <= TREE_SHEER * 0.5 * r;", "  return drop <= TREE_DROP_M;",
+             (CLIFF + "test_the_tree_table_grows_the_trees_the_site_tests_see",)),
     Mutation("a still view draws its meshes", "template_c.html",
              "const L = idle ? lastL : render(pos, f);",
              "const L = idle ? (drawMeshes(pos, basis(f), Math.tan(FOV / 2), [0, 0], fw, fh, lastL.dir), lastL) : render(pos, f);",

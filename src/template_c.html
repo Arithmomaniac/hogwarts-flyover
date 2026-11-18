@@ -40,7 +40,7 @@
     [53, -362, 20, -58, -252, 15, "Durmstrang ship"],
     [40, -262, 55, -2, -166, 30, "Gryffindor Tower"],
     [230, -260, 40, 80, -90, 30, null],
-    [420, 200, 30, 330, 150, 6, "Hogsmeade station"],
+    [420, 200, 30, 330, 150, 18, "Hogsmeade station"],
     [150, 262, 32, 64, 181, 30, "North Tower"],
     [30, 305, 26, -20, 245, 2, "Greenhouses"],
     [-234, 224, 26, -254.7, 184.3, 6, "Whomping Willow"],
@@ -396,6 +396,7 @@
       meshReflected++;
     }
     gl.bindVertexArray(null); gl.disable(gl.DEPTH_TEST);
+    lightsMirrored = drawLights(pos, rot, tanH, jit, sw, sh, L, 1);
   }
   function drawGlass(pos, rot, tanH, jit, sw, sh, L) {         // into the shaded image (fbo), depth-tested, no depth writes
     if (dbg & 65536) return;                         // debug: no glazing
@@ -417,23 +418,27 @@
     gl.bindVertexArray(null);
     gl.disable(gl.BLEND); gl.colorMask(true, true, true, true); gl.depthMask(true); gl.disable(gl.DEPTH_TEST);
   }
-  let lightsDrawn = 0;
-  // small lights (lightVs) into the shaded image, depth-tested: each pixel keeps the brighter of a light and what lies
-  // behind it, so overlapping lights (a lantern's faces seen together) shine as one, never brighter than their panes
-  function drawLights(pos, rot, tanH, jit, sw, sh, L) {
+  let lightsDrawn = 0, lightsMirrored = 0;
+  // small lights (lightVs), depth-tested into the bound target: each pixel keeps the brighter of a light and what lies
+  // behind it, so overlapping lights (a lantern's faces seen together) shine as one, never brighter than their panes.
+  // `mirror` 1 draws them mirrored about the lake into the mirror pass's target (drawReflections), whose distances they
+  // leave alone: a light brightens the mesh the mirror holds round it, as the walls round a lit window, and a light with
+  // nothing behind it there shows in no water, while none can darken a reflection. Blending into that 32-bit float
+  // target needs EXT_float_blend. Returns the points drawn
+  function drawLights(pos, rot, tanH, jit, sw, sh, L, mirror) {
     const pts = meshChunks.lights;
-    lightsDrawn = 0;
-    if (!pts || !pts.count || L.dusk <= 0 || dbg & 131072) return;   // debug: no light points
+    if (!pts || !pts.count || L.dusk <= 0 || dbg & 131072) return 0;   // debug: no light points
+    if (mirror && (!floatBlend || dbg & 4194304)) return 0;             // debug: none in the lake
     gl.useProgram(lightP);
     gl.uniform2f(ULt.uRes, sw, sh); gl.uniform2fv(ULt.uJitter, jit); gl.uniform3fv(ULt.uCamPos, pos);
-    gl.uniformMatrix3fv(ULt.uCamRot, false, rot); gl.uniform1f(ULt.uTanHalf, tanH);
+    gl.uniformMatrix3fv(ULt.uCamRot, false, rot); gl.uniform1f(ULt.uTanHalf, tanH); gl.uniform1f(ULt.uMirror, mirror);
     gl.uniform1f(ULt.uDusk, L.dusk); gl.uniform1f(ULt.uExposure, L.exposure);
     gl.enable(gl.DEPTH_TEST); gl.depthFunc(gl.LESS); gl.depthMask(false);
     gl.enable(gl.BLEND); gl.blendEquation(gl.MAX); gl.colorMask(true, true, true, false);
     gl.bindVertexArray(pts.vao); gl.drawArrays(gl.POINTS, 0, pts.count);
     gl.bindVertexArray(null);
     gl.blendEquation(gl.FUNC_ADD); gl.disable(gl.BLEND); gl.colorMask(true, true, true, true); gl.depthMask(true); gl.disable(gl.DEPTH_TEST);
-    lightsDrawn = pts.count;
+    return pts.count;
   }
   let jIdx = 0, prevPos = null, prevRot = null, prevSig = "", accN = 0, hn = 0;
   // the shading pass's sun term over the last rendered frame (its debug bit 64), drawn again into a target of its own
@@ -509,7 +514,7 @@
     if (mirrorOn) mirrorLevels = pickLevels("mirror", pos, tanH, cv.height / 2);   // the mirror is drawn at half resolution
     const meshRefl = mirrorOn && !lakeHidden(pos, rot, sw, sh);
     if (meshRefl) drawReflections(pos, rot, tanH, jit, sw, sh, L);
-    else meshReflected = 0;
+    else meshReflected = lightsMirrored = 0;
     if (mirrorOn) askLake(pos, rot, sw, sh);
     lastView = { jit, pos: pos.slice(), rot: Array.from(rot), tanH, sun: Array.from(L.dir) };
     for (const [fb, p, Um] of [[sFbo, shP, splitU[0]], [fbo, p3P, splitU[1]]]) {
@@ -521,7 +526,7 @@
       }
       gl.drawArrays(gl.TRIANGLES, 0, 3);
     }
-    if (meshOn && meshChunks.length) { drawGlass(pos, rot, tanH, jit, sw, sh, L); drawLights(pos, rot, tanH, jit, sw, sh, L); }
+    if (meshOn && meshChunks.length) { drawGlass(pos, rot, tanH, jit, sw, sh, L); lightsDrawn = drawLights(pos, rot, tanH, jit, sw, sh, L, 0); }
     else lightsDrawn = 0;
     gl.activeTexture(gl.TEXTURE16); gl.bindTexture(gl.TEXTURE_2D, fTex);
     let outUnit = 16;
@@ -615,7 +620,7 @@
     meshes(on) { meshOn = !!on; meshGen++; },
     async loadMeshes(payload) { const old = meshChunks; meshChunks = await uploadMeshes(payload); freeMeshes(old); meshGen++; return meshChunks.length; },
     meshStats: () => ({ on: meshOn, chunks: meshChunks.length, drawn: meshDrawn, reflected: meshReflected,
-                        levels: mainLevels, mirrorLevels, casters: shCasters, near: nearDrawn, lights: lightsDrawn,
+                        levels: mainLevels, mirrorLevels, casters: shCasters, near: nearDrawn, lights: lightsDrawn, lightsMirrored,
                         lightPoints: meshChunks.lights ? meshChunks.lights.count : 0 }),
     groups: () => (meshChunks.groups || []).map((g) => ({ asset: g.levels[0][0].asset, lo: g.lo, hi: g.hi,
       switch: g.switch.map((d) => (Number.isFinite(d) ? d : null)), has: g.levels.map((l) => l.length > 0),
@@ -649,6 +654,12 @@
       for (let i = 0; i < w * h; i++) out.push([a[0][4 * i + 1] & 7, a[1][4 * i], a[1][4 * i + 1], a[1][4 * i + 2], a[0][4 * i + 2], a[0][4 * i]]);
       return out;
     },
+    probeTrees(x, y, w, h) {                        // a tree pixel's (material 3's) record, row by row (RGBA runs): its tree's centre (east, north), crown radius and height, all 0 on the canopy sheet
+      const a = new Float32Array(4 * w * h);
+      gl.bindFramebuffer(gl.READ_FRAMEBUFFER, gFbo); gl.readBuffer(gl.COLOR_ATTACHMENT0 + 2); gl.readPixels(x, y, w, h, gl.RGBA, gl.FLOAT, a);
+      gl.readBuffer(gl.COLOR_ATTACHMENT0); gl.bindFramebuffer(gl.READ_FRAMEBUFFER, null);
+      return a;
+    },
     probeSun(x, y) {                                // the shading pass's sun term at internal pixel (x, y): the march's, upsampled, and the mesh casters'
       return sunTerm()[4 * (y * fw + x)];
     },
@@ -658,6 +669,13 @@
       gl.readPixels(Math.floor(x / 7 + TREE_N / 2), Math.floor(z / 7 + TREE_N / 2), 1, 1, gl.RGBA, gl.UNSIGNED_BYTE, px);
       gl.bindFramebuffer(gl.READ_FRAMEBUFFER, null);
       return px[3] / 255;
+    },
+    probeTreeTable(cx, cz, w, h) {                  // the tree table's bytes (density, conifer share, tallest tree near, sun cache) for w x h 7 m cells from cell (cx, cz), row by row
+      const px = new Uint8Array(4 * w * h);
+      gl.bindFramebuffer(gl.READ_FRAMEBUFFER, tFb);
+      gl.readPixels(cx + TREE_N / 2, cz + TREE_N / 2, w, h, gl.RGBA, gl.UNSIGNED_BYTE, px);
+      gl.bindFramebuffer(gl.READ_FRAMEBUFFER, null);
+      return px;
     },
     probeColor(x, y) {                              // the shading pass's output (before TAA) at internal pixel (x, y)
       const px = new Float32Array(4);

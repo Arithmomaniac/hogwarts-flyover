@@ -6,11 +6,15 @@ from materials import set_piece
 
 FAMILY = "willow"
 RANGES = ((7, 120, 139),)
-# the bark's codes, each naming the direction its furrows run in (x east, y up, z north): 120 for upright wood, 124-131
+# the bark's codes, each naming the direction its furrows run in (x east, y up, z north): 120 for the trunk, 124-131
 # for lying wood every 22.5 degrees from east towards north (either way along it), 132-139 for wood rising at 35 degrees
-# every 45 degrees from east towards north. The builder gives each piece of wood the code nearest its own direction
+# every 45 degrees from east towards north. The builder gives every other piece of wood the code nearest its own direction
 LYING, RISING = 124, 132
 RISE = 0.7                                  # tan(35 degrees)
+# the trunk's axis in the world, the bark's furrows wrap round: through its base at (x, height over the lake, z), leaning
+# (dx, dz) metres per metre up. The shader takes the base's height from the lake's (LAKE), so the axis rises with the
+# world; test_assets_willow checks it against the built tree, so an edit to the ground under the Willow fails there
+TRUNK_AXIS = (-254.3407, 13.4888, 184.2352, -0.05386, -0.05938)
 
 
 def _axis(aux):
@@ -23,31 +27,61 @@ def _axis(aux):
 
 BARK_AXES = {aux: _axis(aux) for aux in (120, *range(LYING, RISING + 8))}
 _AXIS_LIST = ", ".join(f"vec3({x!r}, {y!r}, {z!r})" for x, y, z in BARK_AXES.values())
-# Old willow bark close up: long grey-brown plates, a few centimetres wide and ten or more times as long, in a net of deep
-# furrows that run along the wood, part and meet again round each plate (a diamond-like network, with no islands).
-# Cells of a jittered grid stretched along the wood's axis are the plates, their borders the furrows: a first pass finds
-# the nearest cell's centre, a second the nearest border round it (the distance to the border is then continuous). Each
-# plate takes its own shade and catches the light at its edges (the normal tilts across each furrow). The pattern fades
-# to its mean (FAR_H, FAR_SHADE: what it averages to over the wood) before a pixel grows as wide as a plate, and is not
-# computed past that. Grey lichen patches the plates; moss greens the faces that look up.
-CELL_PER_M, STRETCH = 26.0, 0.08        # cells per metre across the wood; their length along it is 1/STRETCH times that
-FURROW_E, FURROW_W = 0.03, 0.2          # the furrow's floor and the ramp up to the plate, in cells from the border
-SHADE_LO, SHADE_AMP = 0.86, 0.24        # each plate's shade, uniform over [lo, lo + amp]
-FAR_H, FAR_SHADE = 0.435, SHADE_LO + SHADE_AMP / 2
+# Old willow bark close up: long grey-brown ridges, a centimetre or two wide, that run along the wood, part and meet again
+# in a diamond-like net round deep, dark furrows, each a spindle a few centimetres wide and ten or more times as long.
+# Cells of a jittered grid stretched along the wood are the furrows, their borders the ridges: a first pass finds the
+# nearest cell's centre, a second the nearest border round it (the distance to the border is then continuous). The
+# cells' space wraps round the wood: across it, a circle of ROUND metres at the bearing of the trunk's axis (on the trunk)
+# or of the surface's own normal (on every other piece of wood); along it, the code's direction. The furrows then follow
+# the wood however it swells, flares, bends or leans from its code, where a space fixed in the world cuts its long cells
+# crosswise into polygons wherever the surface tilts from the code's axis. Each pixel compares its cell coordinates with
+# its neighbours' (in the G-buffer), and the pattern fades to its mean (FAR_H: what it averages to over the wood) before
+# a pixel grows as wide as a ridge, as on twigs and where the wood faces along its own axis, and where the cells grow
+# several times the trunk's (wood seen edge-on to its axis). The ridges share one colour (a shade per cell would jump
+# wherever the nearest border changes, on the lit crests) and catch the light on their flanks (the normal tilts across
+# each ridge). Broad value noise varies the wood, grey lichen patches the ridges, and moss greens the faces that look up.
+CELL_PER_M, STRETCH = 14.0, 0.05        # cells per metre across the wood; their length along it is 1/STRETCH times that
+ROUND = {120: 1.0, "wood": 0.36}        # the circle's radius round the trunk, and round every other piece of wood (a limb's)
+RIDGE_E, RIDGE_W = 0.06, 0.12           # the ridge's crest each side of the border, and its flank down into the furrow, in cells
+FAR_H = 0.54
+FADE = (0.42, 0.168)                    # cells per pixel: the pattern fades out between these
+COARSE = (0.1, 0.3)                     # and where it moves this fraction of the trunk's cells per pixel, or less
 # each centre keeps within JITTER_AMP / 2 of its cell's middle, so no two plates touch unless their cells are neighbours
 # and the 3x3x3 search round the nearest centre always finds the border between them
 JITTER_AMP = 0.7
 _JITTER = ("vec3 hq = fract(q * vec3(0.1031, 0.103, 0.0973)); hq += dot(hq, hq.yxz + 33.33); "
            f"vec3 r = o + 0.5 + {JITTER_AMP!r} * (fract((hq.xxy + hq.yxx) * hq.zyx) - 0.5) - f;")
-BARK_P3 = (" {                             // the Willow's bark: long plates in a net of deep furrows along the wood\n"
+_X0, _Y0, _Z0, _LX, _LZ = TRUNK_AXIS
+BARK_P3 = (" {                             // the Willow's bark: long ridges in a net round deep furrows along the wood\n"
            f"        const vec3 AX[{len(BARK_AXES)}] = vec3[{len(BARK_AXES)}]({_AXIS_LIST});\n"
            f"        vec3 d = AX[k == 120 ? 0 : k - {LYING - 1}], e1 = normalize(cross(d, abs(d.y) > 0.9 ? vec3(1., 0., 0.) : vec3(0., 1., 0.))), e2 = cross(d, e1);\n"
-           f"        float aa = smoothstep(0.03, 0.012, pix), h = {FAR_H!r}, shade = {FAR_SHADE!r};\n"
+           f"        float R = k == 120 ? {ROUND[120]!r} : {ROUND['wood']!r}, rate = 0., h = {FAR_H!r};\n"
+           "        vec3 S = vec3(0.), a = e1; int got = 0;\n"
+           "        for (int j = ZERO; j < 5; j++) {                  // this pixel, then its four neighbours\n"
+           "          vec3 q = p, m = n;\n"
+           "          if (j > 0) {\n"
+           "#ifdef SPLIT_P3\n"
+           "            ivec2 ip = ivec2(gl_FragCoord.xy) + ivec2(j == 1 ? 1 : j == 2 ? -1 : 0, j == 3 ? 1 : j == 4 ? -1 : 0);\n"
+           "            vec4 b0 = texelFetch(tG0, ip, 0);\n"
+           "            if ((int(b0.y) & 7) != 7 || b0.z < 119.5 || b0.z > 139.5 || abs(b0.x - t) > 0.02 * t + 0.05) continue;\n"
+           "            vec2 uv = (2. * (vec2(ip) + 0.5 + uJitter) - uRes) / uRes.y;\n"
+           "            q = ro + normalize(uCamRot * vec3(uv * uTanHalf, 1.)) * b0.x; m = texelFetch(tG1, ip, 0).xyz;\n"
+           "#else\n"
+           "            break;\n"
+           "#endif\n"
+           "          }\n"
+           f"          vec3 o = k == 120 ? q - vec3({_X0!r}, LAKE + {_Y0!r}, {_Z0!r}) - vec3({_LX!r}, 1., {_LZ!r}) * (q.y - LAKE - {_Y0!r}) : m - d * dot(m, d);\n"
+           "          o /= max(length(o), 1e-4);                         // the bearing round the wood\n"
+           f"          vec3 sj = vec3(R * dot(o, e1), dot(q, d) * {STRETCH!r}, R * dot(o, e2)) * {CELL_PER_M!r};\n"
+           "          if (j == 0) { S = sj; a = o; } else { rate = max(rate, length(sj - S)); got++; }\n"
+           "        }\n"
+           f"        if (got == 0) rate = pix * {CELL_PER_M!r};\n"
+           f"        float aa = smoothstep({FADE[0]!r}, {FADE[1]!r}, rate) * smoothstep({COARSE[0]!r}, {COARSE[1]!r}, rate / (pix * {CELL_PER_M!r}));\n"
            "        if (aa > 0.) {\n"
-           f"          vec3 S = vec3(dot(p, e1), dot(p, d) * {STRETCH!r}, dot(p, e2)) * {CELL_PER_M!r}, c = floor(S), f = S - c, m1 = vec3(9.), id = c, mo = vec3(0.);\n"
-           "          for (int i = ZERO; i < 27; i++) {                // the nearest plate's centre\n"
+           "          vec3 c = floor(S), f = S - c, m1 = vec3(9.), mo = vec3(0.);\n"
+           "          for (int i = ZERO; i < 27; i++) {                // the nearest furrow's centre\n"
            f"            vec3 o = vec3(float(i % 3), float((i / 3) % 3), float(i / 9)) - 1., q = c + o; {_JITTER}\n"
-           "            if (dot(r, r) < dot(m1, m1)) { m1 = r; id = q; mo = o; }\n"
+           "            if (dot(r, r) < dot(m1, m1)) { m1 = r; mo = o; }\n"
            "          }\n"
            "          float e = 9.; vec3 u = vec3(1., 0., 0.);\n"
            "          for (int i = ZERO; i < 27; i++) {                // the nearest border round it\n"
@@ -55,21 +89,21 @@ BARK_P3 = (" {                             // the Willow's bark: long plates in 
            "            vec3 b = r - m1;\n"
            "            if (dot(b, b) > 1e-6) { float eb = dot(0.5 * (m1 + r), normalize(b)); if (eb < e) { e = eb; u = normalize(b); } }\n"
            "          }\n"
-           f"          float w = clamp((e - {FURROW_E!r}) / {FURROW_W!r}, 0., 1.);   // across the furrow's wall\n"
-           f"          h = mix({FAR_H!r}, w * w * (3. - 2. * w), aa);\n"
-           f"          shade = mix({FAR_SHADE!r}, {SHADE_LO!r} + {SHADE_AMP!r} * fract(sin(dot(id, vec3(12.9898, 78.233, 37.719))) * 43758.5453), aa);\n"
-           f"          vec3 g = -(u.x * e1 + {STRETCH!r} * u.y * d + u.z * e2) * {CELL_PER_M * 6 / FURROW_W * 0.006!r} * w * (1. - w) * aa;\n"
+           f"          float w = clamp((e - {RIDGE_E!r}) / {RIDGE_W!r}, 0., 1.);   // down the ridge's flank\n"
+           f"          h = mix({FAR_H!r}, 1. - w * w * (3. - 2. * w), aa);\n"
+           "          float ua = u.z * dot(a, e1) - u.x * dot(a, e2);  // the border's normal: its part round the wood\n"
+           f"          vec3 g = (ua * cross(d, a) + {STRETCH!r} * u.y * d) * {CELL_PER_M * 6 / RIDGE_W * 0.006!r} * w * (1. - w) * aa;\n"
            "          n = normalize(n - (g - n * dot(n, g)));\n"
            "        }\n"
-           "        vec3 plate = vec3(0.289, 0.249, 0.196) * shade;\n"
+           "        vec3 plate = vec3(0.238, 0.204, 0.161);\n"
            "        alb = mix(vec3(0.028, 0.023, 0.018), plate, h) * (0.85 + 0.3 * vnoise(p.xz * 0.6 + p.y * 0.45));\n"
            "        alb = mix(alb, vec3(0.11, 0.115, 0.09), 0.35 * h * smoothstep(0.62, 0.85, vnoise(p.xz * 1.4 + p.y * 1.1)));\n"
            "        alb = mix(alb, vec3(0.05, 0.07, 0.03), 0.45 * smoothstep(0.35, 0.9, n.y));\n"
            "      }")
-BARK_REFL = "vec3(0.17, 0.147, 0.116)"
+BARK_REFL = "vec3(0.172, 0.148, 0.117)"
 MATERIALS = [
     set_piece(120, "willow-bark",
-              note="the Willow's bark on upright wood: grey-brown plates split by deep furrows",
+              note="the Willow's bark on its trunk: grey-brown plates split by deep furrows",
               p3=BARK_P3, refl=BARK_REFL, refl_tail="                     // the Willow's bark"),
     set_piece(LYING, "willow-bark-lying", count=8,
               note="the Willow's bark on lying wood, its furrows along one of eight bearings",

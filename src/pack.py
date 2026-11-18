@@ -62,9 +62,10 @@ def deshade(S, bed, st, az=152.0, el=45.0, amb=0.35):
 
 
 def clean_water(b, s, minsize):
-    """Drop tiny water fragments (stream slivers that alias into sparkles) and their shore rings."""
+    """Drop tiny water fragments (stream slivers that alias into sparkles) and their shore rings. Water joined at a
+    texel's corner is one piece, as a bilinear read joins it: a river running slantwise across the texels is."""
     w = (s > -999.0) & (s - b > 0)
-    lab, n = ndi.label(w)
+    lab, n = ndi.label(w, structure=np.ones((3, 3), bool))
     sz = np.bincount(lab.ravel())
     keep = sz >= minsize; keep[0] = False
     K = keep[lab]

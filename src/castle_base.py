@@ -14,8 +14,10 @@ towards Hagrid's cabin, the pitch and the gates, more steeply elsewhere; and the
 stand on the landward sides away from those, with the same lawns falling towards them. Both only ever add ground, and
 meet the natural ground in a rounded toe. Everything is on the local grid (TEXEL_M texels), in metres.
 """
+import contourpy
 import numpy as np
 from scipy import ndimage as ndi
+from scipy.spatial import cKDTree
 
 TEXEL_M = 2.0
 SKIRT_M, SKIRT_FALL_M = 30.0, 2.0      # the skirt of lawn round the castle, and how far it falls across its width
@@ -41,6 +43,8 @@ GARDEN_GAP_M = 25.0                    # the vegetable patch: the bank down to i
 GARDEN_REACH_M = 100.0                 # ... and its level ground reaches no further from the platform than this;
 GARDEN_BANK_GRADE = 0.45               # ... the banks round it, cut or filled, can be walked up or down;
 GARDEN_HOLLOW_M, GARDEN_RIM_M = 0.25, 8.0  # ... its own little hollow: a flood to splash across, reached so far in
+GARDEN_ROUND_M = 8.0                   # ... and its banks round over from it and into the ground round them across 2x this
+GARDEN_EDGE_M = 6.0                    # ... measured from its edge smoothed over this far, but round its greenhouses
 
 
 def softplus(x, r):
@@ -48,13 +52,43 @@ def softplus(x, r):
 
 
 def smooth_max(a, b, k):
-    """max(a, b), the corner where they cross filled by a fillet about k across: as a mound's toe meets the ground."""
-    h = np.maximum(k - np.abs(a - b), 0.0) / k
+    """max(a, b), the corner where they cross filled by a fillet about k across: as a mound's toe meets the ground. `k`
+    may vary, down to nought where the corner stays sharp."""
+    h = np.maximum(k - np.abs(a - b), 0.0) / np.maximum(k, 1e-9)
     return np.maximum(a, b) + h * h * k / 4.0
 
 
 def smooth_min(a, b, k):
     return -smooth_max(-a, -b, k)
+
+
+def rounded(x, r):
+    """x beyond 2r, less r: nought at nought and rising from it level, turning to x's slope over 2r, as a bank's crest
+    rounds over."""
+    return np.where(x < 2.0 * r, x * x / (4.0 * r), x - r)
+
+
+def edge_m(area, keep):
+    """Metres from each texel centre out to the edge of `area` (negative inside it), its edge smoothed over
+    GARDEN_EDGE_M but following the edges of the ground it must `keep` level (the greenhouses), which lies at least
+    half a texel inside: from the texels' stair-stepped edge, as the distance transform measures it, banks fell in fans
+    ridged at every step. It changes by no more than the distance between texels, so a bank graded by it is no steeper
+    anywhere. Parts of `area` narrower than about twice GARDEN_EDGE_M fall outside the smoothed edge and are graded as
+    its banks; an `area` with nothing left inside it has no edge to grade them from."""
+    soft = np.maximum(ndi.gaussian_filter(area.astype(np.float64), GARDEN_EDGE_M / TEXEL_M), keep)
+    lines = contourpy.contour_generator(z=soft).lines(0.5)            # (column, row) points
+    if not lines:
+        raise RuntimeError(f"the terrace has no edge left once smoothed over GARDEN_EDGE_M ({GARDEN_EDGE_M} m): "
+                           "it is nowhere wide enough")
+    pts = []
+    for line in lines:
+        step = np.diff(line, axis=0)
+        for start, d, k in zip(line[:-1], step, np.maximum(np.ceil(np.hypot(*step.T) * 10.0), 1).astype(int)):
+            pts.append(start + (np.arange(k) / k)[:, None] * d)
+    rows, cols = np.mgrid[0:area.shape[0], 0:area.shape[1]]
+    d = cKDTree(np.vstack(pts)).query(np.column_stack([cols.ravel(), rows.ravel()]))[0].reshape(area.shape) * TEXEL_M
+    sd = np.where(soft >= 0.5, -d, d)
+    return np.where(keep, np.minimum(sd, -TEXEL_M / 2), sd)
 
 
 def noise(shape, scale_m, seed):
@@ -143,8 +177,17 @@ def shape(kind, ground, E, N, castle, lake_sd, platform, lake, toward, garden=No
     if terrace.any():
         highest = float(np.max(np.broadcast_to(platform, ground.shape)[flat]))
         level = max(float(np.median(top[terrace])), highest - GARDEN_BANK_GRADE * GARDEN_GAP_M)
-        bank = ndi.distance_transform_edt(~terrace) * TEXEL_M * GARDEN_BANK_GRADE
-        top = np.clip(top, level - bank, level + bank)
+        # its banks, cut or filled, round into the ground they meet, and the filled ones round over from its edge:
+        # planes clipped to the lawns met them in dead-straight creases, the slope below the greenhouses a polygonal
+        # pyramid (greenhouses-north). They fall square to its smoothed edge, not in fans from its texels' steps
+        # (tour 08). The cut bank up to the castle still meets the platform's edge at its level: it rises from half a
+        # texel inside the edge, where the texels' centres stood
+        sd = edge_m(terrace, terrace & glass if glass is not None else np.zeros(terrace.shape, bool))
+        out_m, cut_m = np.maximum(sd, 0.0), np.maximum(sd + TEXEL_M / 2, 0.0)
+        fillet = GARDEN_ROUND_M * GARDEN_BANK_GRADE * np.clip(out_m / (2 * GARDEN_ROUND_M), 0.0, 1.0) * \
+            np.clip((d - 2 * TEXEL_M) / (2 * GARDEN_ROUND_M), 0.0, 1.0)
+        fill = level - GARDEN_BANK_GRADE * rounded(out_m, GARDEN_ROUND_M)
+        top = smooth_min(smooth_max(top, fill, fillet), level + GARDEN_BANK_GRADE * cut_m, fillet)
         inside = ndi.distance_transform_edt(hollow) * TEXEL_M          # a rim two texels wide: no diagonal leaks
         top = top - GARDEN_HOLLOW_M * np.clip((inside - 2 * TEXEL_M) / (GARDEN_RIM_M - 2 * TEXEL_M), 0.0, 1.0)
     top = np.where(held, platform - PATH_GRADE * d, top)      # under the castle's walls: the foot-path's level, no face

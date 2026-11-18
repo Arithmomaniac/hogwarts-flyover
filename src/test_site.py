@@ -77,6 +77,26 @@ def class_colours(text=None):
 GLIMPSE = 0.05         # through the trees, at most this share of the points on the castle's upper parts shows
 SEATED_EYE_M, STANDING_EYE_M = 2.25, 2.7     # passengers' eyes above the rail top: mesh_transport.coach_body's
                                              # floor stands 1.05 m above it and its windows 1.95-2.8 m
+FRAG5 = (ROOT / "src" / "frag5.glsl").read_text(encoding="utf-8")
+TREE_DROP_M, TREE_SHEER = (float(re.search(rf"#define {name} (\S+)", FRAG5)[1]) for name in ("TREE_DROP_M", "TREE_SHEER"))
+
+
+def crown_relief(bed, ctr, r):
+    """(drop, steep) under each crown (centres `ctr`, radii `r`), the ground `bed` giving heights at (..., 2) world points:
+    in eight directions, the ground's greatest departure at the crown's edge from its foot, and its greatest fall or
+    climb over either half of a radius."""
+    a = np.arange(8) * np.pi / 4
+    d = np.stack([np.cos(a), np.sin(a)], 1)
+    foot = bed(ctr)[:, None]
+    mid, edge = (bed(ctr[:, None, :] + f * r[:, None, None] * d) for f in (0.5, 1.0))
+    return np.abs(edge - foot).max(axis=1), np.maximum(np.abs(mid - foot), np.abs(edge - mid)).max(axis=1)
+
+
+def level_crowns(bed, ctr, r):
+    """frag5.glsl's tree pass: whether each crown may stand, the ground at its edge lying within TREE_DROP_M of its foot,
+    or no half of its radii falling or climbing more steeply than TREE_SHEER (crown_relief). No tree grows elsewhere."""
+    drop, steep = crown_relief(bed, ctr, r)
+    return (drop <= TREE_DROP_M) | (steep <= TREE_SHEER * 0.5 * r)
 
 
 def railway_point(line, s):
@@ -85,17 +105,32 @@ def railway_point(line, s):
         float(np.interp(s, line.s, line.level))
 
 
+def crease(z, texel_m):
+    """How much the ground's slope changes from each texel to its next along the rows and columns: where two planes meet
+    in a crease, the difference of their slopes; where a bank rounds over, its curvature times about two texels."""
+    gn, ge = np.gradient(np.asarray(z, np.float64), texel_m)
+    out = np.zeros(z.shape)
+    for di, dj in ((0, 1), (1, 0)):
+        a, b = (slice(0, z.shape[0] - di), slice(0, z.shape[1] - dj)), (slice(di, None), slice(dj, None))
+        out[a] = np.maximum(out[a], np.hypot(ge[b] - ge[a], gn[b] - gn[a]))
+    return out
+
+
 class SightLines:
     """Lines of sight over a build's local layer, past its ground and the renderer's 3D trees (frag1.glsl: treeDens,
     treeH, treeSD): in each 7 m cell a tree stands at the cell's hashed spot where its hash falls below the tree density
-    there (on dry ground, off the roads, clear of buildings); near the station it is a pine, a cone on its trunk, and
-    elsewhere mostly a broadleaf, an ellipsoid crown on its trunk."""
+    there (on dry ground, off the roads, clear of buildings) and the ground at its crown's edge lies near its foot
+    (level_crowns); near the station it is a pine, a cone on its trunk, and elsewhere mostly a broadleaf, an ellipsoid
+    crown on its trunk. `footprint` (bytes on the local grid) stands in for the data's building distances, as a loaded
+    payload's footprint layer does in the page."""
     CELL_M, STEP_M, SHORT_M = 7.0, 0.5, 25.0     # sightlines stop short of the castle's own mound
 
-    def __init__(self, ms, data, lo, hi):
+    def __init__(self, ms, data, lo, hi, footprint=None):
         tex, self.ms, self.grid = data["tex"], ms, ms.Grid(data["meta"]["local"])
         self.bed = ms.decode(tex["locBed"])
         self.la, self.water = ms.decode(tex["locA"]) / 255.0, ms.decode(tex["locW"])
+        if footprint is not None:
+            self.la[..., 3] = footprint / 255.0
         poi = {p["name"]: np.asarray(p["p"], float) for p in data["meta"]["extras"]["poi"]}
         self.c0 = np.floor(np.asarray(lo, float) / self.CELL_M) - 2
         c1 = np.floor(np.asarray(hi, float) / self.CELL_M) + 2
@@ -111,9 +146,14 @@ class SightLines:
         con = h[:, 3] < con_f
         hh = h[:, 3] * 13.7 % 1.0
         height = np.where(con, 13.0 + 8.0 * hh, 10.0 + 9.0 * hh) * (0.72 + 0.28 * step(0.1, 0.8, dens))
-        self.trees = {"ctr": ctr, "H": np.where(h[:, 0] < dens, height, np.nan), "con": con,
-                      "r": np.where(con, 0.23 * height, 3.0 + 1.9 * (hh * 7.3 % 1.0))}
+        r = np.where(con, 0.23 * height, 3.0 + 1.9 * (hh * 7.3 % 1.0))
+        stands = (h[:, 0] < dens) & level_crowns(self.ground, ctr, r)
+        self.trees = {"ctr": ctr, "H": np.where(stands, height, np.nan), "con": con, "r": r, "hash": h, "dens": dens}
         self.shape = cz.shape
+
+    def ground(self, p):
+        """The local layer's ground at (..., 2) world points, read bilinearly."""
+        return self.ms.sample(self.bed, self.grid, p[..., 0], p[..., 1])
 
     @staticmethod
     def smooth(a, b, x):
@@ -913,11 +953,14 @@ class ForestExtentTests(unittest.TestCase):
         np.testing.assert_array_equal(self.read(keep, e[away], n[away]), 1.0)       # elsewhere as drawn
         self.assertEqual(float(self.read(keep, -894.0, 604.5)[0]), 0.0)             # the lone house: a clearing
 
-    def test_a_building_the_forest_covers_stands_in_its_homesteads_clearing_not_a_cutout(self):
-        """Its yard is clear, BUILDING_M round it, and the clearing spreads on beyond as its ground: at least
-        clearings.MIN_M2 in area and MIN_WIDE_M across, its edge wandering, the Forest thickening back gradually."""
+    def test_round_a_building_the_forest_covers_it_opens_in_a_natural_glade_thinning_out_gradually(self):
+        """The scene draws no building there. Its yard is clear, BUILDING_M round it, and a natural glade spreads on
+        beyond: at least clearings.MIN_M2 in area and MIN_WIDE_M across, its edge wandering. Beyond the edge the Forest
+        thins out over THIN_M or more, from a tenth to nine tenths of its density, across several of the renderer's 7 m
+        tree cells, so that trees stand scattered at its edge rather than in a wall of crowns."""
         import clearings
 
+        THIN_M = 24.0
         house = self.house(400.0, 2000.0)
         home = self.fx.homesteads(self.E, self.N, [house], self.TEXEL)
         self.assertEqual(float(self.read(home, *PackedSiteTests.bands(*house[1:], self.fx.BUILDING_M)).max()), 0.0)
@@ -925,7 +968,7 @@ class ForestExtentTests(unittest.TestCase):
         self.assertGreaterEqual(poly.area, clearings.MIN_M2)
         self.assertFalse(poly.buffer(-clearings.MIN_WIDE_M / 2).is_empty)
         ClearingTests.unlike_a_cutout(self, poly.exterior.coords)
-        self.assertGreaterEqual(ClearingTests.feather(home, self.E, self.N), self.fx.EDGE_M / 3)
+        self.assertGreaterEqual(ClearingTests.feather(home, self.E, self.N), THIN_M)
         np.testing.assert_array_equal(self.fx.keep({}, self.E, self.N, [house], self.TEXEL), home)
 
     def test_a_road_the_forest_ends_at_must_cut_something_off(self):
@@ -1043,6 +1086,56 @@ class CastleBaseTests(unittest.TestCase):
         self.assertLessEqual(float(g[between].max()), cb.GARDEN_BANK_GRADE + 0.02)
         np.testing.assert_array_equal(z[self.castle], self.PLATFORM)
 
+    GARDEN_CREASE = 0.15        # the most a filled bank's slope changes between neighbouring texels as it rounds over
+
+    def test_the_banks_filled_below_the_vegetable_patch_round_into_the_lawns_without_a_crease(self):
+        """Below the vegetable patch's terrace the base fills banks down to the lawns. As planes clipped to them they met
+        them in dead-straight creases, the slope below the greenhouses a polygonal pyramid (greenhouses-north): beyond
+        GARDEN_ROUND_M of the terrace their slope changes by less than GARDEN_CREASE between neighbouring texels."""
+        from scipy import ndimage as ndi
+
+        cb, toward = self.cb, np.array([-1.0, 0.0])
+        garden = np.hypot(self.E, self.N - 105.0) <= 35.0
+        shed = (np.abs(self.E - 10.0) <= 6.0) & (np.abs(self.N - 105.0) <= 4.0)
+        lawns = cb.shape("mound", self.ground, self.E, self.N, self.castle, self.lake_sd, self.PLATFORM, self.LAKE, toward)
+        z, _, hollow, _ = cb.shape("mound", self.ground, self.E, self.N, self.castle, self.lake_sd, self.PLATFORM,
+                                   self.LAKE, toward, garden, shed)
+        out = ndi.distance_transform_edt(~ndi.binary_fill_holes(hollow | shed)) * cb.TEXEL_M
+        banks = ndi.binary_dilation((z - lawns[0] > 0.05) & (out > 0.0), iterations=3) & (out > cb.GARDEN_ROUND_M)
+        self.assertGreater(int(banks.sum()), 1000)
+        self.assertLess(float(crease(z, cb.TEXEL_M)[banks].max()), self.GARDEN_CREASE)
+
+    FAN_DEG = 3.0               # the most a bank's fall turns from square to the straight edge above it
+
+    def test_the_banks_below_a_terrace_slanting_across_the_texels_fall_square_to_its_edge_not_in_fans(self):
+        """The vegetable patch's edge runs slantwise across the texels. Measured from its texels' stair-stepped edge, the
+        banks below it fell in fans, ridged at every step (tour 08). Along the middle of the bank below a straight edge,
+        past its rounding, the fall turns from square to the edge by less than FAN_DEG at nineteen points in twenty; and
+        greenhouses reaching past the terrace's edge, at a corner above a filled bank and beside the cut one up to the
+        castle, still stand level."""
+        cb, toward = self.cb, np.array([-1.0, 0.0])
+        for deg in (8.0, 14.0):
+            a = np.radians(deg)
+            u = self.E * np.cos(a) + (self.N - 95.0) * np.sin(a)
+            v = -self.E * np.sin(a) + (self.N - 95.0) * np.cos(a)
+            garden = (np.abs(u) <= 50.0) & (np.abs(v) <= 30.0)
+            corner = np.array([50.0 * np.cos(a) - 30.0 * np.sin(a), 95.0 + 50.0 * np.sin(a) + 30.0 * np.cos(a)])
+            v_west = (74.0 - 95.0 + 50.0 * np.sin(a)) / np.cos(a)              # the west side, 74 m north
+            west = np.array([-50.0 * np.cos(a) - v_west * np.sin(a), 74.0])
+            sheds = [(np.abs(self.E - at[0]) <= 6.0) & (np.abs(self.N - at[1]) <= 4.0) for at in (corner, west)]
+            glass = sheds[0] | sheds[1]
+            z = cb.shape("mound", self.ground, self.E, self.N, self.castle, self.lake_sd, self.PLATFORM, self.LAKE,
+                         toward, garden, glass, glass)[0].astype(np.float64)
+            g_south, g_east = np.gradient(z, cb.TEXEL_M)                       # rows run south
+            fall_u = g_east * np.cos(a) - g_south * np.sin(a)
+            fall_v = -g_east * np.sin(a) - g_south * np.cos(a)
+            middle = (np.abs(u) < 35.0) & (v > 30.0 + cb.GARDEN_ROUND_M + 2.0) & (v < 30.0 + 26.0)
+            turn = np.degrees(np.abs(np.arctan2(fall_u[middle], -fall_v[middle])))
+            with self.subTest(slant=deg):
+                self.assertLess(float(np.percentile(turn, 95)), self.FAN_DEG)
+                for shed in sheds:
+                    self.assertEqual(float(np.ptp(z[shed])), 0.0)
+
 
 class GroundsGradeTests(unittest.TestCase):
     """grounds_grade on synthetic ground: 2 m texels, rows running south."""
@@ -1089,6 +1182,8 @@ class GroundsGradeTests(unittest.TestCase):
         at = lambda z, p: float(z[int(np.argmin(np.abs(N[:, 0] - p[1]))), int(np.argmin(np.abs(E[0] - p[0])))])
         gates = at(F, drive[0])
         self.assertAlmostEqual(at(out, cabin), gates + rise, delta=0.05)
+        self.assertAlmostEqual(at(out, drive[0]), gates, delta=0.15)  # the gates keep their own ground, but for the
+                                                                      # blur along the edge of what the terrace raises
         self.assertGreaterEqual(float((out - F).min()), 0.0)              # it only ever raises the ground
         z = [at(out, p) for p in drive if np.hypot(*p) >= grounds_grade.TERRACE_REACH_M - 2.0 and p[0] < 0]
         # the drive never falls on its way up, but for a few centimetres where it leaves the gates' own ground
@@ -1098,6 +1193,22 @@ class GroundsGradeTests(unittest.TestCase):
         bank = (shore > 0.0) & (shore < 30.0)
         limit = np.maximum(F, grounds_grade.SHORE_M + grounds_grade.SHORE_GRADE * shore)
         self.assertLess(float((capped - limit)[bank].max()), 0.05)
+
+    TERRACE_CREASE = 0.11       # the most the terrace's slope changes between neighbouring texels
+
+    def test_the_cabins_terrace_rounds_over_into_its_banks_and_they_into_each_other_and_the_ground(self):
+        """The cabin's terrace met its 1-in-3 banks, and they each other and the ground round them, as planes meet: in
+        straight creases, the lawn's sides to the castle a straight-edged dark band before the Forest (forest-edge).
+        Over the ground it raises, its slope changes by less than TERRACE_CREASE between neighbouring texels."""
+        import grounds_grade
+        from scipy import ndimage as ndi
+
+        E, N = self.grid()
+        F = (10.0 + 0.1 * np.abs(E)).astype(np.float32)        # a valley with the cabin in its bottom
+        drive = np.column_stack([np.arange(-190.0, 191.0, 2.0), np.zeros(191)])
+        out = grounds_grade.cabin_terrace(F, E, N, (0.0, 0.0), drive, 4.0, np.full(E.shape, 1000.0), 0.0)
+        raised = ndi.binary_dilation(out - F > 0.05, iterations=3)
+        self.assertLess(float(crease(out, 2.0)[raised].max()), self.TERRACE_CREASE)
 
 
     def test_the_station_wood_rises_behind_the_wall_and_west_of_the_walk_but_leaves_the_walk_its_ground(self):
@@ -1183,6 +1294,43 @@ class GroundsGradeTests(unittest.TestCase):
         rest[10:30, :35] = False
         self.assertEqual(float(np.abs(ground - F)[rest].max()), 0.0)
 
+    def test_the_forecourt_joins_the_doors_to_the_drive_from_the_gates_not_to_a_nearer_road(self):
+        """build_final's forecourt at the main doors, where the grounds map's roads stop short of the castle."""
+        import grounds_grade
+
+        E, N = self.grid(60.0)
+        road = np.zeros(E.shape)
+        road[:, 18:21] = 1.0                    # the drive, 6 m wide, running north from the gates at the south edge
+        road[28:32, 36:39] = 1.0                # a court's road east of the doors: nearer, but cut off from the gates
+        court = grounds_grade.forecourt(road, E, N, (0.0, 0.0), (E[59, 19], N[59, 19]), 8.0)
+
+        def at(e, n):
+            return float(court[int(round((59.0 - n) / 2.0)), int(round((e + 59.0) / 2.0))])
+        for e, n in ((-17.0, 1.0), (-9.0, 3.0), (-9.0, -3.0), (-1.0, 1.0)):        # from the doors to the drive,
+            self.assertLessEqual(at(e, n), 0.0)                                    # 8 m across
+        for e, n in ((-9.0, 7.0), (-9.0, -7.0), (9.0, 1.0)):                      # and no further, nor towards the court
+            self.assertGreater(at(e, n), 0.0)
+
+    def test_the_distance_to_a_segment_of_no_length_is_the_distance_to_its_point(self):
+        """So a forecourt whose doors already touch the drive is a disc round them."""
+        import grounds_grade
+
+        E, N = self.grid(10.0)
+        np.testing.assert_allclose(grounds_grade.segment_distance(E, N, (1.0, 1.0), (1.0, 1.0)), np.hypot(E - 1.0, N - 1.0))
+
+    def test_ground_a_road_closes_round_is_paved_only_if_too_small_to_be_a_lawn(self):
+        """A road inked as two lines, with a strip of grass between them, is one road; a lawn the roads ring stays."""
+        import grounds_grade
+
+        paths = np.zeros((40, 40), bool)
+        paths[4:8, 4:10] = True
+        paths[5:7, 5:9] = False                 # a strip 4 m by 8 m between the road's two lines
+        paths[20:28, 20:28] = True
+        paths[22:26, 22:26] = False             # a lawn 8 m by 8 m the roads ring
+        specks = grounds_grade.specks(paths, 2.0)
+        self.assertTrue(specks[5:7, 5:9].all())
+        self.assertEqual(int(specks.sum()), 8)
+
 
 class ClearingTests(unittest.TestCase):
     """src/clearings.py on synthetic ground: 2 m texels, rows running south."""
@@ -1197,10 +1345,11 @@ class ClearingTests(unittest.TestCase):
     @staticmethod
     def feather(m, E, N):
         """How far, on average, a clearing's multiplier `m` takes to rise from 0.1 to 0.9 across its edge: the area
-        between those two outlines over the length of the half-way one."""
+        between those two outlines over the length of the half-way one, each the largest part at its level (the fringe
+        may leave a pocket of its own)."""
         import clearings
 
-        (lo,), (mid,), (hi,) = (clearings.outlines(m, E, N, level) for level in (0.1, 0.5, 0.9))
+        lo, mid, hi = (max(clearings.outlines(m, E, N, level), key=lambda p: p.area) for level in (0.1, 0.5, 0.9))
         return (hi.area - lo.area) / mid.exterior.length
 
     @staticmethod
@@ -1530,6 +1679,151 @@ class GroundColourTests(unittest.TestCase):
         self.assertGreater(max(frequencies, default=0.0), 0.5)
 
 
+class StreamEndTests(unittest.TestCase):
+    """build_final.cut_off on a synthetic 2 m layer: a burn 6 m wide that a map draws running east off its edge at 120 m."""
+
+    @classmethod
+    def setUpClass(cls):
+        j, i = np.meshgrid(np.arange(100), np.arange(60))
+        cls.x, y = j * 2.0, i * 2.0
+        cls.burn = (np.abs(y - 60.0) - 3.0).astype(np.float32)
+        cls.source = np.where(cls.x < 120.0, 1, 0)
+
+    def half_width(self, stream, x):
+        return float(-stream[:, int(x / 2.0)].min())
+
+    def test_a_burn_cut_off_by_its_maps_edge_narrows_to_nothing_there(self):
+        import build_final
+
+        out = build_final.cut_off(np.where(self.source == 1, self.burn, 50.0), self.source, 2.0)
+        edge = 118.0                                                    # the map's last texels
+        self.assertEqual(int((out[:, int(edge / 2.0)] < 0).sum()), 0)   # no water meets the edge,
+        self.assertLess(self.half_width(out, edge - 2.0), 0.3)           # a trickle a texel short of it,
+        self.assertAlmostEqual(self.half_width(out, edge - build_final.SOURCE_M / 2), 1.5, delta=0.5)   # half as wide
+        self.assertEqual(self.half_width(out, edge - build_final.SOURCE_M - 4.0), 3.0)   # and as drawn beyond its reach
+
+    def test_a_burn_carried_on_beyond_its_maps_edge_is_left_as_drawn(self):
+        import build_final
+
+        np.testing.assert_array_equal(build_final.cut_off(self.burn, self.source, 2.0), self.burn)
+
+
+class RegionalRiverTests(unittest.TestCase):
+    """build_regional.carve_rivers on a synthetic 10 m level: ground sloping gently, and a river 12 m wide running
+    straight across it, slantwise to the texels."""
+    EDGE_M = 2.0                # the water's edge strays no further than this from a line along the river
+
+    def test_a_river_runs_between_smooth_banks_not_down_a_stepped_trench(self):
+        """The renderer reads the level's water depth bilinearly (pack.py stores dry depths below -1 m as -8). Along the
+        river, away from its ends, its water is never broken, and the water's edge on each side keeps within EDGE_M of
+        its usual offset from the river's line at nineteen points in twenty. Carved round a raster of the line, a texel
+        wide, the water ran in a trench stepped wherever the raster stepped (site/linear-clearing-3)."""
+        import build_regional as br
+        from scipy import ndimage as ndi
+
+        R, st = 1000.0, 10.0
+        X, Y, _ = br.grid(R, st)
+        bed = (300.0 + 0.03 * X - 0.02 * Y).astype(np.float32)
+        surf = np.full(bed.shape, br.NOWATER, np.float32)
+        line = np.array([[-800.0, -300.0], [800.0, 200.0]])
+        bed, surf = br.carve_rivers(bed, surf, R, st, [(line, 6.0)], np.zeros(bed.shape, bool), bed)
+        depth = np.where(surf > -999.0, surf - bed, -8.0)
+        depth = np.where(depth < -1.0, -8.0, depth)
+        length = float(np.hypot(*(line[1] - line[0])))
+        ahead = (line[1] - line[0]) / length
+        side = np.array([-ahead[1], ahead[0]])
+        s, t = np.arange(200.0, length - 200.0, 5.0), np.arange(-25.0, 25.01, 0.1)
+        at = line[0] + s[:, None, None] * ahead + t[None, :, None] * side
+        wet = ndi.map_coordinates(depth, [(at[..., 1] + R) / st, (at[..., 0] + R) / st], order=1) > 0.0
+        self.assertTrue(wet.any(axis=1).all())
+        for edge in (np.array([t[r].min() for r in wet]), np.array([t[r].max() for r in wet])):
+            self.assertLess(float(np.percentile(np.abs(edge - np.median(edge)), 95)), self.EDGE_M)
+
+    def test_a_burn_narrower_than_a_texel_runs_unbroken_at_any_bearing(self):
+        """Measured from its line, a burn half a metre wide had no texel centre in its water wherever the line passed
+        between them, and a bilinear read of the depth broke it into pieces. It is drawn as narrow as the level allows."""
+        import build_regional as br
+        from scipy import ndimage as ndi
+
+        R, st = 500.0, 10.0
+        X, Y, _ = br.grid(R, st)
+        for bearing in (0.0, 10.0, 30.0, 45.0):
+            with self.subTest(bearing=bearing):
+                bed = (300.0 + 0.002 * X).astype(np.float32)
+                ahead = np.array([np.cos(np.radians(bearing)), np.sin(np.radians(bearing))])
+                line = np.array([-400.0 * ahead, 400.0 * ahead]) + np.array([0.0, st / 2])   # between texel rows
+                bed, surf = br.carve_rivers(bed, np.full(bed.shape, br.NOWATER, np.float32), R, st, [(line, 0.25)],
+                                            np.zeros(bed.shape, bool), bed)
+                depth = np.where(surf > br.NOWATER + 1, surf - bed, -8.0)
+                at = line[0] + np.arange(100.0, 700.0, 1.0)[:, None] * ahead
+                read = ndi.map_coordinates(np.where(depth < -1.0, -8.0, depth), [(at[:, 1] + R) / st, (at[:, 0] + R) / st],
+                                           order=1)
+                self.assertGreater(float(read.min()), 0.0)
+
+    def test_a_river_leaving_a_loch_keeps_to_its_level_and_digs_no_pit_beside_it(self):
+        """The loch's own texels are not carved, but its deep bed set the river's level where the line runs through it:
+        the ground beside the loch, by the river's mouth, was carved metres below the loch's water."""
+        import build_regional as br
+
+        R, st, level = 1000.0, 10.0, 299.6
+        X, Y, _ = br.grid(R, st)
+        loch = np.hypot(X, Y) < 200.0
+        bed = np.where(loch, level - 9.6, 300.0).astype(np.float32)
+        surf = np.where(loch, level, br.NOWATER).astype(np.float32)
+        ground = np.where(loch, level, 300.0).astype(np.float32)      # the elevation model sees the loch's water
+        line = np.array([[-800.0, -300.0], [800.0, 200.0]])
+        bed, surf = br.carve_rivers(bed, surf, R, st, [(line, 6.0)], loch, ground)
+        shore = ~loch & (np.hypot(X, Y) < 260.0)
+        self.assertGreaterEqual(float(bed[shore].min()), level - br.RIVER_SINK_M - br.RIVER_DEEP_M)
+        river = shore & (surf > br.NOWATER + 1)
+        self.assertGreater(int(river.sum()), 4)
+        self.assertGreaterEqual(float(surf[river].min()), level - br.RIVER_SINK_M - 1e-3)
+
+    def test_a_rivers_stretch_mapped_as_water_neither_raises_nor_cuts_the_ground_beside_it(self):
+        """OpenStreetMap maps some broad stretches of a river as water bodies, and the level gives each water body one
+        level, its ground's median: below the ground at the stretch's upper end and above it at its lower. Taken from
+        that level, the river built the ground beside a lower end up to it, by as much as 45 m 4 km south-west of the
+        castle at X, and cut the ground beside an upper end down to it. Its level follows the elevation model's ground,
+        so beside the stretch the ground is raised less than half a metre and cut no deeper than the river; and its
+        water runs on unbroken out of the upper end, where the stretch's level, spread over the shore beside it as the
+        level's water is, stands below the river's."""
+        import build_regional as br
+        from scipy import ndimage as ndi
+
+        R, st = 1000.0, 10.0
+        X, Y, _ = br.grid(R, st)
+        ground = (300.0 - 0.05 * X).astype(np.float32)                 # the valley falls 5 m in 100 eastward
+        stretch = (np.abs(X) < 300.0) & (np.abs(Y) < 25.0)
+        level = float(np.median(ground[stretch]))
+        bed = np.where(stretch, level - 3.0, ground).astype(np.float32)
+        shore = ndi.binary_dilation(stretch, iterations=2) & ~stretch & (ground >= level - 0.05)
+        surf = np.where(stretch | shore, level, br.NOWATER).astype(np.float32)
+        line = np.array([[-800.0, 0.0], [800.0, 0.0]])
+        out, wet = br.carve_rivers(bed, surf, R, st, [(line, 6.0)], stretch, ground)
+        beside = ~stretch & (np.abs(X) < 400.0)
+        self.assertLess(float((out - ground)[beside].max()), 0.5)
+        self.assertLess(float((ground - out)[beside].max()), br.RIVER_SINK_M + br.RIVER_DEEP_M)
+        depth = np.where(wet > br.NOWATER + 1, wet - out, -8.0)
+        x = np.arange(-500.0, -300.0, 1.0)
+        self.assertGreater(float(ndi.map_coordinates(depth, [(0.0 * x + R) / st, (x + R) / st], order=1).min()), 0.0)
+
+    def test_a_river_down_a_narrow_valley_raises_no_ground_even_a_texel_off_its_bottom(self):
+        """Smoothed over a texel, the ground at a narrow valley's bottom stood metres above it, and more where the river's
+        line ran a texel up the valley's side: the river's water, standing on that, raised the valley's bottom by up to
+        5 m at X. Its level is set by the lowest ground across its line, out a texel beyond its half width."""
+        import build_regional as br
+
+        R, st = 1000.0, 10.0
+        X, Y, _ = br.grid(R, st)
+        ground = (300.0 + 0.3 * np.abs(Y)).astype(np.float32)             # 3 m deep a texel out
+        for off in (0.0, st):
+            with self.subTest(off=off):
+                line = np.array([[-800.0, off], [800.0, off]])
+                out, _ = br.carve_rivers(ground, np.full(ground.shape, br.NOWATER, np.float32), R, st, [(line, 6.0)],
+                                         np.zeros(ground.shape, bool), ground)
+                self.assertLess(float((out - ground)[np.abs(X) < 600.0].max()), 0.5)
+
+
 class RailwayEarthworksTests(unittest.TestCase):
     """fix_railway's rules on synthetic ground: a second run must decide as the first did."""
 
@@ -1662,6 +1956,105 @@ class PackedSiteTests(unittest.TestCase):
         low = beside & (bed < self.site["lake"] - 0.5)          # a dry texel below the water beside it: a wall of water
         where = [[round(float(v)) for v in self.grid.to_world(i, j)] for i, j in np.argwhere(low)[:5]]
         self.assertEqual((int(low.sum()), where), (0, []))
+
+    SHORE_SPREAD = 0.2      # the spread of the water's edge between a wet texel and its dry neighbour (uniform: 0.29)
+    SHORE_RISE = 0.4        # the steepest the ground rises from the water's edge, but for a tenth of it
+    LOW_SHORE_M = 6.0       # a shore with no ground higher than this above the lake within three texels
+    TOMB_SHORE_M = 150.0
+
+    def test_the_lake_meets_its_low_shores_along_a_beach_not_a_step_on_the_texels_grid(self):
+        """The lake's floor stepped down a metre at its shore, so its edge, drawn where the depth passes nought between a
+        wet texel and its dry neighbour, lay at one place between every such pair: teeth along the texels' grid at the
+        foot of a pale step (tours 24 to 26 round the tomb's peninsula, and the shingle beyond the ship's inlet). On
+        the lake's low shores the edge falls anywhere between the pair as the shore runs, and the ground rises from it
+        no steeper than SHORE_RISE, round the tomb as everywhere; and the dry ground beside the water is shingle."""
+        from scipy import ndimage as ndi
+
+        bed, wd, surface = self.layer("locBed"), self.layer("locW"), self.layer("locN")[..., 0]
+        lake, run = self.site["lake"], self.grid.texel_size()[0]
+        low = ndi.maximum_filter(bed, size=7) < lake + self.LOW_SHORE_M
+        water = (wd > 0) & (np.abs(bed + wd - lake) < 0.05)
+        rows, cols = bed.shape
+        spread, rise, at = [], [], []
+        for di, dj in ((0, 1), (1, 0)):
+            a = (slice(0, rows - di), slice(0, cols - dj))
+            b = (slice(di, rows), slice(dj, cols))
+            for wet, dry in ((a, b), (b, a)):
+                edge = water[wet] & (wd[dry] <= 0) & (wd[dry] > -1.0) & low[wet] & low[dry]
+                spread.append(wd[wet][edge] / (wd[wet][edge] - wd[dry][edge]))
+                rise.append((bed[dry][edge] - bed[wet][edge]) / run)
+                at.append(np.column_stack(self.grid.to_world(*np.nonzero(edge))))
+        spread, rise, at = np.concatenate(spread), np.concatenate(rise), np.concatenate(at)
+        tomb = np.hypot(*(at - np.asarray(self.meta["extras"]["tomb"], float)).T) < self.TOMB_SHORE_M
+        self.assertGreater(int(tomb.sum()), 100)
+        for name, pairs in (("every low shore", np.ones(len(spread), bool)), ("round the tomb", tomb)):
+            with self.subTest(shore=name):
+                self.assertGreater(float(np.std(spread[pairs])), self.SHORE_SPREAD)
+                self.assertLess(float(np.percentile(rise[pairs], 90)), self.SHORE_RISE)
+        beside = ndi.binary_dilation(water, structure=np.ones((3, 3), bool)) & (wd <= 0) & low
+        self.assertEqual(np.bincount(surface[beside], minlength=8)[:7].tolist(), [0] * 7)
+
+    def test_no_burn_the_maps_draw_ends_square_at_a_maps_edge(self):
+        """Hogsmeade's two burns met at its map's edge and ran off it, where neither map nor a real watercourse carries
+        them on, so their water ended square in the meadow in a broad slab (renderer/streams). Every burn a map draws
+        off its edge narrows to nothing there (build_final.cut_off): no map's water meets dry ground across its edge."""
+        from scipy import ndimage as ndi
+        import build_final
+
+        stream = self.ms.sd_bytes(self.layer("locB")[..., 1])
+        FU, FV = build_final.local_grid()
+        (hu, hv), (gu, gv) = build_final.ff_to_h(FU, FV), build_final.ff_to_g(FU, FV)
+        on = lambda u, v, w, h: (u >= 0) & (u < w - 1) & (v >= 0) & (v < h - 1)
+        source = np.where(on(hu, hv, build_final.H_W, build_final.H_H), 1,
+                          np.where(on(gu, gv, build_final.G_W, build_final.G_H), 2, 0))
+        wet, cross = stream < 0, ndi.generate_binary_structure(2, 1)
+        ends = np.zeros(wet.shape, bool)
+        for s in (1, 2):
+            ends |= wet & (source == s) & ndi.binary_dilation((source != s) & ~wet, structure=cross)
+        where = [[round(float(v)) for v in self.grid.to_world(i, j)] for i, j in np.argwhere(ends)[::25][:5]]
+        self.assertEqual((int(ends.sum()), where), (0, []))
+
+    def test_the_rivers_beyond_the_2m_layer_run_between_smooth_banks_not_down_a_stepped_trench(self):
+        """Beyond the 2 m layer, within 4.5 km of the castle, frag1.glsl reads the 10 m level's water depth (MW)
+        bilinearly. Along each river it carries there, its water is never broken, and away from lochs and from the
+        river's other reaches, each edge of the water across its line lies within RegionalRiverTests.EDGE_M of where
+        the river's width puts it, at nineteen points in twenty. Carved round a raster of the line, it was broken where
+        the raster stepped, and its edges strayed with the raster's steps (site/linear-clearing-3)."""
+        import build_regional as br
+        from scipy.spatial import cKDTree
+
+        osm = json.loads((inputs.require("site-osm-water-x") / "osm_water_wide.json").read_text(encoding="utf-8"))
+        rivers = br.osm_rivers(osm, self.site["anchor"])
+        read, t = self.regional_read("MW"), np.arange(-30.0, 30.01, 0.25)
+        lines = []
+        for r, (xy, half) in enumerate(rivers):
+            s = np.concatenate([[0.0], np.cumsum(np.hypot(*np.diff(xy, axis=0).T))])
+            along = np.arange(0.0, s[-1], 1.0)
+            lines.append((r, along, np.column_stack([np.interp(along, s, xy[:, 0]), np.interp(along, s, xy[:, 1])])))
+        owner = np.concatenate([np.full(len(a), r) for r, a, _ in lines])
+        arc = np.concatenate([a for _, a, _ in lines])
+        reaches = cKDTree(np.vstack([p for _, _, p in lines]))
+        off, broken = [], 0
+        for (r, along, pts), (_, half) in zip(lines, rivers):
+            at, ahead = pts[::5], np.gradient(pts, axis=0)[::5]
+            ahead /= np.maximum(np.hypot(*ahead.T), 1e-9)[:, None]
+            side = np.column_stack([-ahead[:, 1], ahead[:, 0]])
+            i, j = self.grid.to_texel(*at.T)
+            margin = 100.0 / self.grid.texel_size()[0]
+            beyond = (i < -margin) | (j < -margin) | (i > self.grid.ny + margin) | (j > self.grid.nx + margin)
+            depth = read(*(at[:, None, :] + t[None, :, None] * side[:, None, :]).transpose(2, 0, 1))
+            for k in np.nonzero(beyond & (np.abs(at).max(axis=1) < 4500.0) & (depth.max(axis=1) < 1.5))[0]:
+                wet = depth[k] > 0.0                                   # deeper water is a loch's
+                runs = np.split(np.arange(len(t)), np.nonzero(np.diff(wet.astype(int)))[0] + 1)
+                mine = [x for x in runs if wet[x[0]] and t[x[0]] <= 0.0 <= t[x[-1]]]
+                if not mine:
+                    broken += 1
+                elif all(owner[n] == r and abs(arc[n] - along[5 * k]) < 60.0
+                         for n in reaches.query_ball_point(at[k], 40.0)):     # no other reach near
+                    off += [abs(-t[mine[0][0]] - half), abs(t[mine[0][-1]] - half)]
+        self.assertEqual(broken, 0)
+        self.assertGreater(len(off), 200)
+        self.assertLess(float(np.percentile(off, 95)), RegionalRiverTests.EDGE_M)
 
     def test_no_stream_stands_above_the_lake_on_the_ground_raised_round_the_castle(self):
         """White Hound's outflow runs "from the lake north and down through the forest": where the castle's base buries
@@ -2192,6 +2585,21 @@ class PackedSiteTests(unittest.TestCase):
                 self.assertGreater(len(rows), 0)
                 self.assertLessEqual(set(np.unique(surface[rows, cols]).tolist()), place[r["id"]])
 
+    def test_each_homesteads_glade_is_meadow_not_the_croft_the_imagery_shows(self):
+        """The scene draws no building in a homestead's glade, so its ground reads as meadow, not as the imagery's pale
+        yard: at every texel inside its outline the Forest layer's field share, which tints the ground grass-green
+        (frag4.glsl groundAlb), is nine tenths or more."""
+        homes = [r for r in self.meta.get("clearings", []) if r["id"] == "homestead"]
+        if not homes:
+            self.skipTest("this site's Forest covers no buildings")
+        grid = self.ms.Grid(self.meta["forest"])
+        field = self.layer("forest")[..., 1] / 255.0
+        for r in homes:
+            rows, cols = self.inner_texels(r, grid, 0.0)
+            with self.subTest(at=np.round(np.mean(r["outline"], axis=0)).tolist()):
+                self.assertGreater(len(rows), 0)
+                self.assertGreaterEqual(float(field[rows, cols].min()), 0.9)
+
     CONTRAST = 0.01             # a change in the ground's albedo this big, in any channel, shows (meadow to lawn: 0.02)
     OWN_EDGES = (3, 4, 6, 7)    # earth, beds, the pitch and shingle: paths, plots and shores, which keep their own edges
     STRETCH = 20                # points 2 m apart along an edge: 40 m
@@ -2574,6 +2982,57 @@ class PackedSiteTests(unittest.TestCase):
         road = self.ms.sample(self.layer("locA")[..., 0].astype(np.float64), self.grid, E, N)
         self.assertEqual(float(road.max()), 0.0)
 
+    def test_the_drive_ends_in_one_forecourt_at_the_foot_of_the_main_doors_steps(self):
+        """White Hound: "a flight of stone steps" up to "the huge, oak front door". The grounds map's roads stop short of
+        the castle, and its ink round the steps is a blot: below them the inspection found a dark splat with spiky arms,
+        broken by a strip of grass and veiled by the road's soft edge (castle/main-doors). From the doors out past the
+        steps' foot to the drive, across the steps' width, the ground is one path, its surface and its road together,
+        as the shader draws them (a hard class where its weight is a half or more); the drive's ink near the doors
+        closes round no strip of grass; and the ground under the walls round the doors keeps the castle base's level,
+        which the roads' smoothing, reaching it now, would sink."""
+        import mesh_castle
+        from scipy import ndimage as ndi
+
+        scene = json.loads((ROOT / "src" / "mesh_scene.json").read_text(encoding="utf-8"))
+        traced = {t["id"]: t for t in next(a for a in scene["assets"] if a["id"] == "castle")["traced"]}
+        plan, _ = mesh_castle.plan_fit(traced["plan-fit"]["plan_px"], {k: tuple(v) for k, v in self.meta["named"].items()})
+        door = plan(*traced["front-steps"]["plan_px"])
+        castle, walls = self.ms.Grid(self.meta["castle"]), self.ms.castle_class_sd(self.data).min(axis=-1)
+
+        def beyond(e, n):
+            return self.ms.sample(walls, castle, np.atleast_1d(np.asarray(e, float)), np.atleast_1d(np.asarray(n, float)))
+        out = np.array([beyond(door[0] + 1.0, door[1])[0] - beyond(door[0] - 1.0, door[1])[0],
+                        beyond(door[0], door[1] + 1.0)[0] - beyond(door[0], door[1] - 1.0)[0]])
+        out /= np.hypot(*out)
+        half = mesh_castle.DOOR.width / 2 + mesh_castle.STAIR_MARGIN_M
+        t, s = np.meshgrid(np.arange(0.0, 10.01, 0.25), np.arange(-half, half + 0.01, 0.2))
+        E, N = door[0] + out[0] * t - out[1] * s, door[1] + out[1] * t + out[0] * s
+        open_air = beyond(E.ravel(), N.ravel()).reshape(E.shape) > 0.5
+        surface, road = self.layer("locN")[..., 0], self.layer("locA")[..., 0] / 255.0
+        path = self.ms.sample((surface == 3).astype(np.float64), self.grid, E, N)[open_air]
+        self.assertGreater(len(path), 300)
+        self.assertGreaterEqual(float(path.min()), 0.5)
+        self.assertGreaterEqual(float(self.ms.sample(road, self.grid, E, N)[open_air].min()), 0.5)
+
+        i, j = np.mgrid[0:surface.shape[0], 0:surface.shape[1]]
+        e, n = self.grid.to_world(i, j)
+        near = np.hypot(e - door[0], n - door[1]) < 30.0
+        lab, _ = ndi.label(surface == 3, structure=np.ones((3, 3), bool))
+        row, col = (np.rint(v).astype(int) for v in self.grid.to_texel(E[open_air], N[open_air]))
+        reach = [float(np.hypot(e[lab == k] - door[0], n[lab == k] - door[1]).max()) for k in np.unique(lab[row, col])]
+        self.assertGreater(min(reach), 200.0)                           # all one with the drive, no blot of its own
+        ink = (surface == 3) | (road >= 0.5)
+        holes, count = ndi.label(ndi.binary_fill_holes(ink) & ~ink)
+        strips = np.bincount(holes.ravel(), minlength=count + 1) * float(np.prod(self.grid.texel_size())) < 100.0
+        self.assertFalse((strips[holes] & (holes > 0) & near).any())
+
+        close = np.hypot(e - door[0], n - door[1]) < 12.0               # and the ground under the walls round the doors
+        under = np.zeros(close.shape, bool)                             # keeps the castle base's level: the roads'
+        under[close] = beyond(e[close], n[close]) < 0.5                 # smoothing would sink the forecourt's end there
+        drop = np.abs(self.layer("locBed") - self.layer("locCB"))[under]
+        self.assertGreater(len(drop), 20)
+        self.assertLessEqual(float(drop.max()), 1.5 * self.data["tex"]["locBed"]["q"])     # a step, in single precision
+
     def test_the_ground_under_the_pitch_and_its_stands_lies_at_the_playing_level(self):
         E, N = self.pitch_points(0.0)
         bed = self.ms.sample(self.layer("locBed"), self.grid, E, N)
@@ -2651,10 +3110,10 @@ class PackedSiteTests(unittest.TestCase):
                                                 order=1, mode="nearest")
 
     def far_trees(self, lo, hi):
-        """The renderer's trees (frag1.glsl treeSD, treeDens, treeH) in the 7 m cells from `lo` to `hi` (east, north),
-        where they are White Hound's Forest layer's: off the local layer, within 2.5 km of the castle, where no
-        plantation is read, and far inside his layer. (centres, density there, whether a tree stands, whether it is a
-        pine, its height)."""
+        """The renderer's trees (frag1.glsl treeSD, treeDens, treeH; frag5.glsl's tree pass) in the 7 m cells from `lo` to
+        `hi` (east, north), where they are White Hound's Forest layer's: off the local layer, within 2.5 km of the castle,
+        where no plantation is read, and far inside his layer. (centres, density there, whether a tree stands, whether it
+        is a pine, its height)."""
         import shapely
 
         step = SightLines.smooth
@@ -2679,7 +3138,9 @@ class PackedSiteTests(unittest.TestCase):
                                            0.85 * (1.0 - step(260.0, 480.0, np.hypot(*(ctr - poi["Grawp's clearing"]).T)))])
         hh = h[:, 3] * 13.7 % 1.0
         height = np.where(con, 13.0 + 8.0 * hh, 10.0 + 9.0 * hh) * (0.72 + 0.28 * step(0.1, 0.8, dens))
-        return ctr, dens, h[:, 0] < dens, con, height
+        r = np.where(con, 0.23 * height, 3.0 + 1.9 * (hh * 7.3 % 1.0))
+        bed = self.regional_read("MBed")
+        return ctr, dens, (h[:, 0] < dens) & level_crowns(lambda p: bed(p[..., 0], p[..., 1]), ctr, r), con, height
 
     def test_white_hounds_forest_grows_no_tree_on_the_real_roads_railway_or_buildings(self):
         import forest_extent as fx

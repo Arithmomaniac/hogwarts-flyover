@@ -18,7 +18,7 @@ import assets_testing as world  # noqa: E402
 import mesh_willow  # noqa: E402
 from materials import code  # noqa: E402
 import materials.willow as bark  # noqa: E402
-from materials.willow import BARK_AXES  # noqa: E402
+from materials.willow import BARK_AXES, LYING  # noqa: E402
 from mesh_source import CHANNELS, Grid, decode, sample  # noqa: E402
 
 # the faults trimesh finds in this family's decoded meshes (assets_testing.mesh_faults), pinned: none
@@ -490,14 +490,14 @@ class WillowLodTests(unittest.TestCase):
 
 
 def jitter(q):
-    """The bark shader's plate centres (materials.willow._JITTER): each cell's centre, relative to the cell's corner."""
+    """The bark shader's cell centres (materials.willow._JITTER): each cell's centre, relative to the cell's corner."""
     hq = (q * np.array([0.1031, 0.103, 0.0973])) % 1.0
     hq = hq + np.sum(hq * (hq[:, [1, 0, 2]] + 33.33), axis=1, keepdims=True)
     return 0.5 + bark.JITTER_AMP * (((hq[:, [0, 0, 1]] + hq[:, [1, 0, 0]]) * hq[:, [2, 1, 0]]) % 1.0 - 0.5)
 
 
 def border(m1, rs):
-    """The distance from the point to the nearest border of the plate whose centre is m1 against the centres rs."""
+    """The distance from the point to the nearest border of the cell whose centre is m1 against the centres rs."""
     b = rs - m1[:, None]
     bb = np.einsum("nij,nij->ni", b, b)
     eb = np.einsum("nij,nij->ni", 0.5 * (m1[:, None] + rs), b) / np.sqrt(np.maximum(bb, 1e-12))
@@ -505,9 +505,9 @@ def border(m1, rs):
 
 
 def bark_net(S, reach=1):
-    """The bark shader's plate net (materials.willow.BARK_P3) at points S in its cell space: each point's distance to the
-    nearest plate border, in cells, found as the shader does (the nearest centre, then the nearest border round it), and
-    its plate's cell. `reach` 2 searches 5x5x5 cells both times: the exact net, for any jitter."""
+    """The bark shader's net (materials.willow.BARK_P3) at points S in its cell space: each point's distance to the
+    nearest cell border, in cells, found as the shader does (the nearest centre, then the nearest border round it).
+    `reach` 2 searches 5x5x5 cells both times: the exact net, for any jitter."""
     span = np.arange(-reach, reach + 1, dtype=float)
     offsets = np.stack(np.meshgrid(span, span, span, indexing="ij"), -1).reshape(-1, 3)
     c = np.floor(S)
@@ -516,45 +516,181 @@ def bark_net(S, reach=1):
     near = np.argmin(np.einsum("nij,nij->ni", rs, rs), axis=1)
     m1, mo = rs[np.arange(len(S)), near], offsets[near]
     if reach > 1:
-        return border(m1, rs), c + mo
-    round_ = np.stack([mo + o + jitter(c + mo + o) - f for o in offsets], axis=1)
-    return border(m1, round_), c + mo
+        return border(m1, rs)
+    return border(m1, np.stack([mo + o + jitter(c + mo + o) - f for o in offsets], axis=1))
 
 
-def plate_shade(cell):
-    """The shader's shade of each plate, by its cell."""
-    return bark.SHADE_LO + bark.SHADE_AMP * ((np.sin(cell @ np.array([12.9898, 78.233, 37.719])) * 43758.5453) % 1.0)
+def ridge(e):
+    """The bark's height over the furrows' floor (0) to the ridges' crests (1), from the distance to the border."""
+    w = np.clip((e - bark.RIDGE_E) / bark.RIDGE_W, 0, 1)
+    return 1 - w * w * (3 - 2 * w)
+
+
+def bark_space(p, n, aux):
+    """The bark shader's cell space (materials.willow.BARK_P3) at points p with normals n on wood of codes aux: round
+    the trunk's axis on the trunk, round the normal on every other piece of wood, and along the code's direction."""
+    dot = lambda a, b: np.einsum("ij,ij->i", a, b)
+    aux = np.asarray(aux)
+    d = np.array([BARK_AXES[int(a)] for a in aux])
+    e1 = np.cross(d, np.where(np.abs(d[:, 1:2]) > 0.9, [[1.0, 0.0, 0.0]], [[0.0, 1.0, 0.0]]))
+    e1 /= np.linalg.norm(e1, axis=1, keepdims=True)
+    e2 = np.cross(d, e1)
+    x0, y0, z0, lx, lz = bark.TRUNK_AXIS
+    y0 += world.levels()["lake"]                         # as the shader takes it from LAKE
+    trunk = aux == BARK[1]
+    o = np.where(trunk[:, None], p - [x0, y0, z0] - np.outer(p[:, 1] - y0, [lx, 1.0, lz]), n - d * dot(n, d)[:, None])
+    o /= np.maximum(np.linalg.norm(o, axis=1, keepdims=True), 1e-4)
+    r = np.where(trunk, bark.ROUND[BARK[1]], bark.ROUND["wood"])
+    return np.stack([r * dot(o, e1), dot(p, d) * bark.STRETCH, r * dot(o, e2)], axis=1) * bark.CELL_PER_M
+
+
+def round_trunk(a, y, r=1.0):
+    """Points (and their normals) on a circular trunk r metres round the Willow's axis, at bearings a, y over its base."""
+    x0, y0, z0, lx, lz = bark.TRUNK_AXIS
+    n = np.stack([np.cos(a), np.zeros_like(a), np.sin(a)], -1)
+    return np.array([x0, y0 + world.levels()["lake"], z0]) + np.outer(y, [lx, 1.0, lz]) + np.asarray(r)[..., None] * n, n
+
+
+def bark_patch(width_m=1.0, height_m=2.4, res_m=0.005):
+    """The bark's height over a patch of an upright trunk 1 m in radius: rows up the trunk, columns round it."""
+    a = np.arange(0, width_m, res_m)
+    y = np.arange(0.3, 0.3 + height_m, res_m)
+    A, Y = np.meshgrid(a, y)
+    p, n = round_trunk(A.ravel(), Y.ravel())
+    return ridge(bark_net(bark_space(p, n, np.full(len(p), BARK[1])))).reshape(A.shape)
+
+
+_WOOD = None
+
+
+def placed_wood():
+    """The Willow's bark triangles from the generator, placed as the page places them: (corners (t, 3, 3), corner
+    normals (t, 3, 3), codes (t,), heights of their middles over the ground (t,), distances from the trunk's axis (t,))."""
+    global _WOOD
+    if _WOOD is None:
+        from mesh_geometry import concat
+        w = placed()
+        x0, z0 = w.at
+        y0 = self_ground(w, x0, z0)
+        ground = lambda x, z: w.ground(np.asarray(x) + x0, np.asarray(z) + z0) - y0
+        gap = mesh_willow.gap_bearing(world.data()["meta"])
+        m = concat(mesh_willow.meshes(mesh_willow.tree(ground, gap), ground, gap))
+        keep = is_bark(m.attr[m.idx[:, 0]])
+        tris = m.pos[m.idx[keep]] + [x0, y0, z0]
+        mid = tris.mean(axis=1)
+        _WOOD = (tris, m.nrm[m.idx[keep]], m.attr[m.idx[keep, 0], 1].astype(int),
+                 mid[:, 1] - w.ground(mid[:, 0], mid[:, 2]), np.hypot(mid[:, 0] - x0, mid[:, 2] - z0))
+    return _WOOD
+
+
+def cells_on(tris, nrms, aux):
+    """Each triangle's area, and the bark's cells per metre over it across (the most) and along (the least) its
+    furrows, from the cell space at its corners."""
+    S = np.stack([bark_space(tris[:, k], nrms[:, k], aux) for k in range(3)], axis=1)
+    u, v = tris[:, 1] - tris[:, 0], tris[:, 2] - tris[:, 0]
+    fn = np.cross(u, v)
+    area = np.linalg.norm(fn, axis=1) / 2
+    t1 = u / np.linalg.norm(u, axis=1, keepdims=True)
+    t2 = np.cross(fn / (2 * area[:, None]), t1)
+    edges = np.stack([np.stack([np.einsum("ij,ij->i", e, t) for t in (t1, t2)], -1)
+                      for e in (u, v)], axis=1)
+    J = np.linalg.solve(edges, np.stack([S[:, 1] - S[:, 0], S[:, 2] - S[:, 0]], axis=1))
+    sv = np.linalg.svd(J, compute_uv=False)
+    return area, sv[:, 0], sv[:, 1]
+
+
+def weighted_median(x, w):
+    order = np.argsort(x)
+    return float(x[order][np.searchsorted(np.cumsum(w[order]), w.sum() / 2)])
 
 
 class WillowBarkTests(unittest.TestCase):
     def test_the_bark_fades_to_its_own_mean_far_off(self):
-        # past the fade the shader uses FAR_H and FAR_SHADE in place of the plates and furrows; were they not what the
+        # past the fade the shader uses FAR_H in place of the ridges and furrows; were it not what the
         # pattern averages to, the whole tree would brighten or darken as the camera draws back
         rng = np.random.default_rng(7)
         n = 40000
-        for name, d in (("upright", np.array([0.0, 1.0, 0.0])), ("lying", np.array([0.0, 0.0, 1.0]))):
-            e1 = np.cross(d, [1.0, 0.0, 0.0] if abs(d[1]) > 0.9 else [0.0, 1.0, 0.0])
-            e1 /= np.linalg.norm(e1)
-            e2 = np.cross(d, e1)
-            a, along, r = rng.uniform(0, 2 * np.pi, n), rng.uniform(-2, 2, n), rng.uniform(0.2, 1.2, n)
-            p = np.array([-254.3, 300.0, 184.2]) + r[:, None] * (np.cos(a)[:, None] * e1 + np.sin(a)[:, None] * e2) \
-                + along[:, None] * d
-            S = np.stack([p @ e1, p @ d * bark.STRETCH, p @ e2], axis=1) * bark.CELL_PER_M
-            e, cell = bark_net(S)
-            w = np.clip((e - bark.FURROW_E) / bark.FURROW_W, 0, 1)
-            h = w * w * (3 - 2 * w)
+        # a long span of wood: a trunk's cells wrap round it, some 90 to a ring, so a short one samples too few
+        a, y = rng.uniform(0, 2 * np.pi, n), rng.uniform(0, 30.0, n)
+        p, nrm = round_trunk(a, y, rng.uniform(0.7, 1.6, n))
+        lying = BARK_AXES[LYING]
+        e1 = np.cross(lying, [0.0, 1.0, 0.0])
+        e1 /= np.linalg.norm(e1)
+        nl = np.cos(a)[:, None] * e1 + np.sin(a)[:, None] * np.cross(lying, e1)
+        pl = np.array([-254.3, world.datum() + 2.0, 184.2]) + rng.uniform(-15, 15, n)[:, None] * lying + 0.3 * nl
+        for name, p, nrm, aux in (("trunk", p, nrm, BARK[1]), ("lying", pl, nl, LYING)):
             with self.subTest(wood=name):
-                self.assertAlmostEqual(float(np.mean(h)), bark.FAR_H, delta=0.03)
-                # the plates' albedo averages h times the plate's shade
-                self.assertAlmostEqual(float(np.mean(h * plate_shade(cell))) / (bark.FAR_H * bark.FAR_SHADE), 1.0,
-                                       delta=0.03)
+                S = bark_space(p, nrm, np.full(n, aux))
+                self.assertAlmostEqual(float(np.mean(ridge(bark_net(S)))), bark.FAR_H, delta=0.03)
 
-    def test_the_furrows_run_unbroken_between_plates(self):
+    def test_the_ridges_run_unbroken_round_the_furrows(self):
         # the shader's 3x3x3 search round the nearest centre must find the border it lies by; where it misses one, the
-        # furrow steps to the next border's depth at a hard edge
+        # ridge steps to the next border's height at a hard edge
         S = np.random.default_rng(3).uniform(0, 1, (30000, 3)) * [60.0, 20.0, 60.0] + [6600.0, 1500.0, 4800.0]
-        shader, exact = bark_net(S)[0], bark_net(S, reach=2)[0]
+        shader, exact = bark_net(S), bark_net(S, reach=2)
         self.assertLess(float(np.mean(np.abs(shader - exact) > 0.01)), 0.002)
+
+    def test_the_furrows_are_long_spindles_between_interlacing_ridges(self):
+        # old willow bark: dark furrows, each a separate spindle ten or more times as long as it is wide, between long
+        # grey ridges that part and meet round them, not a dark net round pale scales (which reads as snakeskin)
+        import scipy.ndimage as ndi
+        h = bark_patch()
+        furrow = h < 0.5
+        self.assertTrue(0.3 < furrow.mean() < 0.6, furrow.mean())          # wide furrows, not cracks
+        labels, n = ndi.label(furrow)
+        sizes = np.bincount(labels.ravel())[1:]
+        self.assertLess(sizes.max() / sizes.sum(), 0.25)                 # separate spindles, not one dark net
+        long = []
+        for k, sl in enumerate(ndi.find_objects(labels), 1):
+            if sizes[k - 1] >= 30:
+                long.append((sl[0].stop - sl[0].start) / (sl[1].stop - sl[1].start))
+        self.assertGreater(float(np.median(long)), 6.0)
+
+
+class WillowBarkSpaceTests(unittest.TestCase):
+    """Where the bark's cells lie on the built tree's wood. A pixel 4 m off (PIX_M wide) shows the pattern where it
+    spans fewer than FADE[0] cells and no less than COARSE[0] of the trunk's."""
+
+    PIX_M = 0.0064
+
+    @classmethod
+    def setUpClass(cls):
+        tris, nrms, cls.aux, cls.above, cls.out = placed_wood()
+        cls.area, cls.across, cls.along = cells_on(tris, nrms, cls.aux)
+        shown = (cls.across * cls.PIX_M < bark.FADE[0]) & (cls.across > bark.COARSE[0] * bark.CELL_PER_M)
+        cls.shown = shown & (cls.above > 0.02)                  # above the ground
+
+    def test_the_trunk_axis_is_the_built_trunks(self):
+        w = placed()
+        x0, z0 = w.at
+        y0 = self_ground(w, x0, z0)
+        ground = lambda x, z: w.ground(np.asarray(x) + x0, np.asarray(z) + z0) - y0
+        trunk = next(b for b in mesh_willow.tree(ground, mesh_willow.gap_bearing(world.data()["meta"])) if b.level == 0)
+        # from the ground to the fork, the trunk keeps within 12 cm of the bark's axis (the bearings round it then vary
+        # the furrows' width round the trunk by under a quarter): an edit to the ground under the Willow fails here
+        pts = trunk.pts[(trunk.pts[:, 1] >= 0) & (trunk.pts[:, 1] <= mesh_willow.FORK_M)] + [x0, y0, z0]
+        self.assertGreater(len(pts), 10)
+        ax, ay, az, lx, lz = bark.TRUNK_AXIS
+        ay += world.levels()["lake"]
+        miss = np.hypot(pts[:, 0] - ax - (pts[:, 1] - ay) * lx, pts[:, 2] - az - (pts[:, 1] - ay) * lz)
+        self.assertLess(float(miss.max()), 0.12)
+
+    def test_the_furrows_run_along_every_piece_of_wood(self):
+        # cells fixed in the world, long along a code's direction, are cut crosswise into polygons wherever the wood
+        # tilts from it: on the burl, the flare and the root feet, and on the limbs and roots that bend away from their
+        # codes. Seen from 4 m, almost all the bark shows furrows at least five times as long as they are wide
+        above = self.above > 0.02
+        self.assertGreater(self.area[self.shown].sum() / self.area[above].sum(), 0.7)
+        long = self.across / np.maximum(self.along, 1e-9) >= 5
+        self.assertGreater(self.area[self.shown & long].sum() / self.area[self.shown].sum(), 0.97)
+
+    def test_the_low_wood_has_the_trunks_cells(self):
+        # the burl, the root feet and the roots show furrows about as wide as the trunk's above them
+        trunk = self.shown & (self.aux == BARK[1]) & (self.above > 1.0) & (self.above < 2.0)
+        low = self.shown & (self.above < 1.2) & (self.out < mesh_willow.ROOT_ZONE_M)
+        ratio = weighted_median(1 / self.across[low], self.area[low]) / weighted_median(1 / self.across[trunk],
+                                                                                         self.area[trunk])
+        self.assertTrue(0.67 < ratio < 1.5, ratio)
 
 
 class WillowMeshOracleTests(unittest.TestCase):

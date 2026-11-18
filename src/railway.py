@@ -23,6 +23,8 @@ from mesh_source import MAP_SIZES
 GRADE = 1 / 40
 FORMATION_M = 5.5                   # level half-width either side of a running line (the 2 m terrain keeps it level under the ballast)
 CUT, FILL = 2.0, 1 / 1.5            # side slopes: rise per metre out from the formation
+LOOP_CUT = 0.5                      # the turning loop's grassed banks: a 2:1 rock cut up to 16 m deep round it read as a
+                                    # sheer ring round a flat-topped drum, saw-toothed on the 2 m terrain
 PATH_HALF_M, PATH_GRADE, PATH_CUT = 1.2, 0.25, 1.0
 PORTAL_M, HEADWALL_M = 25.0, 10.0   # portal along the main line from the toe (unless meta.train sets portal_m);
                                     # rock face starts this far up
@@ -261,7 +263,7 @@ def lake_walk(al, scene, georef):
 
 def features(al):
     upto = al.main.s <= al.portal_s + STEP_M
-    return [Feature(al.loop.xz, al.loop.level, FORMATION_M, CUT, FILL),
+    return [Feature(al.loop.xz, al.loop.level, FORMATION_M, LOOP_CUT, FILL),
             Feature(al.main.xz[upto], al.main.level[upto], FORMATION_M, CUT, FILL, before=al.portal[:2]),
             Feature(None, np.array([al.level]), 0.0, CUT, FILL, polygon=al.terrace),
             Feature(al.path.xz, al.path.level, PATH_HALF_M, PATH_CUT, 0.0)]

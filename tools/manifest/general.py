@@ -229,13 +229,20 @@ def forest_decisions(choices):
             q(F, "in the sense that it is in the dense inner area as opposed to the outskirts"),
             {"source": "user", "quote": FOREST_DOESNT_GO_THERE}),
         "forest-homesteads": decision(
-            "Each building the Forest still covers stands in its homestead's clearing, not in a cutout round its walls:"
-            " its yard, 10 m round it, is clear, and the clearing spreads on beyond as the homestead's ground, its edge"
-            " wandering and the Forest thinning out over 24 m beyond it. Six clear Forest that stands, each 0.55 to"
-            " 1.8 ha.",
+            "The Forest covers a few of site X's real buildings, which the scene does not draw. Round each it opens in a"
+            " natural glade of meadow, as the Forest's own clearings open among its trees: the building's yard, 10 m"
+            " round it, is clear, the glade spreads on beyond it, its edge wandering, and the Forest thins out over"
+            " 48 m beyond that edge, trees standing scattered across the band, rather than standing in a wall of"
+            " crowns. Its ground is tinted green as the Forest map's fields are, not left as the imagery's pale yard."
+            " Ten clear Forest that stands: nine of 1.1 to 2.4 ha, round one to four buildings each, and one of 11.5 ha"
+            " round some 40 buildings at Achnasheen.",
             q(F, NEST_IS_FOR_INSTANCE),
+            q(F, "Continuing slowly down the path, they come to a clearing where they meet two centaurs."),
             {"source": "user", "quote": FOREST_DOESNT_GO_THERE},
-            {"source": "user", "quote": CLEARINGS_PLAUSIBLE}),
+            {"source": "user", "quote": CLEARINGS_PLAUSIBLE},
+            note("user", "orchestrated choice: inspection round 1 found the homesteads' clearings read as unexplained"
+                         " holes in the Forest, with no homestead in them and a wall of crowns at their edges; the"
+                         " orchestrator ruled them natural glades with no buildings")),
         "forest-tracks-kept": decision(
             "Minor roads and tracks keep the Forest over them where it stands (9.7 km of tracks, 0.7 km of service"
             " roads and 0.2 km of unclassified road): White Hound's own path is the one clear way into the deep Forest"
@@ -410,7 +417,8 @@ def tour_decisions():
             " closer to the castle took the camera through it.", delegated),
         "tour-station-close": decision(
             "The tour's Hogsmeade station waypoint stands 123 m east-north-east of the station, 30 m up, where it fills"
-            " about 8% of the frame, the train along its platform and the castle above. The old waypoint was 168 m"
+            " about 8% of the frame, the train along its platform and the castle above. It aims 18 m above the ground"
+            " just short of the station, so the castle's towers clear the frame's top. The old waypoint was 168 m"
             " off and about 47 m up.", delegated),
         "tour-north-tower-close": decision(
             "The tour's North Tower waypoint stands 118 m north-east of the tower and looks at its middle rather than"
@@ -662,14 +670,15 @@ def grounds_decisions(choices):
             "Every clearing in the trees either follows a feature that explains it or reads as a place. The railway"
             " clears its earthworks and its lineside, within 10 m of the open line; the Forest has corridors along the"
             " A890 and the Kyle railway, and ends short of the A832 and round Achnasheen. The places are the Willow's"
-            " lawn, the Shack's garden, the homesteads round the buildings the Forest covers, Aragog's hollow and Grawp's"
+            " lawn, the Shack's garden, the glades round the real buildings the Forest covers, Aragog's hollow and Grawp's"
             " clearing. Each is at least 0.25 ha in area and 30 m across, with no straight stretch of edge 60 m long and"
             " no two that run parallel and face each other across it, and the wood thins out towards it. In the two"
             " cleared for lines of sight a few trees stand, and their ground does not end at a line either: it gives way"
             " to the ground round it in tufts across 16 m of that edge, and no patch of ground ends at a line"
             " (scrubland-as-scrub). In Grawp's clearing a few small pines stand, and Aragog's hollow is bare, as the"
-            " books have them. The ground of the homesteads and of those two places is the real ground's, under Forest"
-            " that thins out over 24 m or 16 m. The hollows the station's wooded rises enclose are made up keeping their"
+            " books have them. The glades round the buildings are meadow, under Forest that thins out over 48 m; the"
+            " ground of those two places is the real ground's, under Forest that thins out over 16 m. The hollows the"
+            " station's wooded rises enclose are made up keeping their"
             " trees, not as meadow. Otherwise trees are only kept off streams, the lake's edge, walls, buildings' plots"
             " and the ground within a crown's reach of the pitch's stands.",
             {"source": "user", "quote": CLEARINGS_PLAUSIBLE}),

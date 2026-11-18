@@ -166,14 +166,16 @@ class CastleOpeningTests(unittest.TestCase):
         pane = pane[:len(glass)]                       # triangles sharing a corner make up one pane
         a, b, c = (cls.tris[glass, k] for k in range(3))
         normal = np.cross(b - a, c - a)
-        cls.centre, cls.normal = [], []
+        cls.centre, cls.normal, cls.size = [], [], []
         for p in np.unique(pane):
             mine = pane == p
             pts = cls.tris[glass[mine]].reshape(-1, 3)
             n = normal[mine].sum(axis=0)
             cls.centre.append((pts.min(axis=0) + pts.max(axis=0)) / 2)
             cls.normal.append(n / np.linalg.norm(n))
-        cls.centre, cls.normal = np.array(cls.centre), np.array(cls.normal)
+            cls.size.append((float(np.ptp(pts[:, [0, 2]] @ np.array([-n[2], n[0]]) / np.hypot(n[0], n[2]))),
+                             float(np.ptp(pts[:, 1]))))
+        cls.centre, cls.normal, cls.size = np.array(cls.centre), np.array(cls.normal), np.array(cls.size)
         data = world.data()
         cls.meta = data["meta"]
         cls.local, cls.castle = Grid(cls.meta["local"]), Grid(cls.meta["castle"])
@@ -184,6 +186,32 @@ class CastleOpeningTests(unittest.TestCase):
         painted = range(mesh_castle.CASTLE_CLASS_AUX, mesh_castle.CASTLE_CLASS_AUX + len(self.meta["castle"]["cls"]))
         self.assertFalse(np.isin(self.attr[:, 1], painted).any())
         self.assertGreater(len(self.centre), 1000)
+
+    def test_the_storeys_windows_differ_and_the_wings_spacing_varies(self):
+        # the west front read as one grid of identical windows: storeyed masses' windows come in several sizes, the
+        # principal storey's tallest and the attic's smallest, and wings space them differently
+        inside = self.centre - self.normal * 1.5
+        k = [CASTLE_CLASSES.index(n) for n in ("range", "block")]
+        storeyed = np.min([sample(self.csd[..., j], self.castle, inside[:, 0], inside[:, 2]) for j in k], axis=0) < 0
+        heights = self.size[storeyed, 1]
+        for storey, (_, height) in mesh_castle.STOREYS.items():
+            with self.subTest(storey=storey):
+                self.assertGreater(int((np.abs(heights - height) < 0.05).sum()), 50)
+        rows = {}
+        c, n = self.centre[storeyed], self.normal[storeyed]
+        t = np.column_stack([-n[:, 2], n[:, 0]]) / np.hypot(n[:, 0], n[:, 2])[:, None]     # along each wall
+        key = np.column_stack([np.round(np.degrees(np.arctan2(n[:, 2], n[:, 0]))),
+                               np.round(np.einsum("ij,ij->i", c[:, [0, 2]], n[:, [0, 2]])), np.round(c[:, 1])])
+        _, row = np.unique(key, axis=0, return_inverse=True)
+        along = np.einsum("ij,ij->i", c[:, [0, 2]], t)
+        for r in np.unique(row):                                # each row's usual step, as one of the wings' spacings
+            steps = np.diff(np.sort(along[row == r]))
+            if len(steps) >= 3:
+                usual = float(np.median(steps))
+                nearest = min(mesh_castle.SPACINGS, key=lambda spacing: abs(spacing - usual))
+                if abs(nearest - usual) < 0.1:
+                    rows[nearest] = rows.get(nearest, 0) + 1
+        self.assertGreaterEqual(sum(count >= 5 for count in rows.values()), 3, rows)
 
     def test_lit_rooms_vary_some_bright_some_dim_most_dark(self):
         panes = self.attr[(self.attr[:, 0] == 4) & np.isin(self.attr[:, 1], mesh_castle.GLASS_PANES), 1]
@@ -267,6 +295,59 @@ class StraightenTests(unittest.TestCase):
                  and len(tree.query(g.buffer(0.05), predicate="intersects")) >= 2
                  and g.boundary.difference(shapely.union_all([p for _, p in out]).buffer(0.05)).length < 0.3 * g.length]
         self.assertLess(sum(g.area for g in slits), 50.0, [tuple(np.round(g.centroid.coords[0], 1)) for g in slits[:5]])
+
+    def test_a_small_wall_stub_left_against_a_taller_mass_is_dropped(self):
+        # a 4 m stub of battlemented wall left against the east wing's block when the cliff took the rest of its wall
+        # stood proud of the block's face, its merlons and coping showing as pale outlines two-thirds down (east-wing)
+        cls = [[2.2, 4], [13.0, 0], [24.0, 1], [32.0, 1], [21.0, 3], [27.0, 0]]
+        k_wall, k_block = (CASTLE_CLASSES.index(n) for n in ("wall", "block"))
+        block = Polygon([(0.0, 0.0), (30.0, 0.0), (30.0, 30.0), (0.0, 30.0)])
+        stub = Polygon([(30.0, 10.0), (34.0, 10.0), (34.0, 14.0), (30.0, 14.0)])
+        out = mesh_castle.straighten([(k_block, block), (k_wall, stub)], cls)
+        self.assertEqual([k for k, _ in out], [k_block])
+        curtain = Polygon([(30.0, 10.0), (60.0, 10.0), (60.0, 13.0), (30.0, 13.0)])   # a curtain wall running off stays
+        out = mesh_castle.straighten([(k_block, block), (k_wall, curtain)], cls)
+        self.assertEqual(sorted(k for k, _ in out), sorted([k_block, k_wall]))
+
+
+class DrumCutTests(unittest.TestCase):
+    """A mass cut round a tower's drum keeps no thin crescent wrapped round the drum's far side: its corner stood out
+    past the drum's face, with a gap at its foot (north-battlements, round 3)."""
+
+    def test_a_crescent_left_round_a_drum_goes_unless_it_joins_another_mass(self):
+        drum = shapely.Point(0.0, 0.0).buffer(5.0)
+        rng = Polygon([(-6.5, -6.0), (30.0, -6.0), (30.0, 6.0), (-6.5, 6.0)]).difference(drum)
+        out = mesh_castle.unwrapped(rng, (0.0, 0.0), 5.0, Polygon())
+        self.assertLess(out.intersection(shapely.box(-10.0, -10.0, -3.0, 10.0)).area, 0.05)   # the far side is clear
+        self.assertGreater(out.area, rng.area - 45.0)                                       # the range itself stays
+        through = Polygon([(-6.5, -6.0), (60.0, -6.0), (60.0, 6.0), (-6.5, 6.0)]).difference(drum)
+        self.assertTrue(mesh_castle.unwrapped(through.union(shapely.box(-40.0, -6.0, -6.5, 6.0)), (0.0, 0.0), 5.0,
+                                              Polygon()).buffer(0.05).contains(shapely.Point(-30.0, 0.0)))  # a range running on past it stays
+        wall = Polygon([(-30.0, -1.0), (-6.4, -1.0), (-6.4, 1.0), (-30.0, 1.0)])           # a wall meeting it there
+        out = mesh_castle.unwrapped(rng, (0.0, 0.0), 5.0, wall)
+        self.assertTrue(out.buffer(0.05).intersects(wall))
+        split = rng.difference(shapely.box(-10.0, -0.5, 0.0, 0.5))                         # two pieces, one met by a wall
+        out = mesh_castle.unwrapped(split, (0.0, 0.0), 5.0, shapely.box(-30.0, -5.0, -6.4, -4.0))
+        self.assertLess(out.intersection(shapely.box(-10.0, 0.0, -3.0, 10.0)).area, 0.05)
+        self.assertGreater(out.intersection(shapely.box(-10.0, -10.0, -3.0, 0.0)).area, 10.0)
+
+
+    def test_a_face_a_drum_straddles_keeps_its_length(self):
+        block = shapely.box(-40.0, -30.0, 40.0, 3.0)                                        # the drum 3 m inside its face
+        o = block.difference(shapely.Point(0.0, 0.0).buffer(5.0))
+        out = mesh_castle.unwrapped(o, (0.0, 0.0), 5.0, Polygon())
+        self.assertAlmostEqual(out.intersection(shapely.box(-40.0, 0.0, -10.0, 3.0)).area, 90.0, delta=0.5)
+
+    def test_a_mass_a_tower_overhangs_is_cut_back_square_not_notched_round_it(self):
+        # the block round the North Tower was notched round its clearance, so the drum read as built into it (round 3)
+        disc = shapely.Point(0.0, 0.0).buffer(6.0, 64)
+        for block in (shapely.box(-10.0, -20.0, 10.0, 2.0), shapely.box(-10.0, -20.0, 10.0, -3.0)):    # over its axis, or short
+            out = mesh_castle.cut_back(block, disc)
+            self.assertLess(out.bounds[3], -6.0 + 1e-3)                                       # one straight wall ...
+            self.assertGreater(out.area, 20.0 * 13.0 - 1.0)                                   # ... and no more taken
+        self.assertTrue(mesh_castle.cut_back(shapely.box(-20.0, -20.0, 20.0, 20.0), disc).contains(shapely.Point(0.0, 9.0)))
+        through = mesh_castle.cut_back(shapely.box(-30.0, -3.0, 20.0, 3.0), shapely.Point(0.0, 0.0).buffer(8.0, 64))
+        self.assertAlmostEqual(through.intersection(shapely.box(8.0, -3.0, 20.0, 3.0)).area, 72.0, delta=1.0)   # a range runs on
 
 
 class OpenAirTests(unittest.TestCase):
@@ -390,8 +471,11 @@ class CastlePendTests(unittest.TestCase):
         k = clear[len(clear) // 2]
         middle = starts[k] + dirs[k] * 9.0 + dirs[k] * np.linalg.norm(self.court - self.lawn) / 2
         side = np.array([dirs[k][2], 0.0, -dirs[k][0]])
-        lined = segment_hits(np.tile(middle, (3, 1)), np.array([side, -side, [0.0, 1.0, 0.0]]), 3.5, self.tris)
-        self.assertTrue(lined.all(), lined)                                # walls each side and a vault overhead
+        walls = segment_hits(np.tile(middle, (2, 1)), np.array([side, -side]), 3.5, self.tris)
+        # The vault is judged from the floor, not from the chosen ray's lift, which shifts with any change to the wing.
+        low = middle + np.array([0.0, self.floor + 1.5 - middle[1], 0.0])
+        vault = segment_hits(low[None], np.array([[0.0, 1.0, 0.0]]), 5.5, self.tris)
+        self.assertTrue(walls.all() and vault.all(), (walls, vault))       # walls each side and a vault overhead
 
     def test_open_gates_could_bar_the_passage(self):
         mid = (self.lawn + self.court) / 2
@@ -473,6 +557,20 @@ class HeadsTowerTests(unittest.TestCase):
         self.assertLessEqual(len(ways_out), 2, np.degrees(ways_out))               # walled round in plan, but for a gate
 
 
+class FacadeDetailTests(unittest.TestCase):
+    """The ranges' and blocks' walls are banded by string courses between storeys and a cornice under the eaves,
+    projecting from the wall, so a wing reads as storeys of a castle rather than a flat grid."""
+
+    def test_storeyed_walls_carry_projecting_string_courses(self):
+        tris, attr, normal = world.payload_part("castle")
+        course = np.all(attr == (4, mesh_castle.COURSE), axis=1)
+        a = 0.5 * np.linalg.norm(np.cross(tris[:, 1] - tris[:, 0], tris[:, 2] - tris[:, 0]), axis=1)
+        tops = course & (normal[:, 1] > 0.99)
+        self.assertGreater(float(a[tops].sum()), 500.0)                 # in plan: a 0.12 m band along kilometres of wall
+        levels = np.round(tris[tops][:, :, 1].mean(axis=1) - world.levels()["platform"], 0)
+        self.assertGreaterEqual(len(np.unique(levels)), 3)              # several storey lines and the eaves
+
+
 class CourtHouseTests(unittest.TestCase):
     """court-buildings-as-houses: "domestic, house-like buildings ... within a more stark curtain wall", with pitched
     roofs and chimneys; and sparing chimneys on the ranges and blocks."""
@@ -507,6 +605,8 @@ class CourtHouseTests(unittest.TestCase):
                 x, _, z = top[np.argmax(top[:, 1])]
                 roofs = surface_heights(self.tris[~np.all(self.attr == (4, mesh_castle.PLAIN), axis=1)], x, z)
                 self.assertGreater(top[:, 1].max(), roofs.max() + 0.5)               # a chimney standing over its roof
+                pots = near & np.all(self.attr == (4, mesh_castle.IRON), axis=1)
+                self.assertGreater(float(self.tris[pots][:, :, 1].max(initial=-np.inf)), top[:, 1].max() + 0.3)   # sooted pots on it
 
     def test_court_houses_have_a_door_and_windows_on_the_court(self):
         panes = np.isin(self.attr[:, 1], mesh_castle.GLASS_PANES) & (self.attr[:, 0] == 4)
@@ -685,6 +785,27 @@ class CastleMassingTests(unittest.TestCase):
         near = (reach > head + 0.05) & (reach < head + 1.0) & (rest[:, 1] > foot - 1.0)   # its own windows lie within
         self.assertFalse(near.any(), np.round(rest[near][:3], 1).tolist())   # a tower beside its neighbours, not fused
 
+    def test_the_north_tower_stands_clear_of_the_block_beside_it_not_in_a_notch(self):
+        # the block beside it was cut round it in a circular notch over its whole height, so its drum read as built into
+        # that block, and the dome's flank hung over the block's roof (north-tower, round 3)
+        towers = self.meta["towers"]
+        i = min(range(len(towers)), key=lambda j: math.dist(towers[j][:2], self.meta["named"]["NT"]))
+        x, z, r = towers[i][:3]
+        head = mesh_castle.OVERHANG * r
+        clear = max(rr for rr, _ in mesh_castle.dome(r)) + mesh_castle.NT_CLEAR_M      # from the dome's widest
+        own = np.all(self.attr == (4, mesh_castle.MESH_TOWER_AUX + i), axis=1)
+        top = float(self.tris[own][:, :, 1].max()) - mesh_castle.dome(r)[-1][1]              # under its finial
+        rest = self.tris[~own].reshape(-1, 3)
+        reach = np.hypot(rest[:, 0] - x, rest[:, 2] - z)
+        rest, reach = rest[reach > head + 0.3], reach[reach > head + 0.3]               # past its own windows' reveals
+        high = rest[:, 1] > top - mesh_castle.DROP_M - mesh_castle.NT_CLEAR_M             # as high as its overhang
+        self.assertGreater(float(reach[high].min()), clear - mesh_castle.COURSE_OUT_M - 0.05,     # less a cornice's jut
+                           np.round(rest[high][np.argmin(reach[high])], 1).tolist())
+        bearing = np.degrees(np.arctan2(rest[:, 2] - z, rest[:, 0] - x))[reach < clear + 2.0]
+        if len(bearing):                                                             # beside a face, not wrapped round
+            ordered = np.sort(bearing)
+            self.assertLess(360.0 - float(np.diff(np.append(ordered, ordered[0] + 360.0)).max()), 120.0)
+
 
 class CastleSkylineTests(unittest.TestCase):
     """Astronomy is the highest point of the castle, and Ravenclaw and Gryffindor the next two towers (wh-skyline)."""
@@ -783,6 +904,39 @@ class CastleFootingTests(unittest.TestCase):
                     cell = (int(round(x / 10.0)) * 10, int(round(z / 10.0)) * 10)
                     high[cell] = max(high.get(cell, 0.0), round(float(r), 1))
         self.assertEqual(high, {}, "the lake's edge stands this far (m) above the lake, by 10 m cell (east, north)")
+
+    PAVING = 3                                      # the surface classes' earth and paving (build_final.py)
+    BLOT_M = 4.0                                    # how near a wall's foot a lone texel of paving blots it
+
+    def test_no_lone_texel_of_paving_blots_the_walls_foot(self):
+        # the grounds map draws the castle's outline in the earth colour, and read texel by texel it left chains of
+        # single texels of paving round the castle, each a blot at its walls' foot (a hard class keeps a sharp edge,
+        # frag4.glsl classMix): the footing broken into patches between the ground's triangles (inspection round 3,
+        # tour/04). The paving at the walls is the courtyards' and the paths', in blocks two texels across or more
+        from scipy import ndimage as ndi
+        from scipy.spatial import cKDTree
+
+        data = world.data()
+        local, bed = Grid(data["meta"]["local"]), decode(data["tex"]["locBed"])
+        paved = decode(data["tex"]["locN"])[..., 0] == self.PAVING
+        lone = paved & ~ndi.binary_opening(paved, structure=np.ones((2, 2), bool))     # in no 2 x 2 block of paving
+        tris, _, normal = world.payload_part("castle")
+        upright = tris[np.abs(normal[:, 1]) < 0.05]
+        order = np.argsort(upright[..., 1], axis=1)
+        a, b = (upright[np.arange(len(upright)), order[:, k]] for k in (0, 1))   # each face's two lowest corners
+        foot = np.abs(a[:, 1] - sample(bed, local, a[:, 0], a[:, 2])) < 3.0          # a face standing on the ground
+        a, b = a[foot][:, [0, 2]], b[foot][:, [0, 2]]
+        k = np.maximum(np.ceil(np.hypot(*(b - a).T)).astype(int), 1) + 1              # a point a metre or less apart
+        seg = np.repeat(np.arange(len(a)), k)
+        t = (np.arange(k.sum()) - np.repeat(np.cumsum(k) - k, k)) / np.repeat(k - 1, k)
+        feet = cKDTree(a[seg] + t[:, None] * (b[seg] - a[seg]))
+        e, n = local.to_world(*np.nonzero(lone))
+        blots = np.isfinite(feet.query(np.column_stack([e, n]), distance_upper_bound=self.BLOT_M)[0])
+        cells = {}
+        for x, z in zip(e[blots], n[blots]):
+            cell = (int(round(x / 10.0)) * 10, int(round(z / 10.0)) * 10)
+            cells[cell] = cells.get(cell, 0) + 1
+        self.assertEqual(cells, {}, "lone texels of paving at the castle walls' foot, by 10 m cell (east, north)")
 
 
 if __name__ == "__main__":

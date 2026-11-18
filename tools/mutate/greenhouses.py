@@ -1,0 +1,37 @@
+"""Mutations of the greenhouse builders that the greenhouse tests must catch."""
+from tools.mutate.run import Mutation
+
+SHEDS = "test_assets_greenhouses.PottingShedTests."
+MUTATIONS = [
+    Mutation("sheds in a building kind's painted walls", "mesh_greenhouses.py",
+             'SHED_WALL, SHED_GLASS = code("shed-stone"), code("shed-glass")',
+             'SHED_WALL, SHED_GLASS = code("building-big"), code("shed-glass")',
+             (SHEDS + "test_a_shed_has_a_door_towards_the_glasshouses_and_windows_of_its_own",), rebuild=False),
+    Mutation("windows cut by the eaves", "mesh_greenhouses.py",
+             "                if sill + WINDOW_H > eave - HEAD_M:\n                    continue\n", "",
+             (SHEDS + "test_on_falling_ground_each_window_is_whole_and_clear_of_the_ground",), rebuild=False),
+    Mutation("sills set by the floor alone", "mesh_greenhouses.py",
+             "                sill = max(floor, under(w0, w1)) + WINDOW_SILL_M\n",
+             "                sill = floor + WINDOW_SILL_M\n",
+             (SHEDS + "test_on_falling_ground_each_window_is_whole_and_clear_of_the_ground",), rebuild=False),
+    Mutation("the door turned from the glasshouses", "mesh_greenhouses.py",
+             "np.dot(np.asarray(towards) - c, b) >= 0 else -1.0", "np.dot(np.asarray(towards) - c, b) < 0 else -1.0",
+             (SHEDS + "test_a_shed_has_a_door_towards_the_glasshouses_and_windows_of_its_own",), rebuild=False),
+    Mutation("a wing walled and glazed across its open end", "mesh_greenhouses.py",
+             "    shut = (-hl, hl) if open_towards is None else (-hl,)", "    shut = (-hl, hl)",
+             ("test_assets_greenhouses.GreenhouseTests.test_a_wing_runs_towards_the_range_it_joins_and_opens_into_it",),
+             rebuild=False),
+    Mutation("the court glasshouse one rectangle on its census blob", "mesh_greenhouses.py",
+             "        if t is None:\n            return {asset: greenhouse(polygons, scene.ground)}",
+             "        if True:\n            return {asset: greenhouse(polygons, scene.ground)}",
+             ("test_assets_greenhouses.GreenhouseTests.test_the_court_glasshouse_is_the_t_the_map_draws",)),
+    Mutation("benches solid to the floor", "mesh_greenhouses.py",
+             "prism(plan(-hl + 0.5, hl - 0.5, inner, outer), top - BENCH_TOP_M, top, BENCH)",
+             "prism(plan(-hl + 0.5, hl - 0.5, inner, outer), y, top, BENCH)",
+             ("test_assets_greenhouses.GreenhouseTests.test_benches_stand_on_legs_under_rows_of_plants_and_the_glass_reads_as_panes",),
+             rebuild=False),
+    Mutation("the plants in one row", "mesh_greenhouses.py",
+             "(inner + outer) / 2 + PLANT_ROW_M * (-1) ** k", "(inner + outer) / 2",
+             ("test_assets_greenhouses.GreenhouseTests.test_benches_stand_on_legs_under_rows_of_plants_and_the_glass_reads_as_panes",),
+             rebuild=False),
+]

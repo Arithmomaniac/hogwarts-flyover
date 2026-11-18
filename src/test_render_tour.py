@@ -5,8 +5,10 @@ front of the castle cover at most TREES_AHEAD of the frame, so it reads over the
 the Forest names its ground within the clearing's recorded outline (meta.clearings), which, being dry ground in the
 Forest, must also show more than any water in its frame; and one that names a spot the scene does not model, Sirius's
 cave, is held to showing that spot: in the frame, EDGE of it inside each edge, and not hidden. A caption the test does
-not know fails, so a new waypoint says what it shows. The path's clearance follows the ground and the trees, not the
-meshes, so the camera is also kept out of every building's box."""
+not know fails, so a new waypoint says what it shows. Where a view promises the castle whole above what its caption
+names (the station's, tour-station-close), no part of the castle comes within TOP_CLEAR of the frame's top, so its
+towers are not cut off. The path's clearance follows the ground and the trees, not the meshes, so the camera is also
+kept out of every building's box."""
 from pathlib import Path
 import sys
 from typing import NamedTuple
@@ -52,6 +54,8 @@ HIDDEN = 0.05                       # and the first surface along its ray within
 MATERIALS = {"castle": 4, "lake": 2, "forest": 3}
 WIDE = {"Hogwarts Castle"}          # the opening: the castle in its setting (tour-opening-wide)
 TREES_AHEAD = 0.04                  # trees nearer than the castle's nearest tenth, as a share of the frame
+CASTLE_WHOLE = {"Hogsmeade station"}    # views that show the castle whole above what their caption names
+TOP_CLEAR = 0.05                    # the share of the frame's height above the castle's top in them
 GROUND = 1
 NOT_AN_OBJECT = (0, 1, 2, 3)        # sky, ground, water and trees: an asset's box holds some of them around it
 CLEAR_M = 3.0                       # how near a building's box the camera may pass
@@ -134,6 +138,14 @@ class TourFramingTests(PageTestCase):
         hit = await self.page.evaluate("([x, y]) => __hog.probe(x, y).t", [round(x), round(y)])
         return x / w, y / h, hit / float(np.linalg.norm(np.subtract(point, view["pos"])))
 
+    async def show(self, t):
+        """Puts the camera where the tour has it at t s, and waits for the frame to settle."""
+        frames = await self.page.evaluate("""(t) => {
+            const p = __hog.path(t);
+            __hog.camera(p.pos, Math.atan2(p.fwd[0], p.fwd[2]), Math.asin(p.fwd[1]));
+            return __hog.frames; }""", t)
+        await self.page.wait_for_function(f"__hog.frames >= {frames + 12}", timeout=60000)
+
     async def test_each_captioned_object_covers_its_share_of_the_frame(self):
         wps = tour.waypoints(PAGE.read_text(encoding="utf-8", errors="replace"))
         _, positions = await self.page.evaluate(tour.TRACK, tour.STEP_S)
@@ -144,11 +156,7 @@ class TourFramingTests(PageTestCase):
                 continue
             with self.subTest(waypoint=k + 1, caption=caption):
                 self.assertIn(caption, SUBJECTS.keys() | SPOTS, "say what this caption names")
-                frames = await self.page.evaluate("""(t) => {
-                    const p = __hog.path(t);
-                    __hog.camera(p.pos, Math.atan2(p.fwd[0], p.fwd[2]), Math.asin(p.fwd[1]));
-                    return __hog.frames; }""", t)
-                await self.page.wait_for_function(f"__hog.frames >= {frames + 12}", timeout=60000)
+                await self.show(t)
                 if caption in SPOTS:
                     fx, fy, seen = await self.spot(meta, caption)
                     self.assertIsNotNone(fx, f"{caption} lies behind the camera at {t:.0f} s")
@@ -171,6 +179,25 @@ class TourFramingTests(PageTestCase):
                     water = share(frame, "lake")
                     self.assertLess(water, got, f"{caption}'s frame shows more water ({100 * water:.2f} %) than its "
                                                 f"ground ({100 * got:.2f} %) at {t:.0f} s")
+
+    async def test_the_castle_above_the_station_shows_whole(self):
+        wps = tour.waypoints(PAGE.read_text(encoding="utf-8", errors="replace"))
+        _, positions = await self.page.evaluate(tour.TRACK, tour.STEP_S)
+        corners = at.payload_part("castle")[0].reshape(-1, 3)
+        lo, hi = corners.min(0) - 0.3, corners.max(0) + 0.3
+        for k, (w, t) in enumerate(zip(wps, tour.waypoint_times(positions, wps))):
+            if w[6] not in CASTLE_WHOLE:
+                continue
+            with self.subTest(waypoint=k + 1, caption=w[6]):
+                await self.show(t)
+                frame = await self.page.evaluate(GRID)
+                samples = np.array(frame["out"], dtype=float)
+                p = points(frame["view"], samples)
+                castle = (samples[:, 3] == MATERIALS["castle"]) & np.all((p >= lo) & (p <= hi), axis=1)
+                self.assertTrue(castle.any(), f"the castle does not show in {w[6]}'s frame at {t:.0f} s")
+                top = samples[castle, 1].max() / frame["view"]["res"][1]     # probe rows count up from the bottom
+                self.assertLessEqual(top, 1 - TOP_CLEAR, f"the castle reaches {top:.3f} of the frame's height in "
+                                                         f"{w[6]}'s view at {t:.0f} s")
 
     async def test_the_camera_keeps_out_of_every_building(self):
         _, positions = await self.page.evaluate(tour.TRACK, tour.STEP_S)
