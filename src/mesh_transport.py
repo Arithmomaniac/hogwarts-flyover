@@ -29,7 +29,7 @@ FAMILY = "transport"
 
 # G-buffer codes from the material registry (src/materials): set pieces (material 7) are shaded by the registry's
 # branches in P3 and reflFs
-GOLD, HULL, RIG, COPING = code("gold"), code("dark-timber"), code("rigging"), code("pale-stone")
+GOLD, HULL, RIG, COPING = code("gold"), code("ship-timber"), code("rigging"), code("pale-stone")
 SCARLET, IRON, ROOF, WINDOW = code("scarlet"), code("black-iron"), code("carriage-roof"), code("lamplit-glass")
 DIM_WINDOW = code("dim-glass")      # "the dim light issuing from the station windows"
 RAIL, SLEEPER, BALLAST, PAVING, BOARDING = (code(n) for n in ("rail", "sleeper", "ballast", "paving", "cream-boarding"))
@@ -52,6 +52,7 @@ RAMP_M, EXIT_GAP_M = 9.0, 6.0
 BACK_WALL_M, BACK_WALL_HIGH_M = 0.45, 1.35
 COPING_M = 0.6
 EAVE_M, ROOF_PITCH = 3.2, 1.0       # building walls above its floor; roof rise per half-width
+GABLE_WINDOW_W, GABLE_WINDOW_H, GABLE_SILL_M = 0.7, 1.0, 0.35   # a window in each gable, its sill above the eaves
 CANOPY_DEPTH_M, CANOPY_LOW_M, CANOPY_REACH_M = 4.2, 2.9, 7.0
 
 COACH_M, VAN_M, BUFFERS_M = 19.66, 9.0, 0.6      # bodies, and the gap between coupled bodies
@@ -63,6 +64,9 @@ PORTAL_FACE_M, PORTAL_W, PORTAL_H, PORTAL_DEPTH_M = 3.5, 4.8, 6.2, 1.2
 
 SHIP_BEAM, SHIP_KEEL_M = 0.72, -5.0          # beam as a fraction of the registered width; keel under the lake
 MASTS = ((0.22, 50.0), (0.48, 180 * 0.3048), (0.74, 44.0))   # (fraction from the bow, top over the lake)
+SPRIT_REACH, SPRIT_RISE = 0.22, 0.27         # the bowsprit's reach ahead of the bow (of the length) and its rise per metre
+SPRIT_CLEAR_M = 1.5                          # it and the forestay to its end stay this far above the ground under them
+STERN_TAPER = 0.5                            # the hull narrows aft by this fraction of the beam, to a transom
 
 
 # ---------------------------------------------------------------- local-frame geometry
@@ -264,11 +268,18 @@ def building(al, ground, P, plan, extent, floor, west):
     ridge = eave + half * ROOF_PITCH
     over = 0.4
     y3 = lambda s, t, y: np.array([*P(s, t)[:1], y, *P(s, t)[1:]])
-    for s in (b0, b1):                                           # gables
-        tri = [y3(s, f0, eave), y3(s, f1, eave), y3(s, f0 + half, ridge)]
-        g = panel(tri, BOARDING)
+    up = np.array([0.0, 1.0, 0.0])
+    for s in (b0, b1):                                           # gables, each with a lit window over the canopy
         out = np.array([*(P(s, 0) - P((b0 + b1) / 2, 0))[:1], 0.0, *(P(s, 0) - P((b0 + b1) / 2, 0))[1:]])
-        parts.append(indexed(oriented(g.pos[g.idx], out), out, BOARDING))
+        out /= np.linalg.norm(out)
+        u = np.cross(up, out)                                    # so that u x up faces out
+        rise = ridge - eave
+        holes = [[(-GABLE_WINDOW_W / 2, GABLE_SILL_M), (GABLE_WINDOW_W / 2, GABLE_SILL_M),
+                  (GABLE_WINDOW_W / 2, GABLE_SILL_M + GABLE_WINDOW_H), (-GABLE_WINDOW_W / 2, GABLE_SILL_M + GABLE_WINDOW_H)]]
+        if GABLE_SILL_M + GABLE_WINDOW_H > rise * (1 - GABLE_WINDOW_W / 2 / half) - 0.2:
+            holes = []                                           # a gable too low for one
+        parts.append(pierced(y3(s, f0 + half, eave), u, up, [(-half, 0.0), (half, 0.0), (0.0, rise)], holes, 0.1,
+                             BOARDING, DIM_WINDOW, reveal=TRIM))
         for t in (f0, f1):
             parts.append(bar_between(y3(s + np.sign(s - b0 - 0.1) * over, t + np.sign(t - f0 - 0.1) * over, eave - over * ROOF_PITCH),
                                      y3(s + np.sign(s - b0 - 0.1) * over, f0 + half, ridge + 0.05), 0.12, TRIM))
@@ -523,10 +534,12 @@ def train(al):
 
 
 # ---------------------------------------------------------------- ship
-def ship(meta):
-    """A dark three-masted ship on the registered hull line, bow to the shore: lofted hull and deck, raised
-    forecastle and quarterdeck, a lit stern gallery and a row of dim ports, tapered masts with tops, yards with
-    furled sails, a bowsprit and standing rigging."""
+def ship(meta, ground=None):
+    """A three-masted ship of weathered timber on the registered hull line, bow to the shore: lofted hull and deck
+    narrowing aft to a transom, raised forecastle and quarterdeck, a lamplit stern gallery and a row of dim ports,
+    tapered masts with tops, yards with furled sails, a bowsprit and standing rigging. Where the shore rises ahead of
+    the bow the bowsprit is shortened until it and the forestay to its end clear the ground (`ground`, of x and z) by
+    SPRIT_CLEAR_M."""
     from mesh_geometry import bar
 
     a, b = (np.asarray(meta["extras"]["ship"][k], np.float64) for k in ("a", "b"))
@@ -538,7 +551,7 @@ def ship(meta):
     at = lambda s, c, y: np.array([a[0] + u[0] * s + across[0] * c, y, a[1] + u[1] * s + across[1] * c])
     f = np.linspace(0.0, 1.0, 41)
     half = beam * np.where(f < 0.4, np.sqrt(np.clip(1 - ((0.4 - f) / 0.4) ** 2, 0, 1)),
-                           1 - 0.32 * np.clip((f - 0.72) / 0.28, 0, 1) ** 2)
+                           1 - STERN_TAPER * np.clip((f - 0.72) / 0.28, 0, 1) ** 2)
     sheer = lake + 4.2 + 2.5 * (2 * f - 1) ** 2
     keel = lake + SHIP_KEEL_M + 1.5 * np.clip((0.08 - f) / 0.08, 0, 1)
     pf = np.array([0.0, 0.55, 0.88, 1.0, 1.0, 0.95])
@@ -596,13 +609,28 @@ def ship(meta):
                 w = float(np.interp((s + ds) / length, f, half))
                 parts.append(bar(at(s + ds, sgn * w, deck + 0.3), at(s, sgn * 0.4, deck + 0.5 * h), 0.1, RIG))
             parts.append(bar(at(s, sgn * 0.4, deck + 0.5 * h), at(s, sgn * 0.25, lake + top - 2.0), 0.1, RIG))
-    sprit = (at(0.0, 0.0, sheer[0] + 0.5), at(-0.22 * length, 0.0, sheer[0] + 6.0))
-    parts.append(bar(*sprit, 0.6, HULL))
-    parts.append(bar(at(tops[0][0], 0.0, tops[0][3] - 1.0), sprit[1], 0.12, RIG))                       # forestay
+    foretop = at(tops[0][0], 0.0, tops[0][3] - 1.0)
+    for reach in np.linspace(SPRIT_REACH, 0.0, 23) * length:                         # the longest that clears the shore
+        sprit = (at(0.0, 0.0, sheer[0] + 0.5), at(-reach, 0.0, sheer[0] + 0.5 + SPRIT_RISE * reach))
+        if ground is None or clear(ground, [sprit, (foretop, sprit[1])], SPRIT_CLEAR_M):
+            break
+    if reach > 1.0:
+        parts.append(bar(*sprit, 0.6, HULL))
+    parts.append(bar(foretop, sprit[1], 0.12, RIG))                                                     # forestay
     for (s0, _, _, y0), (s1, _, mid, _) in zip(tops[1:], tops[:-1]):
         parts.append(bar(at(s0, 0.0, y0 - 1.0), at(s1, 0.0, mid), 0.12, RIG))                           # stays
     parts.append(bar(at(tops[-1][0], 0.0, tops[-1][3] - 1.0), at(length - 1.0, 0.0, sheer[-1] + 2.6), 0.12, RIG))
     return parts
+
+
+def clear(ground, segments, margin, step=0.5):
+    """Whether every segment ((x, y, z), (x, y, z)) stays `margin` above the ground under it."""
+    for p0, p1 in segments:
+        k = np.linspace(0.0, 1.0, max(2, int(np.linalg.norm(p1 - p0) / step) + 1))[:, None]
+        q = p0 + (p1 - p0) * k
+        if np.any(q[:, 1] - ground(q[:, 0], q[:, 2]) < margin):
+            return False
+    return True
 
 
 # ---------------------------------------------------------------- family hooks (build_meshes.massing)
@@ -614,4 +642,4 @@ def build_footprint(scene, asset, c, polygons):
 
 
 def build_extras(scene):
-    return {"track": track(scene.line), "train": train(scene.line), "ship": ship(scene.meta)}
+    return {"track": track(scene.line), "train": train(scene.line), "ship": ship(scene.meta, scene.ground)}

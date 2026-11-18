@@ -7,9 +7,10 @@ gently climbing formation, cuttings and embankments meet the ground at their sid
 and nothing outside the earthworks changes. Trees on the earthworks are cleared, but for the pine bank the first-years'
 path down to the lake cuts through, where the works only raise the ground (PS 6: "so dark either side of them that Harry
 thought there must be thick trees there"); so is every tree within LINE_CLEAR_M of the open line, whatever ground it
-stands on, so that no crown reaches the train. The running lines' formation takes the earth surface class and forest
-floor left on a cut face, an embankment or the cleared lineside becomes scrub or meadow, as does the floor of a wood they
-cut down narrower than clearings.WOOD_M. Hollows that an embankment
+stands on, so that no crown reaches the train. Forest floor left on a running line's formation, a cut face, an
+embankment or the cleared lineside becomes meadow or scrub, as does the floor of a wood they cut down narrower than
+clearings.WOOD_M; the formation beside the ballast is grass, not bare earth, whose lobed edge read as a drained pond's
+bed. Hollows that an embankment
 encloses, such as a dry valley it crosses, are made up to where they would spill, with spoil from the cuttings, as
 meadow. The design depends only on the manifest and meta, so a second run changes nothing. The earthworks may not reach
 water.
@@ -126,7 +127,7 @@ def fix_railway(scene, meta, georef, bed, wd, trees, surface, stream, quantum=0.
     if (wet & (stream[rows, cols] >= STREAM_NEAR)).any():
         raise ValueError("the railway's earthworks reach water that is not a stream")
     cls = surface[rows, cols].copy()
-    cls[onbed] = EARTH
+    cls[onbed & (cls == FOREST)] = MEADOW
     flat = held_down & held_up
     bare = works & ~(kept_pines(pines, cut, fill, onbed, held_down) & ~hollow)
     cls[bare & ~onbed & (cls == FOREST)] = np.where(held_down & ~flat, SCRUB, MEADOW)[bare & ~onbed & (cls == FOREST)]

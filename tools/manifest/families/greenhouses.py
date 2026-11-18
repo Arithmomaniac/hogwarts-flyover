@@ -1,4 +1,7 @@
 """Greenhouse assets, decisions and reference-image notes for the mesh scene manifest."""
+import json
+from pathlib import Path
+
 from tools.manifest.common import FOOTPRINT, G, GM, asset, choice, decision, labels, note, q
 
 FAMILY = "greenhouses"
@@ -6,14 +9,18 @@ BUILT = {"court-glasshouse", "greenhouses-north", "greenhouses-5b"}
 CENSUS = {4: (-56.13, 245.01), 19: (-49.25, 61.37)}
 GREENHOUSES_NORTH = (1, 2, 3, 5, 6, 8)
 GREENHOUSES_5B = (9, 10, 12, 13, 14, 16, 17)
+COURT = Path(__file__).resolve().parents[1] / "data" / "greenhouses" / "court-glasshouse-trace.json"
 
 
 def assets(ctx):
     cl = ctx.claims
+    court = json.loads(COURT.read_text(encoding="utf-8"))
     return [
         asset("court-glasshouse", "greenhouses", "Small glasshouse in the castle's walled north court", [
             choice("court: glasshouse"), note(GM, "small T-shaped white building inside the walled north court")],
             inputs=FOOTPRINT, components=cl.comp(19, kinds=("glass",)),
+            traced=[{"id": "court-glasshouse", "frame": GM, "feature": "the white T's range and its wing (tools.trace.court_glasshouse)",
+                     "plan_px": court["plan_px"]}],
             decisions=["court-glasshouse", "greenhouse-glass", "greenhouse-design-inferred"]),
         asset("greenhouses-north", "greenhouses", "Northern greenhouses and potting shed", [
             q(G, "There are at least three greenhouses, and are probably more, possibly plus potting sheds etc.."),
@@ -41,7 +48,7 @@ def decisions(ctx):
             " refraction.", choice(choices["greenhouse_glass"])),
         "court-glasshouse": decision(
             "The small white T-shaped building in the castle's walled north court is a small glasshouse, following the"
-            " map's white-means-greenhouse convention.",
+            " map's white-means-greenhouse convention: a range with a narrower wing on the T traced from the map.",
             choice(choices["court"]), note(GM, "white fill marks the greenhouses (5b)")),
         "castle-mass-sheds": decision(
             "The two detached castle-grid masses beside the 5b greenhouses are their potting sheds.",

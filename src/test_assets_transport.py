@@ -156,9 +156,47 @@ class RailwayTests(unittest.TestCase):
         side = (railway.point_at(loop.xz, at) + np.array([-t[1], t[0]]) * (railway.FORMATION_M + 2.0))[None]
         cut, fill, _ = railway.envelope(self.al, side[:, 0], side[:, 1])
         self.assertAlmostEqual(float(railway.regrade(np.array([level + 30.0]), cut, fill)[0]),
-                               level + 2.0 * railway.CUT, delta=0.3)               # a rock cutting, 2 m out
+                               level + 2.0 * railway.LOOP_CUT, delta=0.3)          # the loop's grassed bank, 2 m out
         self.assertAlmostEqual(float(railway.regrade(np.array([level - 30.0]), cut, fill)[0]),
                                level - 2.0 * railway.FILL, delta=0.3)              # an embankment, 2 m out
+        s = self.al.portal_s - 30.0                                                 # the main line's rock cutting
+        p, t = railway.point_at(self.al.main.xz, s), railway.tangent_at(self.al.main.xz, s)
+        side = (p + np.array([-t[1], t[0]]) * (railway.FORMATION_M + 2.0))[None]
+        cut, fill, _ = railway.envelope(self.al, side[:, 0], side[:, 1])
+        formation = float(np.interp(s, self.al.main.s, self.al.main.level))
+        self.assertAlmostEqual(float(railway.regrade(np.array([formation + 30.0]), cut, fill)[0]),
+                               formation + 2.0 * railway.CUT, delta=0.3)
+
+    def test_the_loop_lies_between_grassed_banks_not_in_a_sheer_ring(self):
+        # the loop ran up to 16 m down in a 2:1 rock cut, which rendered as a sheer, saw-toothed ring round a flat-topped
+        # drum (track-loop, track-cutting): its banks rise no steeper than LOOP_CUT on either side
+        loop = self.al.loop
+        normal = np.gradient(loop.xz, axis=0)[:, ::-1] * [1.0, -1.0]
+        normal /= np.linalg.norm(normal, axis=1, keepdims=True)
+        stations = np.arange(10, len(loop.xz) - 10, 8)
+        for side in (1.0, -1.0):
+            for r in (2.0, 6.0, 12.0, 20.0):
+                q = loop.xz[stations] + side * normal[stations] * (railway.FORMATION_M + r)
+                near = np.array([np.hypot(*(loop.xz - p).T).min() for p in q])
+                keep = near > railway.FORMATION_M + r - 0.5                             # clear of the loop's other side
+                rise = self.ground(q[keep]) - loop.level[stations][keep]
+                with self.subTest(side=side, out=r):
+                    self.assertLessEqual(float(rise.max()), railway.LOOP_CUT * (r + 1.5) + 0.1)
+
+    def test_the_formation_beside_the_ballast_is_grass_not_bare_earth(self):
+        # the formation's 11 m band took the earth class, whose lobed edge read as a drained pond's bed either side of
+        # the 4.6 m of ballast (engine-tender, track-rails, coach)
+        from scipy.spatial import cKDTree
+        rows, cols = fix_railway.window(self.grid, self.al)
+        x, z = self.grid.to_world(*np.mgrid[rows, cols])
+        lines = np.concatenate([self.al.loop.xz, self.al.main.xz[self.al.main.s <= self.al.portal_s]])
+        d = cKDTree(lines).query(np.column_stack([x.ravel(), z.ravel()]))[0].reshape(x.shape)
+        formation = d < railway.FORMATION_M
+        _, _, _, regraded, *_ = fix_railway.fix_railway(self.scene, self.meta, self.georef, self.bed, self.wd,
+                                                        self.trees, self.surface, self.stream)
+        for name, surface in (("built", self.surface), ("regraded", regraded)):
+            with self.subTest(surface=name):
+                self.assertLess(float((surface[rows, cols][formation] == fix_railway.EARTH).mean()), 0.05)
 
 
 class TransportTests(unittest.TestCase):
@@ -336,6 +374,44 @@ class TransportTests(unittest.TestCase):
         tall = masts[masts[:, :, 1].max(axis=1) > self.meta["lake"] + 30.0].mean(axis=1)
         along = np.sort((tall[:, [0, 2]] - a) @ axis)
         self.assertEqual(int((np.diff(along) > 8.0).sum()) + 1, 3)                  # three masts, well apart
+
+    def test_nothing_of_the_ship_above_the_water_runs_into_the_shore(self):
+        # the bowsprit reached 21 m ahead of the bow, into the bank, and the forestay ran down into the grass (ship)
+        tris, _ = self.part("ship")
+        pts = tris.reshape(-1, 3)
+        pts = pts[pts[:, 1] > self.meta["lake"] + 0.5]
+        local = Grid(self.meta["local"])
+        bed = decode(world.data()["tex"]["locBed"])
+        clearance = pts[:, 1] - sample(bed, local, pts[:, 0], pts[:, 2])
+        self.assertGreater(float(clearance.min()), 1.0)
+        sprit, _ = self.part("ship", mesh_transport.HULL)
+        a, b = (np.asarray(self.meta["extras"]["ship"][k], np.float64) for k in ("a", "b"))
+        axis = (b - a) / np.linalg.norm(b - a)
+        self.assertLess(float(((sprit.reshape(-1, 3)[:, [0, 2]] - a) @ axis).min()), -3.0)   # a bowsprit, all the same
+
+    def test_the_hull_narrows_aft_to_a_transom(self):
+        # a full-width square end read as a barge's (tour/03, ship-dusk)
+        tris, _ = self.part("ship", mesh_transport.HULL)
+        pts = tris.reshape(-1, 3)
+        a, b = (np.asarray(self.meta["extras"]["ship"][k], np.float64) for k in ("a", "b"))
+        length = np.linalg.norm(b - a)
+        axis = (b - a) / length
+        s = (pts[:, [0, 2]] - a) @ axis
+        side = np.abs((pts[:, [0, 2]] - a) @ np.array([-axis[1], axis[0]]))
+        low = pts[:, 1] < self.meta["lake"] + 4.0                                    # the hull, below the bulwarks
+        widest = side[low & (np.abs(s - 0.5 * length) < 3.0)].max()
+        stern = side[low & (s > length - 0.5) & (s < length + 0.5)].max()
+        self.assertLess(stern, 0.6 * widest)
+
+    def test_each_gable_has_a_lit_window_over_the_canopy(self):
+        # the canopy hides the platform-side windows and the gables had none, so from the platform the building was dark
+        glass, n = self.part("station", mesh_transport.DIM_WINDOW)
+        along = self.al.frame[1]
+        eave = self.rail_top + mesh_transport.PLATFORM_HEIGHT_M + mesh_transport.EAVE_M
+        high = glass[:, :, 1].min(axis=1) > eave
+        for sgn in (1.0, -1.0):
+            with self.subTest(end=sgn):
+                self.assertTrue((high & (n[:, [0, 2]] @ along * sgn > 0.99)).any())
 
 
 class TransportMeshOracleTests(unittest.TestCase):

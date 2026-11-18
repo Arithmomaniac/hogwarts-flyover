@@ -777,7 +777,7 @@ class WallsTests(unittest.TestCase):
         self.assertGreater(float(over.min()), 0.05)                               # within 1 m, on slopes
 
     def test_the_boundary_walls_run_on_across_breaks_narrower_than_a_gateway(self):
-        keep = self.boundary & ~self.near_patch & ~self.near_cliff & (self.normal[:, 1] > 0.7)   # their copings
+        keep = self.boundary & ~self.near_patch & ~self.near_cliff & (self.normal[:, 1] > 0.2)   # coping tops, tilted on banks too
         plan = shapely.union_all([Polygon(t[:, [0, 2]]).buffer(0.05) for t in self.tris[keep]])
         pieces = list(getattr(plan, "geoms", [plan]))
         tree = shapely.STRtree(pieces)
@@ -1477,7 +1477,8 @@ class BridgesTests(unittest.TestCase):
 
     def test_each_face_stands_where_its_burn_leaves_the_road(self):
         # not at the road's edge with the burn coming out of the grass metres off: where the burn's water ends within
-        # FACE_REACH_M of the road's edge, the face stands at it
+        # 7.5 m of the road's edge (Hogsmeade's crossing on the tour ends 7 m off), the face stands at it
+        reach = 7.5
         data = world.data()
         stream = mesh_source.sd_bytes(decode(data["tex"]["locB"])[..., 1])
         road = decode(data["tex"]["locA"])[..., 0] / 255.0
@@ -1500,7 +1501,7 @@ class BridgesTests(unittest.TestCase):
                 if not mine.any():
                     continue
                 end = float(np.min(np.abs(ws[mine])))
-                if end > edge + mesh_grounds.FACE_REACH_M:
+                if end > edge + reach:
                     continue
                 checked += 1
                 with self.subTest(at=np.round(c).tolist(), side=s):
@@ -1534,9 +1535,14 @@ class BridgesTests(unittest.TestCase):
         self.assertGreater(checked, len(self.crossings))
 
     def test_the_parapets_run_unbroken_either_side(self):
+        # alike either side in the open; in a street each side runs between its own houses
+        bsd = self.bsd()
         for c in self.crossings:
             ax = self.road_axis(c)
             side = np.array([-ax[1], ax[0]])
+            X, Z = np.meshgrid(np.arange(-16.0, 16.1, 0.5), np.arange(-10.0, 10.1, 0.5), indexing="ij")
+            P = c + X[..., None] * ax + Z[..., None] * side
+            street = sample(bsd, self.grid, P[..., 0].ravel(), P[..., 1].ravel()).min() <= mesh_grounds.STREET_M
             cap = self.tris[self.near(c) & self.of("pale-stone", up=True)]
             s_ = (cap.mean(axis=1)[:, [0, 2]] - c) @ side
             reach = []
@@ -1546,7 +1552,8 @@ class BridgesTests(unittest.TestCase):
                     self.assertEqual(len(getattr(plan, "geoms", [plan])), 1)          # no gaps, no offsets
                     a = (cap[s_ * s > 0].reshape(-1, 3)[:, [0, 2]] - c) @ ax
                     reach.append((float(a.min()), float(a.max())))
-            self.assertLess(float(np.abs(np.subtract(*reach)).max()), 0.5)           # the two sides alike
+            if not street:
+                self.assertLess(float(np.abs(np.subtract(*reach)).max()), 0.5)       # the two sides alike
 
     def test_a_raised_deck_ramps_gently_down_to_the_road(self):
         deck = self.of("bridge-deck", up=True)
@@ -1568,21 +1575,29 @@ class BridgesTests(unittest.TestCase):
                     self.assertLess(float(np.max(np.abs(end[:, 1] - ground))), 0.3)   # meeting the road at its ends
 
     def test_a_raised_deck_is_walled_both_sides(self):
-        # wherever the deck stands more than 0.3 m over the ground there is coping on both sides of it
+        # wherever the deck stands more than 0.3 m over the ground there is coping on both sides of it; in a street
+        # a house front across a side, where its parapet stops short of the house, closes that side
         deck = self.tris[self.of("bridge-deck", up=True)].reshape(-1, 3)
         cap = self.tris[self.of("pale-stone", up=True)].mean(axis=1)
+        bsd = self.bsd()
         for c in self.crossings:
             ax = self.road_axis(c)
             side = np.array([-ax[1], ax[0]])
             pts = deck[np.hypot(*(deck[:, [0, 2]] - c).T) < 30.0]
             lift = pts[:, 1] - sample(self.bed, self.grid, pts[:, 0], pts[:, 2])
+            street = (sample(bsd, self.grid, pts[:, 0], pts[:, 2]) < mesh_grounds.STREET_M).any()
             a = np.round((pts[:, [0, 2]] - c) @ ax, 1)
             mine = cap[np.hypot(*(cap[:, [0, 2]] - c).T) < 30.0]
             ca, cs = (mine[:, [0, 2]] - c) @ ax, (mine[:, [0, 2]] - c) @ side
+            across = np.arange(0.0, mesh_grounds.DECK_HALF_M[1] + mesh_grounds.FACE_REACH_M + 0.01, 0.25)  # to the faces
             for v in np.unique(a[lift > 0.3]):
                 with self.subTest(at=np.round(c).tolist(), station=float(v)):
                     near = np.abs(ca - v) < 0.6
-                    self.assertTrue((near & (cs > 0)).any() and (near & (cs < 0)).any())
+                    for s in (1.0, -1.0):                                          # (the wall stops 0.5 m short)
+                        q = (c + v * ax + s * across[:, None] * side)[None] + np.array([-1.0, 0.0, 1.0])[:, None, None] * ax
+                        q = q.reshape(-1, 2)
+                        housed = street and sample(bsd, self.grid, q[:, 0], q[:, 1]).min() < 0.0   # its front closes it
+                        self.assertTrue((near & (cs * s > 0)).any() or housed, s)
 
     def test_an_arched_opening_in_each_face_lets_the_water_through(self):
         dark = self.of("arch-shadow")
@@ -1612,15 +1627,15 @@ class BridgesTests(unittest.TestCase):
         self.assertLess(float(((ink >= 0.65) & ~raised).mean()), 0.02)            # no parapet across a road or path
 
     @staticmethod
-    def synthetic_bridge(extra):
-        """The copings' plan of a bridge on a synthetic road along x (|z| < 2.5) over a burn 3 m below at x = 0, with
-        `extra(e, n)` more road ink, and that ink."""
+    def synthetic_bridge(extra, ground=None):
+        """The copings' plan of a bridge on a synthetic road along x (|z| < 2.5) over a burn 3 m below at x = 0 (or on
+        `ground(x, z)`), with `extra(e, n)` more road ink, and that ink."""
         grid = world.rotated_grid(40)
         e, n = grid.to_world(*np.mgrid[0:grid.ny, 0:grid.nx])
         more = extra(e, n).astype(np.float64)
         locA = np.zeros((grid.ny, grid.nx, len(mesh_source.CHANNELS["locA"])), np.uint8)
         locA[..., mesh_source.CHANNELS["locA"].index("road")] = 255 * np.maximum(np.abs(n) < 2.5, more)
-        ground = lambda x, z: np.where(np.abs(np.asarray(z)) > 6.0, -3.0, 0.0) + 0.0 * np.asarray(x)
+        ground = ground or (lambda x, z: np.where(np.abs(np.asarray(z)) > 6.0, -3.0, 0.0) + 0.0 * np.asarray(x))
         scene = types.SimpleNamespace(locA=locA, local=grid, ground=ground, sunk=lambda x, z: ground(x, z) - 0.5,
                                       meta={"extras": {}})
         mesh = mesh_geometry.concat(mesh_grounds.bridge(scene, np.zeros(2), np.array([1.0, 0.0]), 2.5,
@@ -1645,10 +1660,70 @@ class BridgesTests(unittest.TestCase):
         self.assertLess(float(cap[..., 0].max()), 1.8)                             # both walls stop short of it
 
     def test_the_roads_ragged_edge_is_no_path(self):
-        # a texel-sized bump on the road's edge, reaching nowhere near the faces, leaves the walls their full reach
+        # a bump on the road's edge, reaching out to the faces (7 m) but not past them, leaves the walls their full reach
         full, _ = self.synthetic_bridge(lambda e, n: np.zeros_like(e, bool))
-        cap, _ = self.synthetic_bridge(lambda e, n: (e > 1.6) & (e < 2.6) & (n > 2.5) & (n < 4.0))
+        cap, _ = self.synthetic_bridge(lambda e, n: (e > 1.6) & (e < 2.6) & (n > 2.5) & (n < 7.4))
         self.assertAlmostEqual(float(cap[..., 0].max()), float(full[..., 0].max()), delta=0.05)
+
+    def test_a_path_meeting_a_raised_deck_meets_its_parapet(self):
+        # where the road lies level with the burn's banks the deck humps over the arches and ramps down at 1 in
+        # RAMP_GRADE: a path leaving it while it stands proud does not open the parapet over the drop
+        level = lambda x, z: 0.0 * np.asarray(x) + 0.0 * np.asarray(z)
+        path = lambda e, n: (e > 1.8) & (e < 5.8) & (n > 2.5)
+        full, _ = self.synthetic_bridge(lambda e, n: np.zeros_like(e, bool), level)
+        cap, _ = self.synthetic_bridge(path, level)
+        self.assertGreater(float(full[..., 0].max()), 4.0)                         # raised well past the path
+        self.assertAlmostEqual(float(cap[..., 0].max()), float(full[..., 0].max()), delta=0.05)
+
+    def bsd(self):
+        data = world.data()
+        return mesh_source.sd_bytes(decode(data["tex"]["locA"])[..., mesh_source.CHANNELS["locA"].index("bsd")])
+
+    def test_no_bridge_stands_in_a_house_or_on_its_footway(self):
+        # in Hogsmeade the burns pass under the High Street between its houses: the bridges stand in the gaps, clear of
+        # the house fronts and their doors, and off the flagstone footway before them
+        bsd = self.bsd()
+        deck = self.of("bridge-deck")
+        pts = self.tris[~deck].reshape(-1, 3)
+        clear = sample(bsd, self.grid, pts[:, 0], pts[:, 2])
+        self.assertGreater(float(clear.min()), 0.5, np.round(pts[np.argmin(clear)], 1))   # walls clear of the fronts
+        lay = self.tris[deck].reshape(-1, 3)
+        door = sample(bsd, self.grid, lay[:, 0], lay[:, 2]) < 1.0                 # lane B's doorstep (FOOTWAY "door")
+        lift = lay[door, 1] - sample(self.bed, self.grid, lay[door, 0], lay[door, 2])
+        self.assertLess(float(lift.max(initial=0.0)), 0.2)                         # and the doorsteps: a kerb, no more
+        flags, fattr, fnormal = payload_part("street-furniture")
+        flags = flags[np.all(fattr == code("flagstone"), axis=1) & (fnormal[:, 1] > 0.5)]
+        way = shapely.union_all([Polygon(t[:, [0, 2]]) for t in flags if Polygon(t[:, [0, 2]]).area > 1e-6])
+        self.assertGreater(way.area, 100.0)
+        for c in self.crossings:
+            walls = self.tris[self.near(c) & ~deck]
+            plan = shapely.union_all([Polygon(t[:, [0, 2]]).buffer(0.02) for t in walls])
+            under = self.tris[self.near(c) & deck].reshape(-1, 3)
+            on = shapely.contains_xy(way, under[:, 0], under[:, 2])
+            lift = under[on, 1] - sample(self.bed, self.grid, under[on, 0], under[on, 2])
+            with self.subTest(at=np.round(c).tolist()):
+                self.assertLess(plan.intersection(way).area, 0.5)                  # no wall through the flags
+                self.assertLess(float(lift.max(initial=0.0)), 0.1)                 # nor deck over them: under the kerb
+
+    def test_a_street_bridge_humps_low_over_its_burn(self):
+        # where houses line the road, the burn passes under the street on its lowest arch, the setts on its ring: a
+        # low hump, not a humpbacked bridge rising before the houses' doors
+        bsd = self.bsd()
+        streets = 0
+        for c in self.crossings:
+            ax = self.road_axis(c)
+            side = np.array([-ax[1], ax[0]])
+            X, Z = np.meshgrid(np.arange(-16.0, 16.1, 0.5), np.arange(-10.0, 10.1, 0.5), indexing="ij")
+            P = c + X[..., None] * ax + Z[..., None] * side
+            if sample(bsd, self.grid, P[..., 0].ravel(), P[..., 1].ravel()).min() > 4.0:
+                continue
+            streets += 1
+            deck = self.tris[self.near(c, 20.0) & self.of("bridge-deck", up=True)].reshape(-1, 3)
+            above = deck[:, 1] - sample(self.bed, self.grid, deck[:, 0], deck[:, 2])
+            on_road = np.abs((deck[:, [0, 2]] - c) @ side) < 2.0
+            with self.subTest(at=np.round(c).tolist()):
+                self.assertLess(float(above[on_road].max()), 0.75)
+        self.assertGreaterEqual(streets, 1)                                        # the High Street's, at least
 
 
 class ArchOpeningTests(unittest.TestCase):

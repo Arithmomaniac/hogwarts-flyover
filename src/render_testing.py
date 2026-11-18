@@ -17,6 +17,7 @@ sys.path.insert(0, str(ROOT / "src"))
 
 import build_meshes  # noqa: E402
 from assets_testing import levels  # noqa: E402
+from mesh_geometry import box  # noqa: E402
 from mesh_source import load_data  # noqa: E402
 from pagetest import PageTestCase  # noqa: E402
 
@@ -51,12 +52,14 @@ REARM = """if (!__hog.meshStats().on) throw new Error("REARM needs the meshes on
 __hog.meshes(true);"""
 
 
-def payload(*boxes, panes=(), walls=(), attr=None):
+def payload(*boxes, panes=(), walls=(), soffits=(), attr=None):
     """Axis-aligned boxes (x0, y0, z0, x1, y1, z1), glazing slabs and (footprint, y0, y1) walls, as a mesh payload
-    encoded as build_meshes.py does; boxes take `attr` (material, aux), boundary walls by default."""
+    encoded as build_meshes.py does; boxes take `attr` (material, aux), boundary walls by default. Boxes have no
+    underside, as prisms standing on the ground need none; `soffits` are boxes in `attr` that have one."""
     meshes = [build_meshes.prism(rectangle(x0, z0, x1, z1), y0, y1, a)
               for a, group in ((attr or WALL, boxes), ((build_meshes.MAT_GLASS, 0), panes))
               for x0, y0, z0, x1, y1, z1 in group]
+    meshes += [box(x0, x1, y0, y1, z0, z1, attr or WALL, bottom=True) for x0, y0, z0, x1, y1, z1 in soffits]
     meshes += [build_meshes.prism(footprint, y0, y1, WALL) for footprint, y0, y1 in walls]
     return json.loads(build_meshes.strip_js(build_meshes.encode_payload({"diagnostic": meshes}, SCENE)))
 
@@ -101,10 +104,12 @@ class RenderTestCase(PageTestCase):
     """A shared page with the meshes on, and helpers to show a diagnostic payload in place of the scene's meshes from a
     chosen view and probe what it draws."""
 
-    async def show(self, boxes, at=LAWN, yaw=EAST, pitch=-0.25, height=EYE_HEIGHT_M, panes=(), walls=(), shadow=(), attr=None):
+    async def show(self, boxes, at=LAWN, yaw=EAST, pitch=-0.25, height=EYE_HEIGHT_M, panes=(), walls=(), shadow=(),
+                   soffits=(), attr=None):
         x, z = at
         ground = (await self.page.evaluate("([x, z]) => __hog.ground(x, z)", [x, z]))[1]
-        body = payload(*boxes, panes=panes, walls=walls, attr=attr) if boxes or panes or walls else None
+        shown = boxes or panes or walls or soffits
+        body = payload(*boxes, panes=panes, walls=walls, soffits=soffits, attr=attr) if shown else None
         if shadow:
             body["shadow"] = [[float(v) for v in box] for box in shadow]
         frames = await self.page.evaluate(

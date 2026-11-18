@@ -14,8 +14,9 @@ from common import to_tm
 A_ROAD_M = 12.0             # cleared each side of an A-road's centre line: carriageway, verges and fences
 RAILWAY_M = 10.0            # each side of a railway's
 BUILDING_M = 10.0           # round a building: its yard
-HOME_WOBBLE_M, HOME_BLUR_M, HOME_SEED = 8.0, 12.0, 11       # beyond its yard a homestead's clearing wanders out by up
+HOME_WOBBLE_M, HOME_BLUR_M, HOME_SEED = 8.0, 12.0, 11       # beyond its yard a homestead's glade wanders out by up
                                                             # to twice this (clearings.glade)
+HOME_THIN_M = 48.0          # and beyond the glade's edge the Forest thins out over this far
 SETBACK_MIN_M, SETBACK_M, SETBACK_MAX_M = 25.0, 50.0, 90.0     # the Forest's edge short of a road it ends at
 VILLAGE_MIN_M, VILLAGE_M, VILLAGE_MAX_M = 40.0, 60.0, 100.0    # and round the buildings along that road
 VILLAGE_REACH_M = 150.0     # a building this near such a road belongs to the settlement along it
@@ -77,9 +78,10 @@ def _near(lines, E, N, within):
 
 def homesteads(E, N, ways_, texel):
     """The multiplier (0 to 1) of White Hound's Forest round the buildings it covers, at a layer's texel centres E, N,
-    `texel` metres apart. Each building's yard, BUILDING_M round it (its texels a diagonal further) and inside it, is
-    cleared, and the clearing spreads on beyond as the homestead's ground: its edge wanders, and the Forest thickens back
-    over EDGE_M (clearings.glade), so that it reads as a croft's clearing, not as a cutout round its walls."""
+    `texel` metres apart. The scene draws none of them; round each the Forest opens in a natural glade. The building's
+    yard, BUILDING_M round it (its texels a diagonal further) and inside it, is clear, and the glade spreads on beyond:
+    its edge wanders, and the Forest thins out over HOME_THIN_M beyond it (clearings.glade), trees standing scattered
+    across that band, so that it reads as a glade, not as a cutout round walls."""
     reach = texel * np.sqrt(2.0) + STEP_M
     built = [(e, n) for t, e, n in ways_ if is_building(t)]
     yard = _near(built, E, N, BUILDING_M + reach)
@@ -91,7 +93,7 @@ def homesteads(E, N, ways_, texel):
     if not yard.any():
         return np.ones(E.shape, np.float32)
     return clearings.glade(yard, texel, HOME_SEED, margin_m=0.0, wobble_m=HOME_WOBBLE_M, blur_m=HOME_BLUR_M,
-                           feather_m=EDGE_M)
+                           feather_m=HOME_THIN_M)
 
 
 def ends(rules, E, N, ways_, texel):

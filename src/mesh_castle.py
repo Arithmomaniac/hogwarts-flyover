@@ -42,6 +42,7 @@ GLASS, GLASS_LIT, OAK, REVEAL = (code(n)[1] for n in ("castle-glass", "castle-gl
 GLASS_DIM = code("castle-glass-dim")[1]               # a pane lit dimly at dusk: the room's candle further from the window
 GLASS_PANES = (GLASS, GLASS_LIT, GLASS_DIM)
 IRON = code("castle-iron")[1]                          # the oak doors' straps and the joints of their boards
+COURSE = code("castle-course")[1]                      # string courses and cornices
 PLAIN = code("castle-plain")[1]                        # exposed plain masonry (steps): P3 paints no windows or slate on it
 LIT_PERCENT, DIM_PERCENT = 40, 15          # panes lit at dusk, as P3 lights its painted windows; of them, this many dimly
 TURRET_M = 15.0                            # Gryffindor's trefoil turrets above its drum (towerD)
@@ -55,6 +56,8 @@ ROOF_PIECE_M2 = 4000.0                     # flat tops are cut into pieces this 
 PARTY_M = 0.1                              # a lower mass runs this far into the taller mass or drum it abuts, out of sight
 SLIVER_M = 0.6                             # what a cut leaves narrower than twice this beside the taller mass is dropped
 NT_CLEAR_M = 1.2                           # the North Tower's overhanging top clears the masses round it by this much
+CRESCENT_M = 1.5                           # a mass cut round a drum it wrapped keeps nothing round it narrower than twice this
+JOIN_M = 0.3                               # ... but what joins another mass this near
 HOLE_M2 = 4.0                              # smaller holes in a mass are raster noise, filled
 GAP_HELD = 0.15                            # straightening's gaps that two masses each hold this much of the rim of are
                                            # filled
@@ -62,6 +65,8 @@ STRAY_M2, STRAY_M = 30.0, 1.0             # a smaller mass (but a low wall) nowh
                                            # one other, is a raster stray
 ALONG = 0.3                                # a sliver lies along the taller wall for this much of its rim
 CLING = 0.25                               # a small roofed mass along a taller wall for this much of its rim is fringe
+STUB_M = 1.0                               # a small battlemented mass against one taller mass for this long, meeting no other, is
+                                           # a remnant of a wall cut away
 NEEDLE = 2e-3                              # a triangle with less area than this times its longest edge squared is a needle
 SKELETON_M2 = 30.0                         # smaller roofs take the heightfield, which CGAL's skeleton cannot always roof
 END_M = 1.2                                # masonry kept clear at each end of a wall
@@ -80,13 +85,20 @@ class Fenestration(NamedTuple):
     spacing: float                         # centre to centre along a wall
     storey: float                          # sill to sill; 0 for a single row
     first: float                           # lowest sill above the castle base
+    graded: bool = False                   # storeys sized as STOREYS: ground, principal, ordinary, attic
 
 
 # inferred (castle-norman-openings): about 4 m storeys in the 8-storey, 32 m blocks; the Great Hall's tall windows sit
 # high above the courts; the keep's are smaller and further apart
-WINDOWS = {"range": Fenestration(1.0, 2.2, 0.7, 3.2, 4.0, 1.0), "block": Fenestration(1.0, 2.2, 0.7, 3.2, 4.0, 1.0),
+WINDOWS = {"range": Fenestration(1.0, 2.2, 0.7, 3.2, 4.0, 1.0, True), "block": Fenestration(1.0, 2.2, 0.7, 3.2, 4.0, 1.0, True),
            "great_hall": Fenestration(1.6, 6.5, 0.9, 5.0, 0.0, 9.0), "keep": Fenestration(0.9, 1.9, 0.9, 4.0, 4.5, 1.0)}
 TOWER_WINDOW = Fenestration(0.9, 1.9, 0.6, 0.0, 4.0, 1.0)   # columns on every 2nd or 3rd facet, storeys staggered
+# the ranges' and blocks' storeys (the west front read as one grid of identical windows): a low ground floor, a tall
+# principal storey over it, the ordinary storeys, and a small attic under the eaves, as (width, height) by storey
+STOREYS = {"ground": (0.8, 1.5), "principal": (1.2, 3.0), "attic": (0.8, 1.4)}
+SPACINGS = (2.9, 3.3, 3.8, 4.4)            # each wing spaces its windows by one of these, picked by its position
+COURSE_M, COURSE_OUT_M = 0.25, 0.12        # string courses' and the cornice's height and projection
+CORNICE_M = 0.05                           # the cornice's top this far under the eaves, the attic's heads under it
 SLIT_M = 0.2                                # a slender drum's facets take windows down to this narrow (slits)
 TURRET_WINDOW = Fenestration(0.7, 1.6, 0.4, 0.0, 4.0, 2.5)  # Gryffindor's turrets: on alternate facets facing out, over
                                                             # the drum's battlements
@@ -117,7 +129,9 @@ HOUSE_EAVE_M, HOUSE_PITCH = 7.0, 1.0       # two storeys; steep roofs, rising a 
 HOUSE_WINDOW = Fenestration(0.8, 1.4, 0.3, 2.6, 3.4, 1.0)   # domestic windows: two storeys under the eaves
 HOUSE_DOOR = Opening(u=0.0, sill=0.0, width=1.1, height=2.4, depth=0.35, fill=(4, OAK))
 HOUSE_OPEN_M = 3.2                         # a house's wall takes openings where the court is open this far out from it
-CHIMNEY_SPACING_M, CHIMNEY_M, CHIMNEY_INSET_M = 35.0, 2.2, 3.5   # ranges and blocks: sparing stacks well inside the roof
+POT_M = 0.55                                # a chimney pot's height over its stack's cope
+CHIMNEY_SPACING_M, CHIMNEY_M, CHIMNEY_INSET_M = 24.0, 2.2, 3.5   # ranges and blocks: stacks well inside the roof,
+                                                                 # each 0.7 to 1.5 times CHIMNEY_M tall
 
 
 def dome(r):
@@ -278,7 +292,7 @@ def straighten(raws, cls):
                       reverse=True)
         if len(held) >= 2 and held[1][0] >= GAP_HELD:      # a slit between two masses, not a strip along one wall
             fill[max(held[0][1], held[1][1])].append(g)
-    out, taken, fringes = [], Polygon(), []
+    out, taken, fringes, stubs = [], Polygon(), [], []
     for (k, _), s, f in zip(merged, straight, fill):
         inside = taken.buffer(-PARTY_M, join_style="mitre")
         o = trimmed(shapely.union_all([s, *f]), inside)
@@ -286,10 +300,12 @@ def straighten(raws, cls):
         for p in polygons(o, 1.0):
             joins = len(tree.query(p.buffer(0.2), predicate="intersects")) > 2      # itself and two it joins
             stray = (CASTLE_CLASSES[k] != "low_wall" and p.area < STRAY_M2 and p.buffer(-STRAY_M).is_empty)
-            fringe = (int(cls[k][1]) in ROOFS and p.area < STRAY_M2           # a roofed fringe along a taller wall
-                      and p.boundary.intersection(inside.buffer(2 * PARTY_M)).length > CLING * p.length)
-            if fringe:
+            cling = p.boundary.intersection(inside.buffer(2 * PARTY_M)).length
+            small = CASTLE_CLASSES[k] != "low_wall" and p.area < STRAY_M2
+            if small and int(cls[k][1]) in ROOFS and cling > CLING * p.length:    # a roofed fringe along a taller wall
                 fringes.append((k, p))
+            elif small and int(cls[k][1]) not in ROOFS and cling > STUB_M:        # a stub left standing against one
+                stubs.append((k, p))
             elif joins or not stray:
                 out.append((k, orient(p, 1.0)))
     for k, p in fringes:                # the raster's edge of the taller mass it clings to: that mass takes it
@@ -300,6 +316,10 @@ def straighten(raws, cls):
             out[j] = (out[j][0], orient(max(polygons(out[j][1].union(p.buffer(PARTY_M, join_style="mitre"))),
                                             key=lambda g: g.area), 1.0))
         else:
+            out.append((k, orient(p, 1.0)))
+    for k, p in stubs:                  # a stub beside one taller mass, joining nothing, is a remnant of a wall cut away: dropped
+        met = [kk for kk, q in out if q.intersects(p.buffer(2 * PARTY_M))]
+        if len(met) > 1 or any(wall_top(kk, cls) <= wall_top(k, cls) for kk in met):
             out.append((k, orient(p, 1.0)))
     return out
 
@@ -354,15 +374,64 @@ def battlements(outline, cover, top, attr, thick=0.5, parapet=1.0, merlon=0.8, w
 
 
 def overhangs(towers):
-    """(clearance, foot) round each re-ranked North Tower's overhanging top: the masses standing above `foot` are cut
-    back to clear it by NT_CLEAR_M, so the tower stands beside them rather than fused into their roofs."""
+    """(clearance, foot) round each re-ranked North Tower's overhanging top and dome: the masses standing above `foot`
+    are cut back to clear its widest by NT_CLEAR_M, so the tower stands beside them rather than fused into their roofs
+    (cut_back)."""
     out = []
     for t in towers:
         if t["kind"] == NORTH:
             n = facets(t)
-            out.append((circle(t["x"], t["z"], (OVERHANG * t["r"] + NT_CLEAR_M) / math.cos(math.pi / n), n),
+            widest = max(rr for rr, _ in dome(t["r"]))
+            out.append((circle(t["x"], t["z"], (widest + NT_CLEAR_M) / math.cos(math.pi / n), n),
                         t["top"] - DROP_M - NT_CLEAR_M))
     return out
+
+
+def cut_back(o, disc):
+    """`o` cut back from the clearance `disc` round a tower that stands outside it, along a straight wall square to
+    the tower, facing the most of what is left of `o`, across all of the disc it reaches: a circular notch wrapped the
+    tower, which read as built into the mass. What is left on the disc's other sides, a range running on past the
+    tower, keeps the disc's cut; a tower standing wholly inside `o` is cut round as before."""
+    c = disc.centroid
+    rest = polygons(o.difference(disc))
+    if o.contains(disc) or not rest:
+        return trimmed(o, disc)
+    main = max(rest, key=lambda g: g.area)
+    radius = c.distance(disc.exterior)
+    toward = np.asarray((main.centroid if o.contains(c) else shapely.shortest_line(o, c)).coords[0]) - [c.x, c.y]
+    d = toward / max(np.hypot(*toward), 1e-9)
+    e = np.array([-d[1], d[0]])
+    reach = 2 * radius                                   # wide enough to leave no horns either side of the tower
+    q = np.array([c.x, c.y])
+    side = Polygon([q + d * radius - e * reach, q + d * radius + e * reach, q - d * reach + e * reach, q - d * reach - e * reach])
+    return shapely.union_all([trimmed(main, side.union(disc))] + [g for g in rest if g is not main])
+
+
+def unwrapped(o, centre, radius, others, width=None):
+    """`o` less what it wrapped round the far side of a drum (centre, radius) it was cut round: its part beyond the
+    drum's centre, seen from its own bulk nearby: each piece of it lying wholly within three times `width` (CRESCENT_M)
+    of the drum's face and joining none of the masses `others` (within JOIN_M); a face running on past the drum stays. Such a crescent's corner stood out past the
+    drum's face, with a gap at its foot."""
+    width = CRESCENT_M if width is None else width
+    q = np.asarray(centre, float)
+    bulk = o.intersection(shapely.Point(q).buffer(3 * radius))
+    if bulk.is_empty:
+        return o
+    d = q - np.asarray(bulk.centroid.coords[0])
+    if np.hypot(*d) < 1e-6:
+        return o
+    d /= np.hypot(*d)
+    e = np.array([-d[1], d[0]])
+    big = 4 * radius + 100.0
+    beyond = Polygon([q - e * big, q + e * big, q + d * big + e * big, q + d * big - e * big])
+    far = o.intersection(beyond)
+    if far.is_empty or far.area < 1e-6:
+        return o
+    joins = others.buffer(JOIN_M) if not others.is_empty else None
+    gone = [g for g in polygons(far, 1e-6)
+            if max(math.dist(p, q) for p in g.exterior.coords) <= radius + 3 * width
+            and (joins is None or not g.intersects(joins))]
+    return shapely.set_precision(o.difference(shapely.union_all(gone).buffer(1e-3)), 1e-3) if gone else o
 
 
 def drum_feet(towers, head, stairs):
@@ -380,16 +449,25 @@ def clear_of_drums(outlines, feet, clear, cls, cbase, local):
     """The masses less the tower drums standing taller than their walls and the `clear`ances round overhanging tops
     (disc, foot) whose foot they rise above, and the slivers either leaves."""
     out = []
-    for k, o in outlines:
+    for i, (k, o) in enumerate(outlines):
         rel, rt = cls[k]
         high = wall_top(k, cls) + ((ROOFS[int(rt)][0] - EAVE_M) * ROOFS[int(rt)][1] if int(rt) in ROOFS else 0.0)
+        others = None
         for disc, top, lower in [(f, t, True) for f, t in feet] + [(f, t, False) for f, t in clear]:
             if not o.intersects(disc):
                 continue
             c = disc.centroid
             base = float(sample(cbase, local, np.array([c.x]), np.array([c.y]))[0])
-            if (top > base + wall_top(k, cls)) if lower else (base + high > top):
+            if lower and top > base + wall_top(k, cls):
+                inside = o.contains(c)
                 o = trimmed(o, disc)
+                if inside:                                  # the drum stood in the mass: no crescent left round it
+                    if others is None:
+                        others = shapely.union_all([q for j, (_, q) in enumerate(outlines) if j != i])
+                    radius = max(math.dist(q, (c.x, c.y)) for q in disc.exterior.coords)
+                    o = unwrapped(o, (c.x, c.y), radius, others)
+            elif not lower and base + high > top:
+                o = cut_back(o, disc)
         out += [(k, orient(p, 1.0)) for p in polygons(o, 1.0)]
     return out
 
@@ -580,7 +658,8 @@ def glazed(spec, u, x, z, sill):
 
 def wall_windows(walls, cbase, local, air):
     """The windows each wall (p0, p1, spec, eave, mass index) takes: columns `spacing` apart clear of its ends, one per
-    storey up to the eaves, wherever they look out into open air."""
+    storey up to the eaves (a graded spec's storeys sized as STOREYS, under its cornice), wherever they look out into
+    open air."""
     found = [[] for _ in walls]
     rows = []
     for w, (p0, p1, spec, eave, mass) in enumerate(walls):
@@ -592,17 +671,62 @@ def wall_windows(walls, cbase, local, air):
         u = length / 2 + (np.arange(n) - (n - 1) / 2) * spec.spacing
         x, z = p0[0] + t[0] * u, p0[1] + t[1] * u
         floor = sample(cbase, local, x, z) + spec.first
-        highest = eave(x, z) - EDGE_M - spec.height
+        roof = eave(x, z) - (CORNICE_M + COURSE_M + 0.15 if spec.graded else EDGE_M)
+        least = STOREYS["attic"][1] if spec.graded else spec.height        # the top storey's window height
+        highest = roof - least
         storeys = np.arange(max(int(np.max((highest - floor) // spec.storey)) + 1, 1) if spec.storey else 1)
         sill = floor[:, None] + spec.storey * storeys[None, :]
-        for i, j in zip(*np.nonzero(sill <= highest[:, None])):
-            rows.append((w, u[i], x[i], z[i], t[1], -t[0], sill[i, j], spec.height, spec.depth, mass))
+        for i in range(n):
+            js = [j for j in storeys if sill[i, j] + least <= roof[i]]
+            for j in js:
+                size = (spec.width, spec.height)
+                if spec.graded:
+                    size = (STOREYS["attic"] if j == js[-1] and j >= 3 else STOREYS["ground"] if j == 0
+                            else STOREYS["principal"] if j == 1 else size)
+                    if sill[i, j] + size[1] > roof[i]:
+                        continue
+                rows.append((w, u[i], x[i], z[i], t[1], -t[0], sill[i, j], size[1], spec.depth, mass, size[0]))
     if rows:
-        w, u, x, z, ox, oz, sill, head, depth, mass = np.array(rows).T
+        w, u, x, z, ox, oz, sill, head, depth, mass, width = np.array(rows).T
         ok = air(x, z, np.column_stack([ox, oz]), sill, sill + head, depth, mass=mass.astype(int))
         for k in np.flatnonzero(ok):
-            found[int(w[k])].append(glazed(walls[int(w[k])][2], u[k], x[k], z[k], sill[k]))
+            spec = walls[int(w[k])][2]._replace(width=float(width[k]), height=float(head[k]))
+            found[int(w[k])].append(glazed(spec, u[k], x[k], z[k], sill[k]))
     return found
+
+
+def courses(p0, p1, spec, floor, eave, gaps, attr):
+    """A graded wall's string courses, projecting COURSE_OUT_M: one under the principal storey's sills, one under the
+    attic's, and the cornice under the eaves; each broken round the `gaps` it would cross ((u0, u1, y0, y1) along the
+    wall and in height: doorways, the pend). `floor` and `eave` are callables of x, z."""
+    length = math.dist(p0, p1)
+    t = (p1 - p0) / length
+    out = np.array([t[1], -t[0]])
+
+    def strips(level):
+        pieces, a = [], 0.0
+        for g0, g1, y0, y1 in sorted(gaps) + [(length, length, -math.inf, math.inf)]:
+            q = p0 + t * float(np.clip((g0 + g1) / 2, 0.0, length))
+            lo = float(level(*q[:, None])[0])
+            if y1 < lo or y0 > lo + COURSE_M:            # an opening wholly below or above this course
+                continue
+            if g0 - a > 0.3:
+                q0, q1 = p0 + t * a, p0 + t * min(g0, length)
+                pieces.append(orient(Polygon([q0, q1, q1 + out * COURSE_OUT_M, q0 + out * COURSE_OUT_M]), 1.0))
+            a = max(a, g1)
+        return pieces
+    mid = (p0 + p1) / 2
+    rise = float(eave(*mid[:, None])[0] - floor(*mid[:, None])[0]) - CORNICE_M - COURSE_M - 0.15
+    attic = int((rise - STOREYS["attic"][1] - spec.first) // spec.storey)   # wall_windows' top storey
+    levels = [lambda x, z: floor(x, z) + spec.first + spec.storey - 0.45,
+              lambda x, z: eave(x, z) - CORNICE_M - COURSE_M]
+    if attic >= 3:
+        levels.append(lambda x, z: floor(x, z) + spec.first + spec.storey * attic - 0.45)
+    parts = []
+    for lo in levels:
+        for strip in strips(lo):
+            parts.append(prism(strip, lo, lambda x, z, lo=lo: lo(x, z) + COURSE_M, attr))
+    return parts
 
 
 def tower_windows(t, cbase, local, air):
@@ -883,12 +1007,15 @@ def physick_garden(at, toward, outlines, clear, ground, sunk):
 
 
 def stack(x, z, foot, top, attr, along=(1.0, 0.0)):
-    """A chimney stack from `foot` to `top` with a projecting cope, its long side along `along`."""
+    """A chimney stack from `foot` to `top` with a projecting cope and two sooted pots on it, its long side along `along`:
+    without the pots, a stack seen against the masonry behind it read as a notch in the roof (court-house-15, round 3)."""
     a = np.asarray(along, np.float64) / np.linalg.norm(along)
     b = np.array([-a[1], a[0]])
     rect = lambda la, lb: orient(Polygon([np.array([x, z]) + a * sa * la + b * sb * lb
                                           for sa, sb in ((-1, -1), (1, -1), (1, 1), (-1, 1))]), 1.0)
-    return [prism(rect(0.7, 0.45), foot, top, attr), prism(rect(0.8, 0.55), top, top + 0.2, attr)]
+    pots = [prism(orient(box(*(np.array([x, z]) + a * s * 0.35 - 0.13), *(np.array([x, z]) + a * s * 0.35 + 0.13)), 1.0),
+                  top + 0.2, top + 0.2 + POT_M, (4, IRON)) for s in (-1, 1)]
+    return [prism(rect(0.7, 0.45), foot, top, attr), prism(rect(0.8, 0.55), top, top + 0.2, attr)] + pots
 
 
 def chimneys(outline, height, attr):
@@ -907,8 +1034,9 @@ def chimneys(outline, height, attr):
     parts, solids = [], []
     for x, z in kept:
         y = float(height(np.array([x]), np.array([z]))[0])
-        parts += stack(x, z, y - 0.5, y + CHIMNEY_M, attr)
-        solids.append((x, z, 1.0, y - 0.5, y + CHIMNEY_M + 0.2, None))
+        tall = CHIMNEY_M * (0.7 + 0.8 * (zlib.crc32(f"{x:.0f} {z:.0f}".encode()) % 100) / 100)
+        parts += stack(x, z, y - 0.5, y + tall, attr)
+        solids.append((x, z, 1.0, y - 0.5, y + tall + 0.2 + POT_M, None))
     return parts, solids
 
 
@@ -1070,8 +1198,15 @@ def castle(data, csd, castle_grid, local, cbase, keep, ground, sunk, dropped, tr
     solids += [(x, z, STAIR_TURRET_R, -math.inf, top, None) for x, z, top in stairs] + stacks
     air = Air(masses + garden_walls + homes, solids, ground)
     walls = [(j, m, p0, p1) for j, m in enumerate(masses) for (p0, p1), hid in zip(edges(m.outline), party[j][0]) if not hid]
-    openings = wall_windows([(p0, p1, WINDOWS.get(CASTLE_CLASSES[m.k]) if m.outline.area >= WING_M2 else None, m.eave, j)
-                             for j, m, p0, p1 in walls], cbase, local, air)
+
+    def fenestration(m):
+        spec = WINDOWS.get(CASTLE_CLASSES[m.k]) if m.outline.area >= WING_M2 else None
+        if spec is not None and spec.graded:         # each wing its own spacing, picked by its position
+            c = m.outline.representative_point()
+            spec = spec._replace(spacing=SPACINGS[zlib.crc32(f"{c.x:.0f} {c.y:.0f}".encode()) % len(SPACINGS)])
+        return spec
+    specs = [fenestration(m) for m in masses]
+    openings = wall_windows([(p0, p1, specs[j], m.eave, j) for j, m, p0, p1 in walls], cbase, local, air)
     w, door = front_door(walls, plan(*traced["front-steps"]["plan_px"]), cbase, local)
     openings[w] = [door] + openings[w]                  # windows crowding the doorway give way to it
     _, _, p0, p1 = walls[w]
@@ -1080,8 +1215,13 @@ def castle(data, csd, castle_grid, local, cbase, keep, ground, sunk, dropped, tr
     cuts = {}                                           # the pend's openings in its host's walls
     for (q0, q1), cut in zip(pend.faces, pend.cuts):
         cuts[next(i for i, (_, _, p0, p1) in enumerate(walls) if np.allclose(p0, q0) and np.allclose(p1, q1))] = [cut]
-    for i, ((_, m, p0, p1), found) in enumerate(zip(walls, openings)):
+    for i, ((j, m, p0, p1), found) in enumerate(zip(walls, openings)):
         pieces.append(facade(p0, p1, sunk, m.eave, found, (4, REAL_AUX + m.k), reveal=(4, REVEAL), cuts=cuts.get(i, ()))[0])
+        if specs[j] is not None and specs[j].graded and math.dist(p0, p1) > 2 * END_M:
+            gaps = [(o.u - o.width / 2 - 0.3, o.u + o.width / 2 + 0.3, o.sill, o.sill + o.height)
+                    for o in found if o.height > specs[j].storey]
+            gaps += [(*(np.asarray(c.bounds)[[0, 2]] + [-0.3, 0.3]), *np.asarray(c.bounds)[[1, 3]]) for c in cuts.get(i, ())]
+            pieces += courses(p0, p1, specs[j], lambda x, z: sample(cbase, local, x, z), m.eave, gaps, (4, COURSE))
     pieces += [tube(pend.near, pend.far, (4, REVEAL))] + gates(pend, (4, OAK))
     head_openings = tower_windows(head, cbase, local, air)
     head_openings[(0, door_facet)] = [head_door] + head_openings.get((0, door_facet), [])

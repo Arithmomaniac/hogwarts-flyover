@@ -153,9 +153,10 @@ def knot_site(ground, gap):
 
 
 def bark_code(direction):
-    """The bark code whose furrows run nearest along `direction`, either way."""
+    """The bark code whose furrows run nearest along `direction`, either way: a lying or rising one, as the trunk's own
+    code wraps its furrows round the trunk's axis."""
     d = unit(np.asarray(direction, float))
-    aux = max(BARK_AXES, key=lambda a: (abs(float(d @ BARK_AXES[a])), -a))
+    aux = max((a for a in BARK_AXES if a != BARK[1]), key=lambda a: (abs(float(d @ BARK_AXES[a])), -a))
     return (BARK[0], aux)
 
 

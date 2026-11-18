@@ -10,9 +10,9 @@
   "baseline-x": {
     "kind": "file",
     "file": "baseline-x.html",
-    "size": 4435848,
-    "sha256": "3ae276c1540782b5cf3ba7c8ab01ed795757e0d439b09e0ee47598ebd0a84831",
-    "about": "the frozen baseline page re-frozen at site X: baseline-s4-idle's renderer with its castle's window band, shading ramp and fog made relative to the lake, the page's colours for the surface classes X's data adds, X's build/data.js (sha256 72a96f8904ac10d2...) in place of Scardroy's, and the trunk page's tour (its waypoints and path, about 573 s) in place of its own; the parity and frame-time reference at X",
+    "size": 4469003,
+    "sha256": "0584e2f09cc3a76955037be47fa0cfdf2a2bddc1b9de26ab7a405e26a7f6e2a8",
+    "about": "the frozen baseline page re-frozen at site X: baseline-s4-idle's renderer with its castle's window band, shading ramp and fog made relative to the lake, the page's colours for the surface classes X's data adds, X's build/data.js (sha256 350247bc15130eb1...) in place of Scardroy's, and the trunk page's tour (its waypoints and path, about 573 s) in place of its own; the parity and frame-time reference at X",
     "obtain": "Run python -X utf8 -m tools.site.baseline in a worktree whose build/data.js has that sha256 and whose hogwarts-flyover.html flies that tour: it writes build/inputs/baseline-x.html, where tools.inputs finds it, and checks it against this pin."
   },
   "data-before-railway": {
@@ -26,8 +26,8 @@
   "data-before-railway-x": {
     "kind": "file",
     "file": "data-before-railway-x.js",
-    "size": 4312718,
-    "sha256": "5303f53782b142bfdeeb8526fd379b30714b588bbe638e29c621fa5d4697dec3",
+    "size": 4348748,
+    "sha256": "9316e4daf63dd37c8448a0c5e0b19a5b89cd0b8cd25c7529b9e8e710b8c767b1",
     "about": "site X's build/data.js as pack.py and fix_berth.py leave it, before the railway regrade; the input of stage S0",
     "obtain": "Build it in this worktree: run `python -X utf8 -m tools.site.sources fetch`, then `python -X utf8 -m tools.site.build x`, which builds X's data from the pinned sources and writes this file to build/inputs/, where it is found. Don't record it in inputs.json, which every worktree shares."
   },

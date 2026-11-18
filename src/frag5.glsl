@@ -80,6 +80,8 @@ vec3 shade(vec3 ro, vec3 rd, Res r) {
     bw.x += 0.5 * mod(floor(bw.y), 2.);
     alb = vec3(0.26, 0.228, 0.19) * (0.86 + 0.28 * hash12(floor(bw)) * (1. - smoothstep(0.15, 0.6, pix)));   // warm brown-grey
     alb *= 0.88 + 0.24 * vnoise(p.xz * 0.05 + p.y * 0.04);
+    alb *= (0.93 + 0.14 * vnoise(vec2((bw.x - 0.5 * mod(floor(bw.y), 2.)) * 0.8, p.y * 0.035)))   // rain-streaked down the walls (unbonded)
+         * mix(0.8, 1., smoothstep(0., 2.5, p.y - s.gy));               // and soiled at their feet
     bool roof = false; float wx = faceCoord(p, n, true), wtop = top - 1.5, sky = 1.;
     if (ti >= 0) {
       vec4 tw = uTw[ti]; float rf = uTx[ti].x, tt = mt ? r.ctop : tw.w;
@@ -106,6 +108,7 @@ vec3 shade(vec3 ro, vec3 rd, Res r) {
       emi += wm * lit * uDusk * CANDLE * 0.2;
     }
     ao = (0.65 + 0.35 * smoothstep(LAKE + 35., LAKE + 47., p.y)) * sky;
+    ao *= 1. - 0.45 * clamp((-n.y - 0.2) * 2.5, 0., 1.);   // turned down (a corbel, a soffit): it sees the far ground, not the sky
     if (part) {                                       // 40-43 and 45 sit recessed in the wall, where less of the sky reaches them
       bool pane = r.aux < 41.5 || (r.aux > 44.5 && r.aux < 45.5);   // 40 dark, 41 lit and 45 dimly lit at dusk
       if (r.aux < 43.5 || pane) ao *= 0.6;
@@ -194,16 +197,38 @@ float meshSun(vec3 p) {
 #endif
 
 #ifdef TREE_PASS
+// treeSD stands a crown on the ground under each of its points, so a crown reaching over a sheer face (a cliff's brink or
+// foot) would fold down or up the face, sliced and hanging: no tree grows where the ground at its crown's edge lies more
+// than TREE_DROP_M from its foot and, over some half of its radius, falls or climbs more steeply than TREE_SHEER (68
+// degrees). A crown on a smooth bank is only sheared, and stays. A tree so dropped still counts in mh, which only has to
+// bound the march.
+#define TREE_DROP_M 4.
+#define TREE_SHEER 2.5
+bool treeStands(vec2 ctr, float r) {
+  float foot = sampleGround(ctr).bed, drop = 0., steep = 0.;
+  for (int k = ZERO; k < 8; k++) {
+    float a = float(k) * 0.7853982;
+    vec2 d = vec2(cos(a), sin(a));
+    float mid = sampleGround(ctr + 0.5 * r * d).bed, edge = sampleGround(ctr + r * d).bed;
+    drop = max(drop, abs(edge - foot));
+    steep = max(steep, max(abs(mid - foot), abs(edge - mid)));
+  }
+  return drop <= TREE_DROP_M || steep <= TREE_SHEER * 0.5 * r;
+}
 void main() {                                         // one texel per tree cell: the table treeSD reads
   vec2 cc = floor(gl_FragCoord.xy) - TREE_G0;
   float d = 0., cf = 0., mh = 0., r;
   for (int k = ZERO; k < 25; k++) {                  // own cell (k == 12) and the tallest tree within two cells
     vec2 c = cc + vec2(float(k % 5), float(k / 5)) - 2.;
     vec4 h = hash42(c);
-    float conF, dn = floor(treeDens((c + 0.25 + 0.5 * h.yz) * 7., conF) * 255. + 0.5) / 255.;   // as stored
+    vec2 ctr = (c + 0.25 + 0.5 * h.yz) * 7.;
+    float conF, dn = floor(treeDens(ctr, conF) * 255. + 0.5) / 255.;   // as stored
     conF = floor(conF * 255. + 0.5) / 255.;
     if (k == 12) { d = dn; cf = conF; }
-    if (h.x < dn) mh = max(mh, treeH(h, dn, h.w < conF, r));
+    if (h.x < dn) {
+      mh = max(mh, treeH(h, dn, h.w < conF, r));
+      if (k == 12 && !treeStands(ctr, r)) d = 0.;
+    }
   }
   outColor = vec4(d, cf, (mh + 0.1) / 25.5, 1.);
 }

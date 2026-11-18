@@ -10,6 +10,7 @@
   const fLin = !!gl.getExtension("OES_texture_float_linear");
   const aniso = gl.getExtension("EXT_texture_filter_anisotropic");
   const pcomp = gl.getExtension("KHR_parallel_shader_compile");
+  const floatBlend = !!gl.getExtension("EXT_float_blend");   // blending into 32-bit floats: the lake's mirrored small lights
   gl.pixelStorei(gl.UNPACK_ALIGNMENT, 1);
   const TREE_N = 1440;               // 3D-tree table: one texel per 7 m tree cell, cells -720..719 (+-5 km round the castle)
   const CONE_ROWS = 2048 - TREE_N;   // band below the tree table: cone start per 8x8 block (columns < CG[0].c), max-height grid beyond
@@ -448,29 +449,37 @@ void main() {
   // lamp too small for a pixel of its own still shows at night. A pane covering cover pixels shines at its own radiance
   // times LIGHT_GAIN * cover, never under LIGHT_MIN of it nor over it, fading out as the pane grows past 1-3 pixels and
   // draws itself, and dimmed by the fog; drawn LIGHT_PX across, a little nearer than its pane, so its own reveal cannot
-  // hide it while anything standing in front does
+  // hide it while anything standing in front does. Mirrored about the lake into the mirror pass's target (uMirror 1),
+  // a point takes that target's half-resolution texels for its pixels and keeps its light linear and unfogged, as the
+  // shading pass fogs, meters and tone-maps what the lake reflects; there it only brightens what the mirror holds
+  // (template_c.html drawLights)
   const LIGHT_GAIN = 2, LIGHT_MIN = 0.25, LIGHT_PX = 2.5;
   const lightVs = `#version 300 es
 precision highp float;
 layout(location = 0) in vec3 aPos;                 // the pane's centre
 layout(location = 1) in vec4 aNrmA;                // its outward normal, its area (m2)
 layout(location = 2) in vec2 aCode;                // its glazing code: material, aux
-uniform vec3 uCamPos; uniform mat3 uCamRot; uniform float uTanHalf, uDusk, uExposure; uniform vec2 uRes, uJitter;
+uniform vec3 uCamPos; uniform mat3 uCamRot; uniform float uTanHalf, uDusk, uExposure, uMirror; uniform vec2 uRes, uJitter;
 out vec3 vCol;${lampGlsl}
 vec3 aces(vec3 x) { return clamp((x * (2.51 * x + 0.03)) / (x * (2.43 * x + 0.59) + 0.14), 0., 1.); }
 void main() {
-  vec3 d = aPos - uCamPos; float t = length(d);
-  float facing = dot(aNrmA.xyz, -d / t), pix = 2. * uTanHalf / uRes.y;
+  bool mirror = uMirror > 0.5;
+  vec3 p = mirror ? vec3(aPos.x, ${defs.LAKE} * 2. - aPos.y, aPos.z) : aPos;
+  vec3 d = p - uCamPos; float t = length(d);
+  float facing = dot(aNrmA.xyz * (mirror ? vec3(1., -1., 1.) : vec3(1.)), -d / t), pix = (mirror ? 4. : 2.) * uTanHalf / uRes.y;
   float cover = aNrmA.w * max(facing, 0.) / (t * t * pix * pix);
   float k = clamp(max(cover * ${fl(LIGHT_GAIN)}, ${fl(LIGHT_MIN)}), 0., 1.) * (1. - smoothstep(1., 3., cover)) * step(0.1, facing);
   float b = 1. / 1100., kb = b * d.y, path = abs(kb) < 1e-3 ? t : (1. - exp(-kb)) / (b * d.y / t);   // as applyFog
-  float fog = exp(-${defs.FOG_DENS} * exp(-b * (uCamPos.y - (${defs.LAKE} - 3.))) * path);
-  vCol = pow(aces(lampGlow(int(aCode.x + 0.5), aCode.y) * uDusk * k * fog * uExposure), vec3(1. / 2.2));
-  vec3 v = transpose(uCamRot) * (aPos - d / t * (0.25 + 0.001 * t) - uCamPos);
-  gl_Position = max(vCol.r, max(vCol.g, vCol.b)) > 0.004 && v.z > ${fl(MESH_NEAR)}
+  float fog = mirror ? 1. : exp(-${defs.FOG_DENS} * exp(-b * (uCamPos.y - (${defs.LAKE} - 3.))) * path);
+  vec3 c = lampGlow(int(aCode.x + 0.5), aCode.y) * uDusk * k;
+  vCol = pow(aces(c * fog * uExposure), vec3(1. / 2.2));
+  bool lit = max(vCol.r, max(vCol.g, vCol.b)) > 0.004;
+  if (mirror) vCol = c;
+  vec3 v = transpose(uCamRot) * (p - d / t * (0.25 + 0.001 * t) - uCamPos);
+  gl_Position = lit && v.z > ${fl(MESH_NEAR)} && (!mirror || aPos.y > ${defs.LAKE} - 0.05)
     ? vec4(v.x * uRes.y / (uRes.x * uTanHalf) - 2. * uJitter.x / uRes.x * v.z, v.y / uTanHalf - 2. * uJitter.y / uRes.y * v.z,
            v.z * ${fl((MESH_FAR + MESH_NEAR) / (MESH_FAR - MESH_NEAR))} - ${fl(2 * MESH_FAR * MESH_NEAR / (MESH_FAR - MESH_NEAR))}, v.z)
-    : vec4(2., 2., 2., 1.);                         // unlit, unseen or behind the camera: outside the view
+    : vec4(2., 2., 2., 1.);                         // unlit, unseen, behind the camera or under the lake: outside the view
   gl_PointSize = ${fl(LIGHT_PX)};
 }`;
   const lightFs = `#version 300 es

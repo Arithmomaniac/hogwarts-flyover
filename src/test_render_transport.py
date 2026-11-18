@@ -19,7 +19,7 @@ class TransportRenderTests(RenderTestCase):
         lum = lambda rgb: np.asarray(rgb) @ [0.2126, 0.7152, 0.0722]
         codes = {"scarlet": (7, 10), "iron": (7, 11), "glass": (7, 13), "rail": (7, 15), "ballast": (7, 17),
                  "paving": (7, 18), "boarding": (7, 19), "slate": (7, 20), "door": (7, 21), "void": (7, 22),
-                 "port": (7, 23), "sail": (7, 24), "trim": (7, 25)}
+                 "port": (7, 23), "sail": (7, 24), "trim": (7, 25), "timber": (7, 119)}
         looks = {name: await self.castle_box(attr, 16.0) for name, attr in codes.items()}
         wall = {name: np.median(v["wall"], axis=0) for name, v in looks.items()}
         top = {name: np.median(v["top"], axis=0) for name, v in looks.items()}
@@ -36,7 +36,7 @@ class TransportRenderTests(RenderTestCase):
             with self.subTest(code=name):
                 self.assertTrue(wall[name][1] > wall[name][0] and wall[name][1] > wall[name][2], wall[name])   # green paint
         self.assertGreater(top["slate"][2], top["slate"][0])                               # blue-grey slate
-        for name in ("ballast", "paving", "sail"):
+        for name in ("ballast", "paving", "sail", "timber"):   # the ship's weathered timber: lighter than the inlet's dark
             with self.subTest(code=name):
                 self.assertTrue(lum(wall["iron"]) < lum(wall[name]) < bright, (name, wall[name]))
 
@@ -47,6 +47,8 @@ class TransportRenderTests(RenderTestCase):
         lum = lambda rgb: np.asarray(rgb) @ [0.2126, 0.7152, 0.0722]
         looks = {attr: lum(np.median((await self.castle_box(attr, float(hour), sunlit=False))["wall"], axis=0))
                  for attr in ((7, 11), (7, 13), (7, 23))}
+        port = np.median((await self.castle_box((7, 23), float(hour), sunlit=False))["wall"], axis=0)
+        self.assertGreater(port[0], 1.5 * port[2], port)                 # lamplight, not a cold grey-green
         self.assertGreater(looks[(7, 13)], 4.0 * looks[(7, 11)])          # lit windows
         self.assertGreater(looks[(7, 23)], 4.0 * looks[(7, 11)])          # the ship's misty ports
 
