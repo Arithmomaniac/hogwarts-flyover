@@ -18,6 +18,10 @@ from pagetest import smoke  # noqa: E402
 from render_testing import EAST, LAWN, SCENE, RenderTestCase  # noqa: E402
 
 
+GRAIN_COV = 0.03                # the ridges' brightest quarter varies by at least this (std over mean) close up:
+                                # 0.036-0.040 with its grain, 0.013-0.022 without
+
+
 class WillowRenderTests(RenderTestCase):
     async def look(self, pos, yaw, pitch, hour, meshes=None):
         """The camera at world `pos` facing `yaw`, `pitch` at `hour`, over the scene's meshes or the diagnostic `meshes`."""
@@ -88,6 +92,8 @@ class WillowRenderTests(RenderTestCase):
                 spans = [(sl[along].stop - sl[along].start) / (sl[1 - along].stop - sl[1 - along].start)
                          for sl, size in zip(ndi.find_objects(labels), np.bincount(labels.ravel())[1:]) if size >= 40]
                 self.assertGreater(float(np.median(spans)), 4.0, len(spans))          # long spindles, not polygons
+                ridge = lum[lum > np.percentile(lum, 75)]
+                self.assertGreater(float(ridge.std() / ridge.mean()), GRAIN_COV, "flat ridges, with no grain close up")
 
     @smoke
     async def test_willow_codes_shade_as_bark_knot_mouth_and_leaves(self):

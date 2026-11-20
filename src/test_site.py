@@ -1331,6 +1331,25 @@ class GroundsGradeTests(unittest.TestCase):
         self.assertTrue(specks[5:7, 5:9].all())
         self.assertEqual(int(specks.sum()), 8)
 
+    def test_paving_a_texel_wide_is_lone_but_for_a_short_link_between_two_blocks(self):
+        """build_final's paving in no 2 x 2 block of it: a single texel, a footpath a texel wide, straight or slantwise,
+        and a spur off a block are lone; a slantwise neck of up to PAVING_LINK texels that joins two blocks is not."""
+        import grounds_grade
+
+        paved = np.zeros((40, 40), bool)
+        paved[2:6, 2:6] = paved[8:12, 8:12] = True              # two blocks, joined at their corners by
+        paved[6, 6] = paved[7, 7] = True                        # a neck of two texels
+        paved[6, 3] = paved[7, 3] = True                        # a spur off the first
+        paved[20:24, 2:6] = paved[29:33, 11:15] = True          # two blocks joined by a slantwise path of five texels
+        chain = [(24, 6), (25, 7), (26, 8), (27, 9), (28, 10)]
+        paved[15, 20:36] = True                                 # a straight path
+        paved[35, 35] = True                                    # a single texel
+        lone = np.zeros(paved.shape, bool)
+        lone[6, 3] = lone[7, 3] = True
+        lone[tuple(np.transpose(chain))] = paved[tuple(np.transpose(chain))] = True
+        lone[15, 20:36] = lone[35, 35] = True
+        np.testing.assert_array_equal(grounds_grade.lone_paving(paved), lone)
+
 
 class ClearingTests(unittest.TestCase):
     """src/clearings.py on synthetic ground: 2 m texels, rows running south."""
@@ -1823,6 +1842,40 @@ class RegionalRiverTests(unittest.TestCase):
                                          np.zeros(ground.shape, bool), ground)
                 self.assertLess(float((out - ground)[np.abs(X) < 600.0].max()), 0.5)
 
+    def test_a_rivers_stretch_mapped_with_a_lochan_runs_at_the_rivers_level_not_the_lochans(self):
+        """OpenStreetMap maps some lochans as one water body with the river's stretch out of them, and the level gives a
+        body one level, its ground's median: the lochan's. Below it, the stretch's water stood up to 76 m above the
+        valley 4 km south-west of the castle at X (body 2926), a wall of water, and a stretch's upper end lay in a trench
+        as much as 64 m below the ground beside it. Where both the elevation model's ground and the river's own
+        level stand more than LOCH_OFF_M off a body's level, the body is the river's stretch: the river is carved through
+        it. No water stands more than LOCH_OFF_M above the ground, nor, beyond the lochan, lies more than LOCH_OFF_M
+        below the river's level (RIVER_SINK_M below the ground here, the valley having no fall across it); the lochan
+        keeps its level, even at a margin the elevation model has above its water, by the river's line, where the
+        river's own level is the lochan's; and the river runs unbroken from one end to the other."""
+        import build_regional as br
+        from scipy import ndimage as ndi
+
+        R, st, level = 1000.0, 10.0, 300.0
+        X, Y, _ = br.grid(R, st)
+        ground = np.full(X.shape, level, np.float32)                       # the lochan's ground, its water's
+        ground = np.where(X > -150.0, level - 0.05 * (X + 150.0), ground)  # the river falls east out of it
+        ground = np.where(X < -450.0, level + 0.05 * (-450.0 - X), ground)  # and comes in from the west
+        ground = np.where((np.abs(X + 240.0) < 15.0) & (np.abs(Y - 30.0) < 15.0), level + 5.0, ground)   # the margin
+        ground = ground.astype(np.float32)
+        lochan = np.hypot(X + 300.0, Y) < 150.0
+        body = lochan | ((np.abs(Y) < 25.0) & (np.abs(X + 150.0) < 600.0))     # mapped as one, 1.2 km long
+        bed = np.where(body, level - 2.0, ground).astype(np.float32)
+        surf = np.where(body, level, br.NOWATER).astype(np.float32)
+        line = np.array([[-900.0, 0.0], [900.0, 0.0]])
+        out, wet = br.carve_rivers(bed, surf, R, st, [(line, 6.0)], body, ground)
+        water = wet > out
+        self.assertLessEqual(float((wet - ground)[water].max()), br.LOCH_OFF_M)
+        self.assertLess(float((ground - wet)[water & ~lochan].max()), br.LOCH_OFF_M + br.RIVER_SINK_M + 0.01)
+        np.testing.assert_array_equal(wet[lochan], level)
+        depth = np.where(wet > br.NOWATER + 1, wet - out, -8.0)
+        x = np.arange(-850.0, 850.0, 1.0)
+        self.assertGreater(float(ndi.map_coordinates(depth, [(0.0 * x + R) / st, (x + R) / st], order=1).min()), 0.0)
+
 
 class RailwayEarthworksTests(unittest.TestCase):
     """fix_railway's rules on synthetic ground: a second run must decide as the first did."""
@@ -2055,6 +2108,27 @@ class PackedSiteTests(unittest.TestCase):
         self.assertEqual(broken, 0)
         self.assertGreater(len(off), 200)
         self.assertLess(float(np.percentile(off, 95)), RegionalRiverTests.EDGE_M)
+
+    STAND_M = 10.0      # the most water beyond the 2 m layer stands above the dry ground round it, where the ground falls
+
+    def test_no_water_beyond_the_2m_layer_stands_as_a_wall_above_the_dry_ground_round_it(self):
+        """Beyond the 2 m layer frag1.glsl reads the 10 m level (MBed, MW). A river's stretch mapped as one water body
+        with the lochan above it took the lochan's level, and 4 km south-west of the castle at X its water stood up to
+        76 m above the valley beside it, a wall of water (body 2926; build_regional.carve_rivers). No water there stands
+        more than STAND_M above the lowest dry texel round it, as far as the ground falls between neighbouring texels
+        where a burn runs down a steep valley side, or a lochan's level water meets the stretch carved below it (7.8 m
+        at most at X)."""
+        import build_regional
+        from scipy import ndimage as ndi
+
+        bed, wd = self.layer("MBed").astype(np.float64), self.layer("MW").astype(np.float64)
+        water = wd > 0.0
+        low = ndi.minimum_filter(np.where(water, np.inf, bed), size=3)
+        stands = np.where(water & np.isfinite(low), bed + wd - low, -np.inf)
+        R, st = build_regional.LEVELS["M"]
+        rows, cols = np.nonzero(stands > self.STAND_M)
+        self.assertEqual([(round(-R + st * c), round(-R + st * r), round(float(stands[r, c]), 1))
+                          for r, c in zip(rows[:6], cols[:6])], [], "(east, north, metres) of water standing high")
 
     def test_no_stream_stands_above_the_lake_on_the_ground_raised_round_the_castle(self):
         """White Hound's outflow runs "from the lake north and down through the forest": where the castle's base buries
@@ -2981,6 +3055,20 @@ class PackedSiteTests(unittest.TestCase):
         E, N = self.pitch_points(-1.5 * self.grid.texel_size()[0])
         road = self.ms.sample(self.layer("locA")[..., 0].astype(np.float64), self.grid, E, N)
         self.assertEqual(float(road.max()), 0.0)
+
+    def test_no_lone_texel_of_paving_shows_as_a_speck(self):
+        """The maps ink footpaths a texel wide, and read texel by texel their earth left chains of single texels of
+        paving, joined only at their corners where a path runs slantwise. A hard class keeps a sharp edge (frag4.glsl
+        classMix), so each showed as a speck of bare earth on the grass, hundreds of them, as in the village round
+        (-890, 270); round the castle they blotted its walls' foot (tour/04). The road layer draws those paths with its
+        soft edge, and all paving lies in some 2 x 2 block of paving, the courtyards, the drive and the wider paths,
+        or in a short link between two (grounds_grade.lone_paving)."""
+        import grounds_grade
+
+        lone = grounds_grade.lone_paving(self.layer("locN")[..., 0] == 3)
+        cells = sorted({(int(round(x / 100.0)) * 100, int(round(z / 100.0)) * 100)
+                        for x, z in zip(*self.grid.to_world(*np.nonzero(lone)))})
+        self.assertEqual((int(lone.sum()), cells[:8]), (0, []), "lone texels of paving, and the first 100 m cells")
 
     def test_the_drive_ends_in_one_forecourt_at_the_foot_of_the_main_doors_steps(self):
         """White Hound: "a flight of stone steps" up to "the huge, oak front door". The grounds map's roads stop short of

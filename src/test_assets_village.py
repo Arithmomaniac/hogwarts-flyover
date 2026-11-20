@@ -3,8 +3,8 @@ record with straight-skeleton roofs and manifold3d openings.
 
 The village is built once per test process and shared, read-only, by every class that needs it (shared()): every
 footprint, or with VILLAGE_SAMPLE=high-street only the footprints along the High Street, the named buildings, the
-houses with garden walls and a few where a neighbour decides a stack (STACK_CASES), as the village's quick mutation
-runs ask (tools/mutate/village.py)."""
+houses with garden walls and a few where a neighbour decides a stack (STACK_CASES) with the neighbours whose eaves
+could reach over those stacks, as the village's quick mutation runs ask (tools/mutate/village.py)."""
 import math
 import os
 from pathlib import Path
@@ -32,20 +32,26 @@ WALL_LEVEL = -0.3     # build_meshes.BUILDING_WALL_LEVEL: walls stand 0.3 m insi
 HIGH_STREET_M = 14.0  # the High Street's footprints: those within this of its centreline
 # footprints off the High Street where a neighbour decides a stack (site X): at a T-junction, where the stack on a party
 # wall falls to the building whose end meets the other's side (50, 295, 399, 414, 564; mesh_village's _served), and
-# where a neighbour's eaves overhang a stack's clearance circle by more than the clearance test's margin (399, 475,
-# 560; Village.roof_near). The sample builds them too, so that the quick mutation runs catch those rules' mutations.
+# where a neighbour's eaves overhang a stack's clearance circle by more than the clearance test's margin (475 and 560,
+# under 466's and 559's eaves; Village.roof_near). The sample builds them, and every footprint whose eaves could reach
+# over their stacks' clearance circles, so that the quick mutation runs catch those rules' mutations.
 STACK_CASES = {50, 295, 399, 414, 475, 560, 564}
 SAMPLE = os.environ.get("VILLAGE_SAMPLE") == "high-street"
 _SHARED = {}
 
 
 def high_street(v, mv):
-    """The High Street's footprints, the named buildings', those of the houses with garden walls and STACK_CASES."""
+    """The High Street's footprints, the named buildings', those of the houses with garden walls, STACK_CASES and every
+    footprint whose eaves could reach over a STACK_CASES stack's clearance circle: one within the clearance and the
+    widest eaves of a STACK_CASES footprint, for a stack stands inside its walls."""
     import mesh_village_small as small
     gardens = {min(v.outlines, key=lambda cid: v.outlines[cid].distance(Point(m.pos[:, [0, 2]].mean(axis=0))))
                for m in small.garden_walls(v)}
-    return gardens | (STACK_CASES & v.built) | {cid for cid in v.built if v.outlines[cid].distance(v.streets.high)
-                                                < HIGH_STREET_M or v.scene.owners[cid] in mv.NAMED}
+    reach = mv.STACK["clear"] + max(mv.THATCH["eave"], mv.SLATE["eave"])
+    cases = [v.outlines[cid] for cid in STACK_CASES & v.built]
+    near = {cid for cid in v.built if any(v.outlines[cid].distance(case) <= reach for case in cases)}
+    return gardens | near | {cid for cid in v.built if v.outlines[cid].distance(v.streets.high) < HIGH_STREET_M
+                             or v.scene.owners[cid] in mv.NAMED}
 
 
 def shared():

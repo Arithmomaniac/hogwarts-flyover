@@ -775,6 +775,25 @@ MUTATIONS = [
     Mutation("the forecourt's road sinking the ground the castle's walls hold", "src/build_final.py",
              "wr = np.where(pitch_flat | held, 0.0,", "wr = np.where(pitch_flat, 0.0,",
              (PACKED + "test_the_drive_ends_in_one_forecourt_at_the_foot_of_the_main_doors_steps",), rebuild="x"),
+    Mutation("lone paving beyond the castle zone left as specks", "src/build_final.py",
+             "    lone = grounds_grade.lone_paving(sc == 3)\n",
+             "    lone = grounds_grade.lone_paving(sc == 3)\n"
+             "    lone &= np.where(inG, sample(castle_zone.astype(np.float32), gu, gv, order=0), 0.0) > 0.5\n",
+             (PACKED + "test_no_lone_texel_of_paving_shows_as_a_speck",), rebuild="x"),
+    Mutation("the neck that joins two blocks of paving taken as lone", "src/grounds_grade.py",
+             "link[k] = len(np.unique(touched[touched > 0])) >= 2", "link[k] = False",
+             (GRADE + "test_paving_a_texel_wide_is_lone_but_for_a_short_link_between_two_blocks",)),
+    Mutation("a river's stretch mapped with a lochan kept at the lochan's level", "src/build_regional.py",
+             "    stretch = wet & within & (np.abs(ground - surf) > LOCH_OFF_M) & (np.abs(level - surf) > LOCH_OFF_M)\n",
+             "    stretch = np.zeros(bed.shape, bool)\n",
+             ("test_site.RegionalRiverTests.test_a_rivers_stretch_mapped_with_a_lochan_runs_at_the_rivers_level_not_the_lochans",)),
+    Mutation("a loch's margin by a river taken for the river's stretch", "src/build_regional.py",
+             " & (np.abs(level - surf) > LOCH_OFF_M)\n", "\n",
+             ("test_site.RegionalRiverTests.test_a_rivers_stretch_mapped_with_a_lochan_runs_at_the_rivers_level_not_the_lochans",)),
+    Mutation("a river's stretch at X standing as a wall of water at its lochan's level", "src/build_regional.py",
+             "    stretch = wet & within & (np.abs(ground - surf) > LOCH_OFF_M) & (np.abs(level - surf) > LOCH_OFF_M)\n",
+             "    stretch = np.zeros(bed.shape, bool)\n",
+             (PACKED + "test_no_water_beyond_the_2m_layer_stands_as_a_wall_above_the_dry_ground_round_it",), rebuild="x"),
 ]
 
 

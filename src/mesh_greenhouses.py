@@ -68,14 +68,17 @@ def floor_level(rect, ground):
 def greenhouse(polygons, ground, open_towards=None):
     """(opaque frame, benches and plants; glazing) for one mapped glass footprint. A wing given `open_towards` (x, z)
     runs its ridge towards that point, and its end there has no dwarf wall or end frame: it opens into the range it
-    joins there (court-glasshouse), whose side glazing closes it below the eave; only its gable above is glazed."""
+    joins there (court-glasshouse), whose side glazing closes it below the eave. Above, its roof runs on over the range's
+    slope, of the same pitch, until its ridge meets it: valleys, not a gable standing up through the range's roof."""
     rect = cx, cz, length, width, a = fit_rectangle(outline(polygons))
+    ext = 0.0                                       # how far the roof runs on past the open end, to the valleys' foot
     if open_towards is not None:
         v = np.asarray(open_towards, np.float64) - [cx, cz]
         if abs(v @ [-a[1], a[0]]) > abs(v @ a):
             a, length, width = np.array([-a[1], a[0]]), width, length
         a = a if v @ a > 0 else -a
         rect = cx, cz, length, width, a
+        ext = min(width / 2, max(0.0, float(v @ a) - length / 2))   # never past the range's ridge
     b = np.array([-a[1], a[0]])
     hl, hw = length / 2, width / 2
     at = lambda s, t, h: np.array([cx + a[0] * s + b[0] * t, h, cz + a[1] * s + b[1] * t])
@@ -99,10 +102,12 @@ def greenhouse(polygons, ground, open_towards=None):
     for s in shut:
         opaque += [bar(at(s, t, sill), at(s, t, eave), BAR_M, FRAME) for t in np.linspace(-hw, hw, 3)]
         opaque.append(bar(at(s, 0.0, sill), at(s, 0.0, ridge), BAR_M, FRAME))
-    opaque.append(bar(at(-hl, 0.0, ridge), at(hl, 0.0, ridge), BAR_M * 1.5, FRAME))
+    opaque.append(bar(at(-hl, 0.0, ridge), at(hl + ext, 0.0, ridge), BAR_M * 1.5, FRAME))
+    if ext:
+        opaque += [bar(at(hl, t, eave), at(hl + ext, 0.0, ridge), BAR_M, FRAME) for t in (-hw, hw)]   # valley rafters
     for t in (-hw, hw):                            # the sill plate, a glazing rail and a purlin halfway up each slope
         opaque += [bar(at(-hl, t, sill), at(hl, t, sill), BAR_M, FRAME), bar(at(-hl, t, sill + RAIL_M), at(hl, t, sill + RAIL_M), BAR_M, FRAME),
-                   bar(at(-hl, t / 2, (eave + ridge) / 2), at(hl, t / 2, (eave + ridge) / 2), BAR_M, FRAME)]
+                   bar(at(-hl, t / 2, (eave + ridge) / 2), at(hl + ext / 2, t / 2, (eave + ridge) / 2), BAR_M, FRAME)]
     opaque += [bar(at(s, -hw, sill + RAIL_M), at(s, hw, sill + RAIL_M), BAR_M, FRAME) for s in shut]
     for t in (-1, 1):                              # benches on legs along both long walls, potted plants zigzag on each
         inner, outer = t * (hw - WALL_M - 0.05 - BENCH_W), t * (hw - WALL_M - 0.05)
@@ -121,9 +126,7 @@ def greenhouse(polygons, ground, open_towards=None):
     glass = [panel([at(-hl, t, sill), at(hl, t, sill), at(hl, t, eave), at(-hl, t, eave)], GLASS) for t in (-hw, hw)]
     glass += [panel([at(s, -hw, sill), at(s, hw, sill), at(s, hw, eave), at(s, 0.0, ridge), at(s, -hw, eave)], GLASS)
               for s in shut]
-    if open_towards is not None:                   # the gable above the range's eave, which its side glass can't close
-        glass.append(panel([at(hl, -hw, eave), at(hl, hw, eave), at(hl, 0.0, ridge)], GLASS))
-    glass += [panel([at(-hl, t, eave), at(hl, t, eave), at(hl, 0.0, ridge), at(-hl, 0.0, ridge)], GLASS)
+    glass += [panel([at(-hl, t, eave), at(hl, t, eave), at(hl + ext, 0.0, ridge), at(-hl, 0.0, ridge)], GLASS)
               for t in (-hw, hw)]
     return concat(opaque), concat(glass)
 

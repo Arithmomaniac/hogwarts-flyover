@@ -404,12 +404,13 @@ def main():
     road = np.where(paved, 1.0, road)
     sc[(trees > 0.55) & (sc <= 2)] = 5
     sc[rpitch < 1.0] = 6
-    # the grounds map draws the castle's outline in the earth colour (the roads leave the castle zone out for it), and
-    # read texel by texel it leaves chains of single texels of paving round the castle, each a blot at its walls' foot
-    # (tour/04): paving in the castle zone that is in no 2 x 2 block of paving takes the soft ground round it. The
-    # courtyards and the paths that reach the walls are wider
-    lone = (sc == 3) & ~ndi.binary_opening(sc == 3, structure=np.ones((2, 2), bool))
-    lone &= np.where(inG, sample(castle_zone.astype(np.float32), gu, gv, order=0), 0.0) > 0.5
+    # the maps' earth, read texel by texel, leaves chains of single texels of paving: round the castle, where the grounds
+    # map draws the castle's outline in the earth colour (the roads leave the castle zone out for it), each a blot at
+    # its walls' foot (tour/04), and along the footpaths inked a texel wide, specks of bare earth on the grass, joined
+    # only at their corners where a path runs slantwise. Paving that is in no 2 x 2 block of paving, but for the short
+    # links between blocks (grounds_grade.lone_paving), takes the soft ground round it, and the road layer draws those
+    # paths with its soft edge. The courtyards, the drive and the paths that reach the walls are wider
+    lone = grounds_grade.lone_paving(sc == 3)
     soft = ndi.distance_transform_edt(~np.isin(sc, (0, 1, 2)), return_distances=False, return_indices=True)
     sc[lone] = sc[soft[0], soft[1]][lone]
     near_lake = (lake_sd > -SHORE_RISE_M / BEACH_GRADE - RES) & (lake_sd < 3.5) & (sc != 3)   # and the beach's dry foot

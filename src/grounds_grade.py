@@ -25,6 +25,7 @@ SHORE_M, SHORE_GRADE, SHORE_REACH_M = 0.35, 0.45, 160.0     # the lake's shore r
 OFF_ROAD_COST = 20.0            # what a texel off the essay map's roads costs the drive's path, against 1 on them
 SPECK_M2 = 40.0                 # ground a road closes round smaller than this is its ink's two lines, not a lawn: the
                                 # drive's fork by the main doors leaves 20 m2, the village's smallest plot is 88 m2
+PAVING_LINK = 3                 # texels: a chain of paving no longer than this that joins two blocks of it is a link
 KNOLL_TOP_M, KNOLL_ROUND_M = 18.0, 6.0   # a knoll: the radius of its top, and how softly its shoulder rounds
 KNOLL_FALL = 1 / 2.6            # the grade of its flanks
 KNOLL_TOE_M = 8.0               # how broadly its toe blends into the ground round it
@@ -224,4 +225,23 @@ def specks(paths, res):
     holes = ndi.binary_fill_holes(paths) & ~paths
     lab, n = ndi.label(holes)
     return holes & (np.bincount(lab.ravel(), minlength=n + 1) * res * res < SPECK_M2)[lab]
+
+
+def lone_paving(paved):
+    """The texels of `paved` in no 2 x 2 block of it, as the maps' earth leaves a footpath inked a texel wide, but for
+    the links between blocks: a chain of such texels, joined at their sides or corners, no longer than PAVING_LINK
+    texels and touching two separate blocks, such as the slantwise neck that joins the drive to its forecourt."""
+    eight = np.ones((3, 3), bool)
+    blocks = ndi.binary_opening(paved, structure=np.ones((2, 2), bool))
+    lone = paved & ~blocks
+    block, _ = ndi.label(blocks, structure=eight)
+    chain, n = ndi.label(lone, structure=eight)
+    size = np.bincount(chain.ravel(), minlength=n + 1)
+    link = np.zeros(n + 1, bool)
+    for k, at in enumerate(ndi.find_objects(chain), start=1):
+        if size[k] <= PAVING_LINK:
+            at = tuple(slice(max(s.start - 1, 0), s.stop + 1) for s in at)
+            touched = block[at][ndi.binary_dilation(chain[at] == k, structure=eight)]
+            link[k] = len(np.unique(touched[touched > 0])) >= 2
+    return lone & ~link[chain]
 
