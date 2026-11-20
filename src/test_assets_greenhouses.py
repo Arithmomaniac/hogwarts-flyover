@@ -136,10 +136,28 @@ class GreenhouseTests(unittest.TestCase):
         tris, _, n, area = faces(glass)
         ridge = glass.pos[glass.pos[:, 1] > glass.pos[:, 1].max() - 1e-6]
         self.assertTrue(np.allclose(ridge[:, 0], 2.5) and np.ptp(ridge[:, 2]) > 3.9)   # the ridge runs to the range
-        far = (np.abs(n[:, 2]) > 0.9) & np.all(tris[:, :, 2] > 3.9, axis=1)
-        # the range's side glazing closes the end below its eave; above, the wing's gable stood open (code review)
-        self.assertAlmostEqual(float(area[far].sum()), 2.5 * 2.5 * mesh_greenhouses.PITCH, places=6)
-        self.assertGreaterEqual(float(tris[far][:, :, 1].min()), ground + mesh_greenhouses.EAVE_M - 1e-6)
+        # the range's side glazing closes the end below its eave; above, its roof runs on (the next test)
+        self.assertFalse(np.any((np.abs(n[:, 2]) > 0.9) & np.all(tris[:, :, 2] > 3.9, axis=1)))
+
+    def test_a_wing_roofs_into_the_range_in_valleys(self):
+        # its roof stopped at the range's eave over a glazed gable standing up through the range's roof (court-glasshouse,
+        # wave 3)
+        ground = world.datum()
+        rng = Polygon([(0.0, 0.0), (12.0, 0.0), (12.0, 4.0), (0.0, 4.0)])
+        wing = Polygon([(4.0, 4.0), (8.0, 4.0), (8.0, 8.0), (4.0, 8.0)])
+        frame, glass = mesh_greenhouses.greenhouse([wing], lambda x, z: np.full(np.shape(x), ground),
+                                                   open_towards=rng.centroid.coords[0])
+        eave = glass.pos[np.isclose(glass.pos[:, 0], 4.0), 1].max()               # the top of its side glazing
+        over = glass.pos[glass.pos[:, 2] < 4.0 - 1e-6]
+        self.assertAlmostEqual(float(over[:, 2].min(initial=4.0)), 2.0)            # on to the range's ridge
+        self.assertTrue(np.allclose(over[:, 1], eave + (4.0 - over[:, 2]) * mesh_greenhouses.PITCH))   # down its slope
+        tris, _, n, _ = faces(glass)
+        gable = (np.abs(n[:, 2]) > 0.9) & np.all(tris[:, :, 2] < 6.0, axis=1) & np.any(tris[:, :, 1] > eave + 1e-6, axis=1)
+        self.assertFalse(np.any(gable))
+        bars = frame.pos[frame.idx[np.all(frame.attr[frame.idx[:, 0]] == mesh_greenhouses.FRAME, axis=1)]]
+        edge = (bars[:, [1, 2, 0]] - bars).reshape(-1, 3)
+        valley = (np.abs(edge[:, 0]) > 0.5) & np.isclose(np.abs(edge[:, 0]), np.abs(edge[:, 2]))
+        self.assertEqual(set(np.sign(edge[valley, 0] * edge[valley, 2])), {-1.0, 1.0})   # a rafter down each valley
 
     def test_the_court_glasshouse_is_the_t_the_map_draws(self):
         # it was one rectangle turned across the lawn (court-glasshouse, round 1)

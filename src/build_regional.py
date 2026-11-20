@@ -18,6 +18,8 @@ RIVER_GRADE, RIVER_DEEP_M = 0.1, 1.05   # its bed falls from its edges at this s
 RIVER_BLEND_M = 30.0        # beyond that texel its banks give way to the ground as mapped over this far
 RIVER_MIN_TEXELS = 1.2      # no river is drawn narrower than this many texels: a bilinear read of the depth found no
                             # water wherever a narrower one's line ran between the texels' centres
+LOCH_OFF_M = 3.0            # a water body standing further than this off the ground, and off a river's own level beside
+                            # it, is the river's stretch mapped as water, not a loch
 
 
 def grid(R, st):
@@ -100,12 +102,16 @@ def carve_rivers(bed, surf, R, st, rivers, wet, ground):
     the elevation model has it (`ground`), before the level's water bodies are levelled. A water body's bed, levelled
     below its water, had sunk the ground beside a loch into pits; its water, one level for the whole body, stands above
     the ground at the lower end of a river's stretch mapped as one and below it at the upper; and the ground smoothed
-    over a texel stood metres above a narrow valley's bottom. The river is level across, out to its half width but at
-    least RIVER_MIN_TEXELS across; its bed falls from there at RIVER_GRADE to RIVER_DEEP_M, and its banks rise so across
-    the texel beyond, then give way to the ground as mapped over RIVER_BLEND_M. Where a water body's level, spread over
-    the shore beside it, stands below the river's water, the river's stands: below its bed, that level drew the river
-    dry beside the upper end of a stretch mapped as water. Measured from the line itself, its water's edge runs smooth
-    along it: carved round a raster of the line, a texel wide, it ran in a trench stepped wherever the raster stepped."""
+    over a texel stood metres above a narrow valley's bottom. Where a body's level stands more than LOCH_OFF_M off both
+    the ground and the river's own level beside it, the body is the river's stretch, not a loch, and the river is
+    carved through it there: the stretch below a lochan mapped with it stood as a wall of water up to 76 m above the
+    valley, and a stretch's upper end lay in a trench up to 64 m below the ground beside it. The river is level across,
+    out to its half width but at least RIVER_MIN_TEXELS across; its bed falls from there at RIVER_GRADE to RIVER_DEEP_M,
+    and its banks rise so across the texel beyond, then give way to the ground as mapped over RIVER_BLEND_M. Where a
+    water body's level, spread over the shore beside it, stands below the river's water, the river's stands: below its
+    bed, that level drew the river dry beside the upper end of a stretch mapped as water. Measured from the line itself,
+    its water's edge runs smooth along it: carved round a raster of the line, a texel wide, it ran in a trench stepped
+    wherever the raster stepped."""
     if not rivers:
         return bed, surf
     pts, half, across = [], [], []
@@ -126,10 +132,13 @@ def carve_rivers(bed, surf, R, st, rivers, wet, ground):
     X, Y, _ = grid(R, st)
     reach = float(half.max()) + st + RIVER_BLEND_M
     d, k = cKDTree(pts).query(np.column_stack([X.ravel(), Y.ravel()]), distance_upper_bound=reach)
-    near = (d < reach).reshape(bed.shape) & ~wet
+    within = (d < reach).reshape(bed.shape)
     k = np.minimum(k, len(pts) - 1).reshape(bed.shape)
-    beyond = np.where(near, d.reshape(bed.shape) - half[k], 0.0)         # metres out from the water's edge
     level = water[k]
+    stretch = wet & within & (np.abs(ground - surf) > LOCH_OFF_M) & (np.abs(level - surf) > LOCH_OFF_M)
+    bed, surf = np.where(stretch, ground, bed), np.where(stretch, NOWATER, surf)
+    near = within & (stretch | ~wet)
+    beyond = np.where(near, d.reshape(bed.shape) - half[k], 0.0)         # metres out from the water's edge
     banks = level + np.clip(RIVER_GRADE * beyond, -RIVER_DEEP_M, RIVER_GRADE * st)
     t = np.clip((beyond - st) / RIVER_BLEND_M, 0.0, 1.0)
     carved = banks + (bed - banks) * t * t * (3.0 - 2.0 * t)

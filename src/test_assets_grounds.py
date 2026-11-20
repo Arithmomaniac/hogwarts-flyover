@@ -769,12 +769,20 @@ class WallsTests(unittest.TestCase):
         self.assertEqual(int((up & stone).sum()), 0)                               # every top is coped
         coping = self.height(self.tris[up & ~stone])
         self.assertGreater(float(np.median(coping)), 2.0)
-        cap = self.tris[keep & ~stone].reshape(-1, 3)                               # and the stone stops under it
+        cap = self.tris[keep & ~stone & (self.normal[:, 1] > 0.2)]                 # and the stone stops under it:
         body = self.tris[keep & stone].reshape(-1, 3)
-        tree = cKDTree(cap[:, [0, 2]])
-        near = tree.query_ball_point(body[:, [0, 2]], 1.0)
-        over = np.array([cap[i, 1].max() - y if i else -1.0 for i, y in zip(near, body[:, 1])])
-        self.assertGreater(float(over.min()), 0.05)                               # within 1 m, on slopes
+        xz, inv = np.unique(np.round(body[:, [0, 2]], 3), axis=0, return_inverse=True)
+        top = np.full(len(xz), -np.inf)
+        np.maximum.at(top, inv.ravel(), body[:, 1])
+        tree = cKDTree(cap.mean(axis=1)[:, [0, 2]])
+        reach = float(np.max(np.ptp(cap[..., [0, 2]], axis=1))) + 0.1
+        over = []
+        for (x, z), y in zip(xz, top):                                             # the coping's own surface over
+            near = cap[tree.query_ball_point([x, z], reach)]                       # each point of the stone's top
+            h = np.concatenate([surface_heights(near, x + dx, z + dz) for dx, dz in   # (and 3 cm round it, as a
+                                ((0, 0), (0.03, 0), (-0.03, 0), (0, 0.03), (0, -0.03))]) if len(near) else []
+            over.append(h.max() - y if len(h) else -1.0)                           # step's edge is either side's)
+        self.assertGreater(float(np.min(over)), mesh_grounds.COPING_M - 0.05)      # most of its depth, on slopes too
 
     def test_the_boundary_walls_run_on_across_breaks_narrower_than_a_gateway(self):
         keep = self.boundary & ~self.near_patch & ~self.near_cliff & (self.normal[:, 1] > 0.2)   # coping tops, tilted on banks too
@@ -785,6 +793,45 @@ class WallsTests(unittest.TestCase):
             gap = min((p.distance(pieces[j]) for j in tree.query(p.buffer(4.0)) if j != i), default=np.inf)
             with self.subTest(at=np.round(p.centroid.coords[0]).tolist()):     # walls-coped: breaks under 3.5 m closed
                 self.assertGreater(gap, 3.5 - 2 * mesh_grounds.COPING_OVER_M - 0.15)   # less the copings and buffer
+
+    def test_the_boundary_walls_step_their_coping_on_banks(self):
+        # a garden wall's coping steps down a bank in level lengths ("garden walls ... can be built with a stepped
+        # top", BTCV, Dry Stone Walling, "Coping on slopes") rather than tilting like the bank at E 241-243, N 212-214
+        keep = self.boundary & ~self.near_patch & ~self.near_cliff & (self.normal[:, 1] > 0.2)
+        keep &= ~np.all(self.attr == mesh_grounds.WALL_STONE, axis=1)
+        t = self.tris
+        keep &= np.linalg.norm(np.cross(t[:, 1] - t[:, 0], t[:, 2] - t[:, 0]), axis=1) / 2 > 1e-4   # seen, not slivers
+        steep = self.tris[keep & (self.normal[:, 1] < 0.8)].mean(axis=1)
+        self.assertEqual(len(steep), 0, np.round(steep[:5], 1).tolist())                # no coping tilts past 37°
+
+    @staticmethod
+    def synthetic_wall(grade, bend=0.0):
+        """The coping tops of a boundary wall 0.6 m thick along x from -10 to 10 m (bowed `bend` m sideways, as traced
+        walls wander), on ground that climbs at `grade` from 0 at x = -1.5 to 3 m, level either side."""
+        ground = lambda x, z: np.clip((np.asarray(x) + 1.5) * grade, 0.0, 3.0) + 0.0 * np.asarray(z)
+        scene = types.SimpleNamespace(ground=ground, sunk=lambda x, z: ground(x, z) - 0.5)
+        x = np.linspace(-10.0, 10.0, 81)
+        wall = LineString(np.column_stack([x, bend * np.sin(x / 3.0)])).buffer(0.3, cap_style=2)
+        mesh = mesh_geometry.concat(mesh_grounds.coped(scene, [wall], 2.2, stepped=True))
+        tris = mesh.pos[mesh.idx]
+        normal = np.cross(tris[:, 1] - tris[:, 0], tris[:, 2] - tris[:, 0])
+        normal /= np.maximum(np.linalg.norm(normal, axis=1), 1e-12)[:, None]
+        pale = np.all(mesh.attr[mesh.idx[:, 0]] == code("pale-stone"), axis=1)
+        return tris[pale & (normal[:, 1] > 0.2)], normal[pale & (normal[:, 1] > 0.2)], ground
+
+    def test_a_wall_steps_down_a_steep_bank_in_level_lengths(self):
+        tops, normal, ground = self.synthetic_wall(1.0)
+        self.assertGreater(float(normal[:, 1].min()), 0.999)                        # every length level
+        levels = np.unique(np.round(tops[..., 1], 3))
+        self.assertGreater(len(levels), 3)                                          # in several steps,
+        self.assertLessEqual(float(np.diff(levels).max()), 1.0 + 1e-6)              # none higher than a metre
+        pts = tops.reshape(-1, 3)
+        over = pts[:, 1] - np.max([ground(pts[:, 0] + d, pts[:, 2]) for d in (-0.5, 0.0, 0.5)], axis=0)
+        self.assertGreater(float(over.min()), 2.2 - 0.01)                           # and the wall full height throughout
+
+    def test_a_wall_on_a_moderate_slope_keeps_its_raked_coping(self):
+        _, normal, _ = self.synthetic_wall(0.4, bend=3.0)
+        self.assertLess(float(normal[:, 1].min()), 0.95)                            # it follows the slope
 
     def test_the_vegetable_patch_wall_is_a_low_ruin(self):
         mine = self.near_patch & (self.normal[:, 1] > 0.95)
@@ -899,8 +946,7 @@ class WallsTests(unittest.TestCase):
         stone = self.tris[self.near_cliff & np.all(self.attr == mesh_grounds.WALL_STONE, axis=1)].reshape(-1, 3)
         rel = stone[:, [0, 2]] - m
         a, w = rel @ u, rel @ np.array([-u[1], u[0]])
-        roof = (a > mesh_grounds.PORTAL_M - 3.0) & (a < rec["depth"] + mesh_grounds.ROOF_PAST_M + 3.0) \
-            & (np.abs(w) < mesh_grounds.SHELL_HALF_M + 3.0)
+        roof = (a > mesh_grounds.PORTAL_M - 3.0) & (a < rec["depth"] + 4.0) & (np.abs(w) < rec["width"] / 2 + 4.0)
         below = stone[~roof, 1] - sample(self.bed, self.grid, stone[~roof, 0], stone[~roof, 2])
         import build_meshes
         self.assertGreater(float(below.min()), -build_meshes.SINK_M - 0.3)          # sunk as every wall is, no deeper
@@ -1238,6 +1284,74 @@ class HarbourMouthTests(unittest.TestCase):
         self.assertGreater(float(h.max()), mesh_grounds.CROWN_M + 1.5)               # over the face above it
         hanging = np.abs(w) < mesh_grounds.CHANNEL_HALF_M - 0.3
         self.assertLess(float(h[hanging].min()), 1.0)                                # and low across the opening
+
+    def roof_face(self, h):
+        """(w, a) where the harbour roof's rock and the terrain's cliff beside it stand `h` above the lake, across w."""
+        tris, attr, normal = self.shell()
+        up = np.all(attr == mesh_grounds.HARBOUR_ROCK, axis=1) & (normal[:, 1] > 0.3)
+        a, w, y = self.local(tris[up].reshape(-1, 3))
+        rec, m, u, side, lake = self.mouth()
+        data = world.data()
+        grid, bed = Grid(data["meta"]["local"]), decode(data["tex"]["locBed"])
+        roof, cliff = [], []
+        for wc in np.arange(-mesh_grounds.SHELL_HALF_M + 0.25, mesh_grounds.SHELL_HALF_M, 0.5):
+            col = (np.abs(w - wc) < 0.26) & (a > mesh_grounds.PORTAL_M)
+            if col.sum() > 3 and y[col].max() > h:
+                order = np.argsort(a[col])
+                ac, yc = a[col][order], y[col][order]
+                k = int(np.argmax(yc >= h))
+                f = 0.0 if k == 0 else (h - yc[k - 1]) / max(yc[k] - yc[k - 1], 1e-9)
+                roof.append((wc, float(ac[k] if k == 0 else ac[k - 1] + f * (ac[k] - ac[k - 1]))))
+        for wc in np.r_[np.arange(-16.0, -7.0, 0.5), np.arange(7.25, 16.0, 0.5)]:
+            at = np.arange(-6.0, 10.0, 0.05)
+            p = m + at[:, None] * u + wc * side
+            g = sample(bed, grid, p[:, 0], p[:, 1]) - lake
+            if (g >= h).any():
+                cliff.append((wc, float(at[np.argmax(g >= h)])))
+        return np.array(roof), np.array(cliff)
+
+    def test_the_roof_is_as_broken_as_the_cliff_beside_it(self):
+        # the cut's roof carries the cliff's own texel-scale gullies and ribs: no smooth panel between two straight edges
+        rough = lambda c: float(np.std(c[:, 1] - np.polyval(np.polyfit(c[:, 0], c[:, 1], 2), c[:, 0])))
+        for h in (4.0, 7.0, 10.0):
+            roof, cliff = self.roof_face(h)
+            left, right = cliff[cliff[:, 0] < 0], cliff[cliff[:, 0] > 0]
+            with self.subTest(h=h):
+                self.assertGreater(rough(roof), 0.25 * (rough(left) + rough(right)), (rough(roof), rough(left), rough(right)))
+
+    def test_the_roof_tucks_under_the_terrain_at_its_edges(self):
+        # where the cut no longer reaches the terrain's samples the roof sinks just under the cliff's own rock, so the two
+        # part along the uneven line where the cut stops showing: no straight seam, no z-fighting comb
+        tris, attr, normal = self.shell()
+        up = np.all(attr == mesh_grounds.HARBOUR_ROCK, axis=1) & (normal[:, 1] > 0.3)
+        pts = tris[up].reshape(-1, 3)
+        a, w, y = self.local(pts)
+        rec = self.mouth()[0]
+        edge = (np.abs(w) > mesh_grounds.SHELL_HALF_M - 0.01) | (a > rec["depth"] + mesh_grounds.ROOF_PAST_M - 0.01)
+        data = world.data()
+        over = pts[edge, 1] - sample(decode(data["tex"]["locBed"]), Grid(data["meta"]["local"]), pts[edge, 0], pts[edge, 2])
+        self.assertGreater(int(edge.sum()), 20)
+        self.assertTrue(-3.0 < float(over.min()) and float(over.max()) < -0.4, (over.min(), over.max()))
+        bed, grid = decode(data["tex"]["locBed"]), Grid(data["meta"]["local"])
+        t = tris[up]                                                               # over the roof's whole surface:
+        bary = np.array([(i / 4, j / 4) for i in range(5) for j in range(5 - i)])
+        p = (t[:, None, 0] * (1 - bary.sum(1))[None, :, None] + t[:, None, 1] * bary[None, :, 0, None]
+             + t[:, None, 2] * bary[None, :, 1, None]).reshape(-1, 3)
+        under = p[:, 1] < sample(bed, grid, p[:, 0], p[:, 2])
+        dx, dz = (v.ravel() for v in np.meshgrid(np.arange(-1.0, 1.01, 0.1), np.arange(-1.0, 1.01, 0.1)))
+        apart = np.sqrt(dx ** 2 + dz ** 2 + (p[:, 1, None] - sample(bed, grid, p[:, 0, None] + dx, p[:, 2, None] + dz)) ** 2)
+        shallow = under & (apart.min(axis=1) < 0.2)                                # hidden only just, in 3D: on the
+        self.assertLess(float(shallow.mean()), 0.025)                              # sheer faces the march z-fights it
+
+    def test_ivy_hangs_in_leafy_strands_not_stacked_rectangles(self):
+        tris, attr, _ = self.shell()
+        ivy = tris[np.all(attr == mesh_grounds.IVY, axis=1)]
+        a, w, y = self.local(ivy)
+        edges = [(i, (i + 1) % 3) for i in range(3)]
+        dy = np.concatenate([np.abs(y[:, i] - y[:, j]) for i, j in edges])
+        dw = np.concatenate([np.abs(w[:, i] - w[:, j]) for i, j in edges])
+        level = (dy < 0.01) & (dw > 0.05)                                          # a rectangle's top and bottom
+        self.assertLess(float(level.mean()), 0.05)
 
     def test_the_recess_is_roofed_over_and_closed_at_the_back(self):
         tris, attr, _ = self.shell()

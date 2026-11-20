@@ -42,6 +42,12 @@ _AXIS_LIST = ", ".join(f"vec3({x!r}, {y!r}, {z!r})" for x, y, z in BARK_AXES.val
 # each ridge). Broad value noise varies the wood, grey lichen patches the ridges, and moss greens the faces that look up.
 CELL_PER_M, STRETCH = 14.0, 0.05        # cells per metre across the wood; their length along it is 1/STRETCH times that
 ROUND = {120: 1.0, "wood": 0.36}        # the circle's radius round the trunk, and round every other piece of wood (a limb's)
+# on the trunk the circle swells and shrinks a little, in helical lobes (depth as a fraction, lobes round, turns per metre
+# up, phase), so the cells are cut at varying depths: their furrows taper, lean and interlace, as a trunk's ridges do
+WOBBLE = ((0.06, 11, 0.9, 0.0), (0.045, 17, -1.3, 1.3))
+# close up, the ridges show a grain of streaks a couple of centimetres wide and a few tens long, along the furrows; it
+# varies their albedo by up to GRAIN either way about its mean, and fades out as a pixel grows from GRAIN_FADE[1] to [0]
+GRAIN, GRAIN_FADE = 0.45, (0.016, 0.008)
 RIDGE_E, RIDGE_W = 0.06, 0.12           # the ridge's crest each side of the border, and its flank down into the furrow, in cells
 FAR_H = 0.54
 FADE = (0.42, 0.168)                    # cells per pixel: the pattern fades out between these
@@ -52,11 +58,14 @@ JITTER_AMP = 0.7
 _JITTER = ("vec3 hq = fract(q * vec3(0.1031, 0.103, 0.0973)); hq += dot(hq, hq.yxz + 33.33); "
            f"vec3 r = o + 0.5 + {JITTER_AMP!r} * (fract((hq.xxy + hq.yxx) * hq.zyx) - 0.5) - f;")
 _X0, _Y0, _Z0, _LX, _LZ = TRUNK_AXIS
+_WOBBLE = "".join(f" + {a!r} * sin({n}. * th + {k!r} * hy + {ph!r})" for a, n, k, ph in WOBBLE)
+_WOBBLE_T = "".join(f" + {round(a * n, 6)!r} * cos({n}. * th + {k!r} * hy + {ph!r})" for a, n, k, ph in WOBBLE)   # its slopes
+_WOBBLE_Y = "".join(f" + {round(a * k, 6)!r} * cos({n}. * th + {k!r} * hy + {ph!r})" for a, n, k, ph in WOBBLE)
 BARK_P3 = (" {                             // the Willow's bark: long ridges in a net round deep furrows along the wood\n"
            f"        const vec3 AX[{len(BARK_AXES)}] = vec3[{len(BARK_AXES)}]({_AXIS_LIST});\n"
            f"        vec3 d = AX[k == 120 ? 0 : k - {LYING - 1}], e1 = normalize(cross(d, abs(d.y) > 0.9 ? vec3(1., 0., 0.) : vec3(0., 1., 0.))), e2 = cross(d, e1);\n"
            f"        float R = k == 120 ? {ROUND[120]!r} : {ROUND['wood']!r}, rate = 0., h = {FAR_H!r};\n"
-           "        vec3 S = vec3(0.), a = e1; int got = 0;\n"
+           "        vec3 S = vec3(0.), a = e1, W = vec3(1., 0., 0.); int got = 0; float grain = 1.;\n"
            "        for (int j = ZERO; j < 5; j++) {                  // this pixel, then its four neighbours\n"
            "          vec3 q = p, m = n;\n"
            "          if (j > 0) {\n"
@@ -72,8 +81,11 @@ BARK_P3 = (" {                             // the Willow's bark: long ridges in 
            "          }\n"
            f"          vec3 o = k == 120 ? q - vec3({_X0!r}, LAKE + {_Y0!r}, {_Z0!r}) - vec3({_LX!r}, 1., {_LZ!r}) * (q.y - LAKE - {_Y0!r}) : m - d * dot(m, d);\n"
            "          o /= max(length(o), 1e-4);                         // the bearing round the wood\n"
-           f"          vec3 sj = vec3(R * dot(o, e1), dot(q, d) * {STRETCH!r}, R * dot(o, e2)) * {CELL_PER_M!r};\n"
-           "          if (j == 0) { S = sj; a = o; } else { rate = max(rate, length(sj - S)); got++; }\n"
+           "          float wb = 1., wt = 0., wy = 0.;                 // the trunk's circle swells and shrinks\n"
+           f"          if (k == 120) {{ float th = atan(o.z, o.x), hy = q.y - LAKE - {_Y0!r}; wb = 1.{_WOBBLE}; wt = 0.{_WOBBLE_T}; wy = 0.{_WOBBLE_Y}; }}\n"
+           "          // along the wood from the trunk's base, so the pattern keeps its place on the wood at any datum\n"
+           f"          vec3 sj = vec3(R * wb * dot(o, e1), dot(q - vec3({_X0!r}, LAKE + {_Y0!r}, {_Z0!r}), d) * {STRETCH!r}, R * wb * dot(o, e2)) * {CELL_PER_M!r};\n"
+           "          if (j == 0) { S = sj; a = o; W = vec3(wb, wt, wy); } else { rate = max(rate, length(sj - S)); got++; }\n"
            "        }\n"
            f"        if (got == 0) rate = pix * {CELL_PER_M!r};\n"
            f"        float aa = smoothstep({FADE[0]!r}, {FADE[1]!r}, rate) * smoothstep({COARSE[0]!r}, {COARSE[1]!r}, rate / (pix * {CELL_PER_M!r}));\n"
@@ -91,11 +103,14 @@ BARK_P3 = (" {                             // the Willow's bark: long ridges in 
            "          }\n"
            f"          float w = clamp((e - {RIDGE_E!r}) / {RIDGE_W!r}, 0., 1.);   // down the ridge's flank\n"
            f"          h = mix({FAR_H!r}, 1. - w * w * (3. - 2. * w), aa);\n"
-           "          float ua = u.z * dot(a, e1) - u.x * dot(a, e2);  // the border's normal: its part round the wood\n"
-           f"          vec3 g = (ua * cross(d, a) + {STRETCH!r} * u.y * d) * {CELL_PER_M * 6 / RIDGE_W * 0.006!r} * w * (1. - w) * aa;\n"
+           "          // the border's normal in the wood's own directions: round it, and along it (with the swelling's slopes)\n"
+           "          float ur = u.x * dot(a, e1) + u.z * dot(a, e2), ua = W.x * (u.z * dot(a, e1) - u.x * dot(a, e2)) - W.y * ur;\n"
+           f"          vec3 g = (ua * cross(d, a) + ({STRETCH!r} * u.y + R * W.z * ur) * d) * {CELL_PER_M * 6 / RIDGE_W * 0.006!r} * w * (1. - w) * aa;\n"
            "          n = normalize(n - (g - n * dot(n, g)));\n"
+           f"          float fine = aa * smoothstep({GRAIN_FADE[0]!r}, {GRAIN_FADE[1]!r}, pix);   // close up, the ridges' grain\n"
+           f"          grain = 1. + {GRAIN!r} * fine * (vnoise(vec2(S.x * 3. + S.z * 1.7, S.y * 2.5)) + vnoise(vec2(S.z * 3. - S.x * 1.7, S.y * 2.5 + 17.)) - 1.);\n"
            "        }\n"
-           "        vec3 plate = vec3(0.238, 0.204, 0.161);\n"
+           "        vec3 plate = vec3(0.238, 0.204, 0.161) * grain;\n"
            "        alb = mix(vec3(0.028, 0.023, 0.018), plate, h) * (0.85 + 0.3 * vnoise(p.xz * 0.6 + p.y * 0.45));\n"
            "        alb = mix(alb, vec3(0.11, 0.115, 0.09), 0.35 * h * smoothstep(0.62, 0.85, vnoise(p.xz * 1.4 + p.y * 1.1)));\n"
            "        alb = mix(alb, vec3(0.05, 0.07, 0.03), 0.45 * smoothstep(0.35, 0.9, n.y));\n"

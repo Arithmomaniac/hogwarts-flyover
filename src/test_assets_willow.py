@@ -540,8 +540,11 @@ def bark_space(p, n, aux):
     trunk = aux == BARK[1]
     o = np.where(trunk[:, None], p - [x0, y0, z0] - np.outer(p[:, 1] - y0, [lx, 1.0, lz]), n - d * dot(n, d)[:, None])
     o /= np.maximum(np.linalg.norm(o, axis=1, keepdims=True), 1e-4)
-    r = np.where(trunk, bark.ROUND[BARK[1]], bark.ROUND["wood"])
-    return np.stack([r * dot(o, e1), dot(p, d) * bark.STRETCH, r * dot(o, e2)], axis=1) * bark.CELL_PER_M
+    th, hy = np.arctan2(o[:, 2], o[:, 0]), p[:, 1] - y0
+    wobble = 1 + sum(a * np.sin(n * th + k * hy + ph) for a, n, k, ph in bark.WOBBLE)
+    r = np.where(trunk, bark.ROUND[BARK[1]] * wobble, bark.ROUND["wood"])
+    along = dot(p - [x0, y0, z0], d)
+    return np.stack([r * dot(o, e1), along * bark.STRETCH, r * dot(o, e2)], axis=1) * bark.CELL_PER_M
 
 
 def round_trunk(a, y, r=1.0):
@@ -551,9 +554,10 @@ def round_trunk(a, y, r=1.0):
     return np.array([x0, y0 + world.levels()["lake"], z0]) + np.outer(y, [lx, 1.0, lz]) + np.asarray(r)[..., None] * n, n
 
 
-def bark_patch(width_m=1.0, height_m=2.4, res_m=0.005):
-    """The bark's height over a patch of an upright trunk 1 m in radius: rows up the trunk, columns round it."""
-    a = np.arange(0, width_m, res_m)
+def bark_patch(width_m=1.0, height_m=2.4, res_m=0.005, start=0.0):
+    """The bark's height over a patch of an upright trunk 1 m in radius, from bearing `start`: rows up the trunk,
+    columns round it."""
+    a = np.arange(start, start + width_m, res_m)
     y = np.arange(0.3, 0.3 + height_m, res_m)
     A, Y = np.meshgrid(a, y)
     p, n = round_trunk(A.ravel(), Y.ravel())
@@ -629,6 +633,18 @@ class WillowBarkTests(unittest.TestCase):
         S = np.random.default_rng(3).uniform(0, 1, (30000, 3)) * [60.0, 20.0, 60.0] + [6600.0, 1500.0, 4800.0]
         shader, exact = bark_net(S), bark_net(S, reach=2)
         self.assertLess(float(np.mean(np.abs(shader - exact) > 0.01)), 0.002)
+
+    def test_the_trunks_ridges_part_and_meet_round_its_furrows(self):
+        # cells wrapped round the trunk at one depth line up as straight, parallel stripes, their edges all along the
+        # wood; old willow bark's ridges wander, part and meet again round each furrow, so some of their edges lean across
+        # it. Pooled over four patches round the trunk: the share of the edges leaning more than 10 degrees
+        leaning = []
+        for a in (0.0, 1.6, 3.2, 4.8):
+            rows, cols = np.gradient(bark_patch(start=a, res_m=0.004))      # up the trunk, round it
+            g = np.hypot(rows, cols)
+            edge = g > np.percentile(g, 80)
+            leaning.append(np.mean(np.degrees(np.arctan2(np.abs(rows[edge]), np.abs(cols[edge]))) > 10))
+        self.assertGreater(float(np.mean(leaning)), 0.006)
 
     def test_the_furrows_are_long_spindles_between_interlacing_ridges(self):
         # old willow bark: dark furrows, each a separate spindle ten or more times as long as it is wide, between long

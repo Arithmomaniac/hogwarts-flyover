@@ -51,6 +51,22 @@ GRID = """(step) => {
 # (found on the page before integration: shaded with the castle's meshes or the raymarched castle, sunlit with neither)
 CASTLE_SHADE_HOUR = 16.5
 CASTLE_SHADE = (18.8, 1.1)
+# court house 13's front wall at COURT_HOUR, the full level's own triangles the oracle (assets_testing): the castle 42-45 m
+# to the south-southwest shades the lawn before the wall and its eastern stretch from the foot to about 5 m, and lights
+# its western stretch over a strip at its foot, so a sunlit wall stands on shaded lawn there (round 3's report of it is
+# that silhouette). Seen COURT_BACK_M south of the stretch, with the near layer and without it (a static layer then holds
+# the wall), each probed pixel of the face whose point and its neighbours COURT_MARGIN_M along the wall and up it, 5 cm
+# out, all send their sun rays into a triangle over COURT_CONTACT_M off (a layer's depth bias, up to 0.57 m in the static
+# layers, hides the reveals and the eave nearer than that) has a sun term under COURT_SHADE_MAX, and each whose rays all
+# meet none has one over COURT_LIT_MIN
+COURT_HOUR = 15.0
+COURT_X, COURT_FACE_Z = (-63.75, -59.5), 45.0
+COURT_BACK_M, COURT_EYE_UP_M, COURT_AIM_UP_M = 12.0, 3.6, 2.6
+COURT_MARGIN_M = 0.5
+COURT_CONTACT_M = 1.0
+COURT_REACH_M = 200.0                       # along the sun ray: past the castle's tallest tower
+COURT_SHADE_MAX, COURT_LIT_MIN = 0.3, 0.7
+COURT_PIXELS_MIN = 100                      # of each verdict
 CLEARING_M = 30.0                           # a test footprint: a disc of wooded ground marked as built
 CROWN_M = 4.9                               # frag1.glsl treeH's widest crown, which may lean in over a clearing's edge
 FAR_FROM_MESHES_M = 60.0
@@ -385,6 +401,56 @@ class IntegratedSceneTests(RenderTestCase):
             cache[payload] = await self.page.evaluate("([x, z]) => __hog.probeSunCache(x, z)", list(CASTLE_SHADE))
         self.assertLess(cache[True], 0.3, "the castle's meshes should shade the court's cell")
         self.assertGreater(cache[False], 0.9, "with no meshes nothing should shade the court's cell")
+
+    async def test_the_castle_shades_court_house_13s_front_wall_as_its_full_level_does(self):
+        sun = np.array((await self.page.evaluate("(h) => __hog.light(h)", COURT_HOUR))["dir"])
+        sun /= np.linalg.norm(sun)
+        x = sum(COURT_X) / 2
+        eye = await self.at_ground(x, COURT_FACE_Z - COURT_BACK_M, COURT_EYE_UP_M)
+        yaw, pitch = aim(eye, await self.at_ground(x, COURT_FACE_Z - 1.0, COURT_AIM_UP_M))
+        reach = COURT_REACH_M + COURT_BACK_M
+        tris = np.concatenate([c["pos"][c["idx"]] for c in at.payload()["chunks"] if c.get("pass") != "glass"
+                               and c["box"][0] < COURT_X[1] + reach and c["box"][3] > COURT_X[0] - reach
+                               and c["box"][2] < COURT_FACE_Z + reach and c["box"][5] > COURT_FACE_Z - reach])
+        for dbg, layer in ((0, "near"), (DBG_NO_NEAR_LAYER, "static")):
+            frames = await self.page.evaluate("""([h, b, p, y, q]) => {
+                __hog.tod(h); __hog.dbg(b); __hog.camera(p, y, q); return __hog.frames; }""",
+                                              [COURT_HOUR, dbg, eye, yaw, pitch])
+            await self.page.wait_for_function(f"__hog.frames >= {frames + 12}", timeout=FRAME_TIMEOUT_S * 1000)
+            view, found = await self.page.evaluate("""() => {
+                const v = __hog.probe(0, 0), [w, h] = v.res, g = __hog.probeRect(0, 0, w, h), out = [];
+                for (let y = 0; y < h; y += 3) for (let x = 0; x < w; x += 3) {
+                  const p = g[y * w + x];
+                  if (p[0] === 4 && p[3] < -0.99) out.push([x, y, p[1], p[2], p[3], p[5], __hog.probeSun(x, y)]);
+                }
+                return [v, out]; }""")
+            points, normals, suns = [], [], []
+            for px, py, nx, ny, nz, t, s in found:
+                origin, direction = ray(view, px, py)
+                if COURT_X[0] < (origin + direction * t)[0] < COURT_X[1]:
+                    points.append(origin + direction * t); normals.append([nx, ny, nz]); suns.append(s)
+            points, normals, suns = np.array(points), np.array(normals), np.array(suns)
+            along = np.cross([0.0, 1.0, 0.0], normals)
+            along /= np.linalg.norm(along, axis=1, keepdims=True)
+            up = np.tile([0.0, 1.0, 0.0], (len(points), 1))
+            starts = points[:, None] + normals[:, None] * 0.05 + np.stack([0 * up, along, -along, up, -up], 1) * COURT_MARGIN_M
+            starts = starts.reshape(-1, 3)
+            side = np.cross(sun, [0.0, 1.0, 0.0])
+            across = np.array([side, np.cross(side, sun)]) / np.linalg.norm(side)     # light space: the plane rays cross
+            lo, hi = (starts @ across.T).min(0), (starts @ across.T).max(0)
+            seen = tris @ across.T
+            corridor = tris[np.all(seen.max(1) >= lo, 1) & np.all(seen.min(1) <= hi, 1)]
+            rays = np.tile(sun, (len(starts), 1))
+            met = at.segment_hits(starts, rays, COURT_REACH_M, corridor).reshape(-1, 5)
+            beyond = at.segment_hits(starts + sun * COURT_CONTACT_M, rays, COURT_REACH_M, corridor).reshape(-1, 5)
+            shaded, lit = beyond.all(1), ~met.any(1)
+            with self.subTest(layer=layer):
+                self.assertGreaterEqual(int(shaded.sum()), COURT_PIXELS_MIN, "too little of the shaded wall in view")
+                self.assertGreaterEqual(int(lit.sum()), COURT_PIXELS_MIN, "too little of the sunlit wall in view")
+                self.assertEqual(np.round(suns[shaded & (suns >= COURT_SHADE_MAX)], 2).tolist(), [],
+                                 "sunlit where the castle shades the wall")
+                self.assertEqual(np.round(suns[lit & (suns <= COURT_LIT_MIN)], 2).tolist(), [],
+                                 "shaded where the sun lights the wall")
 
     async def lake_codes(self, payload):
         lake = await self.page.evaluate("DATA.meta.extras.lake_c")

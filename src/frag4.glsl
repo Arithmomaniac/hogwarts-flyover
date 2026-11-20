@@ -54,10 +54,24 @@ vec3 surfCol(float c, vec2 xz, float pix) {          // a class's colour, the pi
 }
 float classAt(ivec2 i, ivec2 n) { return floor(texelFetch(tLocB, clamp(i, ivec2(0), n - 1), 0).b * 255. + 0.5); }
 bool hardClass(float c) { return c > 2.5 && c < 6.5 && abs(c - 5.) > 0.5; }    // paths, beds and the pitch
+// class c's share of a point by the cubic B-spline over the 4 x 4 texels round it (i: the cell's first texel, w: the
+// point's place in it). The beds and the pitch take a point where it is a half or more, so their edges run smooth where
+// the texels step slantwise (read as the four nearest texels weigh them, the beds' edge below the greenhouses traced the
+// texels' steps), and a lone texel (0.44 at most) claims no ground. Paths keep the four nearest texels' weight: a path a
+// texel wide running slantwise reaches a half by the B-spline only at its texels' centres, so it would vanish
+float splineShare(ivec2 i, vec2 w, ivec2 n, float c) {
+  vec2 v = 1. - w;
+  vec4 bx = vec4(v.x * v.x * v.x, 4. - 6. * w.x * w.x + 3. * w.x * w.x * w.x, 4. - 6. * v.x * v.x + 3. * v.x * v.x * v.x, w.x * w.x * w.x) / 6.;
+  vec4 by = vec4(v.y * v.y * v.y, 4. - 6. * w.y * w.y + 3. * w.y * w.y * w.y, 4. - 6. * v.y * v.y + 3. * v.y * v.y * v.y, w.y * w.y * w.y) / 6.;
+  float s = 0.;
+  for (int y = 0; y < 4; y++)
+    for (int x = 0; x < 4; x++) s += bx[x] * by[y] * float(classAt(i + ivec2(x - 1, y - 1), n) == c);
+  return s;
+}
 
 // the ground's colour from the surface classes of the four texels round luv (the local layer's uv), as bilinear
 // filtering weighs them from their centres: soft classes blend across the texel between them, while a hard class keeps a
-// sharp edge, taking the point wherever its weight is a half or more
+// sharp edge, taking the point wherever its weight is a half or more (the beds and the pitch: their B-spline share)
 vec3 classMix(vec2 luv, vec2 xz, float pix) {
   ivec2 n = textureSize(tLocB, 0);
   vec2 f = luv * vec2(n) - 0.5, w = fract(f);
@@ -71,7 +85,7 @@ vec3 classMix(vec2 luv, vec2 xz, float pix) {
     if (hardClass(c[k])) { if (own > most) { most = own; hard = c[k]; } }
     else soft += wt[k];
   }
-  if (most >= 0.5 || soft <= 0.) return surfCol(hard, xz, pix);
+  if (soft <= 0. || (hard >= 0. && (hard < 3.5 ? most : splineShare(i, w, n, hard)) >= 0.5)) return surfCol(hard, xz, pix);
   vec3 sum = vec3(0.);
   for (int k = 0; k < 4; k++) {
     bool first = k == 0 || (c[k] != c[0] && (k < 2 || c[k] != c[1]) && (k < 3 || c[k] != c[2]));

@@ -57,6 +57,7 @@ vec3 vegNormal(vec3 p, TS s, vec3 gn) {
 #define ST_BISECT 1
 #define ST_GNORM 3
 #define ST_SHINIT 4
+#define ST_GWIDE 5
 #define ST_RINIT 6
 #define ST_REFL 7
 #define ST_RNORM 8
@@ -79,6 +80,14 @@ struct Res {
 // 2 m texel and the bilinear cells would otherwise shade as a staircase along the shore. It eases back inland as the
 // layer's depth falls from -0.9 to -3, since a step that switched at once would crease the ground along that contour
 #define GNORM_E(t, s) max(clamp((t) * 0.0018, 0.3, 45.), 2. * smoothstep(-3., -0.9, (s).g.wd))
+// where a face drops through one of the local layer's cells (its 2 x 2 texels span more than ROCK_CELL_M), slantwise to
+// the grid, the bilinear cells make it a staircase, and a normal from the short step above follows each cell: the
+// castle's cliff showed vertical streaks every 3.4 m. There the normal is taken again from central differences ROCK_E
+// either side along the grid's two axes, and blended in as the ground turns to rock (groundAlb: n.y 0.72 to 0.42). Each
+// pair crosses a slantwise face, so it spans the staircase; taken along x and z, the pair nearly along the face sampled
+// the staircase itself. A face along an axis makes no staircase
+#define ROCK_CELL_M 1.9
+#define ROCK_E 3.
 // a rising ray still skimming the ground when its march's budget runs out goes on for up to CONT_N steps more, each at
 // least CONT_PX pixels long, so one that clears a long crest ends in the sky or on the far ground beyond it rather than
 // as a strip of ground in mid-air (debug bit 262144: called ground at once). A falling ray is called ground at once, as
@@ -87,6 +96,13 @@ struct Res {
 #define CONT_N 160
 #define CONT_PX 2.0
 #ifdef SPLIT_P1
+bool steepCell(GS g) {                               // the local layer's 2 x 2 texels round g span over ROCK_CELL_M
+  if (g.lw <= 0.) return false;
+  ivec2 n = textureSize(tLocH, 0), i = ivec2(floor(g.luv * vec2(n) - 0.5));
+  vec4 h = vec4(texelFetch(tLocH, clamp(i, ivec2(0), n - 1), 0).r, texelFetch(tLocH, clamp(i + ivec2(1, 0), ivec2(0), n - 1), 0).r,
+                texelFetch(tLocH, clamp(i + ivec2(0, 1), ivec2(0), n - 1), 0).r, texelFetch(tLocH, clamp(i + 1, ivec2(0), n - 1), 0).r);
+  return max(max(h.x, h.y), max(h.z, h.w)) - min(min(h.x, h.y), min(h.z, h.w)) > ROCK_CELL_M;
+}
 float sunCache(vec2 xz) {
   vec2 x = xz / 7. + TREE_G0 - 0.5, i = floor(x), f = x - i;
   ivec2 a = clamp(ivec2(i), ivec2(0), ivec2(TREE_N - 1)), b = clamp(ivec2(i) + 1, ivec2(0), ivec2(TREE_N - 1));
@@ -105,9 +121,9 @@ Res trace(vec3 ro, vec3 rd) {
   int maxM = uQual == 0 ? 170 : (uQual == 1 ? 250 : 360);
   int maxR = (uQual == 0 || uDetail == 0 || (uDbg & 2) != 0) ? 0 : (uQual == 1 ? 64 : 100);
   int st = ST_MARCH, cnt = 0;
-  float t = 0.05, tPrev = 0.05, ta = 0., tb = 0., e = 0., g0 = 0., h1 = 0., rtt = 0.;
+  float t = 0.05, tPrev = 0.05, ta = 0., tb = 0., e = 0., g0 = 0., h1 = 0., h2 = 0., rtt = 0.;
   float tMesh = texelFetch(tMeshT, ivec2(gl_FragCoord.xy), 0).r;
-  vec3 hp = vec3(0.), rro = vec3(0.);
+  vec3 hp = vec3(0.), rro = vec3(0.), sn = vec3(0.);
   if (ro.y > CEIL) { if (rd.y >= 0.) st = ST_DONE; else t = (ro.y - CEIL) / -rd.y; }
   if (uCone != 0 && st == ST_MARCH) {               // resume the baseline march state the block's cone pass replayed
     uvec4 cb = uvec4(texelFetch(tTree, ivec2(gl_FragCoord.xy) / 8 + ivec2(0, TREE_N), 0) * 255. + 0.5);
@@ -121,7 +137,10 @@ Res trace(vec3 ro, vec3 rd) {
     if (st == ST_SHINIT) {                           // where the shadow pass starts the sun march, or the sun term itself
       vec2 dd = hp.xz - r.s.tc.xy;                   // tree hits: start outward from the crown, not straight up
       vec3 vo = r.s.tp.w > 0. ? normalize(vec3(dd.x, max(length(dd), 0.5) * 0.6, dd.y)) : vec3(0., 0.6, 0.);
-      r.so = hp + (r.mat == 3 ? vo : (r.mat == 2 ? vec3(0., 0.1, 0.) : r.n * (0.04 + r.t * 0.0008))) + uSunDir * 0.05;
+      // a steep face's wide normal (ST_GWIDE) can point into its cell's own step: a sun march leaving along it started
+      // inside the staircase and shaded the steps' edges in hatching, so it leaves along the short step's normal (sn)
+      vec3 off = dot(sn, sn) > 0. ? sn : r.n;
+      r.so = hp + (r.mat == 3 ? vo : (r.mat == 2 ? vec3(0., 0.1, 0.) : off * (0.04 + r.t * 0.0008))) + uSunDir * 0.05;
       r.stt = 0.12 + r.t * 0.0015;
       r.sh = uSunDir.y < -0.03 ? 0. : 1.;
       r.shf = uSunDir.y > -0.03 && (uDbg & 1) == 0;
@@ -143,6 +162,7 @@ Res trace(vec3 ro, vec3 rd) {
     if (st == ST_MARCH) { p = ro + rd * t; td = t; vm = uDetail == 1 ? 1 : 2; }
     else if (st == ST_BISECT) { t = 0.5 * (ta + tb); p = ro + rd * t; td = t; vm = uDetail == 0 ? 2 : (t < TREE_FAR ? 0 : 1); }
     else if (st == ST_GNORM || st == ST_RNORM) { p = hp + (cnt == 0 ? vec3(e, 0., 0.) : vec3(0., 0., e)); td = st == ST_GNORM ? r.t : 1e5; }
+    else if (st == ST_GWIDE) { vec2 d = normalize(cnt < 2 ? uLocU.xy : uLocV.xy) * ((cnt & 1) == 0 ? ROCK_E : -ROCK_E); p = hp + vec3(d.x, 0., d.y); td = r.t; }
     else { p = rro + r.rd * rtt; td = 1e5; vm = 2; }
     // ---- the single scene evaluation
     TS s = evalTop(p, td, vm);
@@ -179,7 +199,18 @@ Res trace(vec3 ro, vec3 rd) {
       if (cnt == 0) h1 = s.gy;
       else {
         vec3 n = normalize(vec3(g0 - h1, e, g0 - s.gy));
-        if (st == ST_GNORM) { r.n = n; st = ST_SHINIT; } else { r.rn = n; st = ST_DONE; }
+        if (st == ST_GNORM) { r.n = n; st = ST_SHINIT; if (r.mat == 1 && steepCell(r.s.g)) { st = ST_GWIDE; cnt = -1; } }
+        else { r.rn = n; st = ST_DONE; }
+      }
+      cnt++;
+    } else if (st == ST_GWIDE) {                     // samples ROCK_E either side along the grid's u axis, then its v
+      if (cnt == 0) h1 = s.gy; else if (cnt == 1) g0 = s.gy; else if (cnt == 2) h2 = s.gy;
+      else {
+        vec2 rise = (h1 - g0) * normalize(uLocU.xy) + (h2 - s.gy) * normalize(uLocV.xy);    // over 2 ROCK_E
+        vec3 n = normalize(vec3(-rise.x, 2. * ROCK_E, -rise.y));
+        sn = r.n;                                    // the sun's march leaves along the short step's normal (ST_SHINIT)
+        r.n = normalize(mix(r.n, n, smoothstep(0.72, 0.42, n.y)));
+        st = ST_SHINIT;
       }
       cnt++;
     } else {                                         // ST_REFL
