@@ -12,7 +12,8 @@ from the shadow layers, nearer than their guards allow or from the simplifier wh
 glasshouse's floor in its lawn or its dwarf wall short of the ground, glazing without its sheen or tint, small lights
 missing, shown through walls, over near panes, too dim or with a lantern's faces merged, the lake mirroring none or
 mirroring their display values, a skimming ray called ground
-in mid-air or stepping over ridges, the far canopy a lawn, the burns painted beds and stars in a civil-dusk sky.
+in mid-air or stepping over ridges, the far canopy a lawn, the burns painted beds, the cliff's rock banded, lit by its
+short steps' normals, bumped on one lattice or shaded by its own steps, and stars in a civil-dusk sky.
 
 The page mutations rebuild the copy's page and need a browser (set HOG_GPU):
 
@@ -287,6 +288,20 @@ MUTATIONS = [
     Mutation("the rock's strata back in regular bands", "frag4.glsl",
              "  return mix(vec3(0.088, 0.082, 0.073) * r,",
              "  return mix(vec3(0.088, 0.082, 0.073) * r * (0.86 + 0.14 * sin(p.y * 1.9)),",
+             ("test_render_ground.GroundLookTests.test_the_cliffs_rock_repeats_at_no_period",)),
+    Mutation("a steep face's normal taken from its short step alone", "frag3.glsl",
+             " if (r.mat == 1 && steepCell(r.s.g)) { st = ST_GWIDE; cnt = -1; }", "",
+             ("test_render_ground.GroundLookTests.test_the_cliffs_rock_repeats_at_no_period",
+              "test_render_ground.GroundLookTests.test_the_cliffs_texel_steps_cast_no_shadow_on_its_face")),
+    Mutation("the sun's march leaving a steep face from the face itself", "frag3.glsl",
+             " + ROCK_OUT_M * gw)))", ")))",
+             ("test_render_ground.GroundLookTests.test_the_cliffs_texel_steps_cast_no_shadow_on_its_face",)),
+    Mutation("the rock's bumps on one lattice", "frag4.glsl",
+             "  vec3 d = vec3(vnoise(p.xz * 0.45 + p.y * 0.3), vnoise(p.zy * 0.45 + 5.), vnoise(p.xy * 0.45 + 9.))\n"
+             "         + vec3(vnoise(q.xz * 0.45 + q.y * 0.3), vnoise(q.zy * 0.45 + 5.), vnoise(q.xy * 0.45 + 9.)) - 1.;\n"
+             "  return normalize(n + d * 0.64 * rk);",
+             "  vec3 d = vec3(vnoise(p.xz * 0.45 + p.y * 0.3), vnoise(p.zy * 0.45 + 5.), vnoise(p.xy * 0.45 + 9.)) - 0.5;\n"
+             "  return normalize(n + d * 0.9 * rk);",
              ("test_render_ground.GroundLookTests.test_the_cliffs_rock_repeats_at_no_period",)),
     Mutation("a hard class's edge drawn where its weight among the four nearest texels passes a half", "frag4.glsl",
              "(hard >= 0. && (hard < 3.5 ? most : splineShare(i, w, n, hard)) >= 0.5)", "most >= 0.5",

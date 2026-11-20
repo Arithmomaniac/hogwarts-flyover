@@ -547,6 +547,49 @@ def bark_space(p, n, aux):
     return np.stack([r * dot(o, e1), along * bark.STRETCH, r * dot(o, e2)], axis=1) * bark.CELL_PER_M
 
 
+def smoothstep(a, b, x):
+    t = np.clip((x - a) / (b - a), 0, 1)
+    return t * t * (3 - 2 * t)
+
+
+def bark_lattices(p, n, aux):
+    """The bark shader's cell spaces at points p with normals n on wood of codes aux, each with its weight: on the trunk,
+    its own space at the two rungs of the ladder its girth lies between, and the hollow's walls' space (their distance
+    from the axis across them, their height along them) as the wood turns side-on to the axis; on every other piece of
+    wood, its own space alone."""
+    dot = lambda a, b: np.einsum("ij,ij->i", a, b)
+    S = bark_space(p, n, aux)
+    x0, y0, z0, lx, lz = bark.TRUNK_AXIS
+    y0 += world.levels()["lake"]
+    o = p - [x0, y0, z0] - np.outer(p[:, 1] - y0, [lx, 1.0, lz])
+    rho = np.linalg.norm(o, axis=1)
+    oh = o / np.maximum(rho, 1e-4)[:, None]
+    twist = np.abs(dot(n, np.cross([0.0, 1.0, 0.0], oh))) / np.maximum(np.abs(dot(n, oh)), 1e-3)
+    trunk = np.asarray(aux) == BARK[1]
+    wall = np.where(trunk, smoothstep(*bark.WALL_TWIST, twist), 0.0)
+    L = np.clip(np.log(np.maximum(rho / bark.GIRTH_M, 1.0)) / math.log(bark.RUNG), 0, bark.RUNGS)
+    i = np.where(trunk, np.minimum(np.floor(L), bark.RUNGS - 1), 0.0)
+    f = np.where(trunk, smoothstep(*bark.RUNG_BAND, L - i), 0.0)
+    walls = np.stack([rho * bark.CELL_PER_M, S[:, 1], np.arctan2(oh[:, 2], oh[:, 0]) * bark.WALL_SPREAD], axis=1)
+    rung = lambda s: S * np.array([s, 1.0, s])
+    # one space to each rung (so a triangle's corners either side of a rung's edge read the same space)
+    return [(rung(bark.RUNG ** r), (1 - wall) * np.where(i == r, 1 - f, np.where(i + 1 == r, f, 0.0)))
+            for r in range(bark.RUNGS + 1)] + [(walls, wall)]
+
+
+def bark_height(p, n, aux):
+    """The bark's height over the furrows' floor (0) to the ridges' crests (1) at points p (as bark_space), close up:
+    where cell spaces crossfade, each one's borders where it is nearer than the others by MERGE times its share."""
+    E, top = np.full(len(p), np.inf), np.zeros(len(p))
+    for S, w in bark_lattices(p, n, aux):
+        on = w > 1e-3
+        e = np.full(len(p), np.inf)
+        e[on] = bark_net(S[on])
+        E = np.minimum(E, e + (1 - w) * bark.MERGE)
+        top = np.maximum(top, np.where(on, w, 0.0))
+    return ridge(E - (1 - top) * bark.MERGE)
+
+
 def round_trunk(a, y, r=1.0):
     """Points (and their normals) on a circular trunk r metres round the Willow's axis, at bearings a, y over its base."""
     x0, y0, z0, lx, lz = bark.TRUNK_AXIS
@@ -561,7 +604,7 @@ def bark_patch(width_m=1.0, height_m=2.4, res_m=0.005, start=0.0):
     y = np.arange(0.3, 0.3 + height_m, res_m)
     A, Y = np.meshgrid(a, y)
     p, n = round_trunk(A.ravel(), Y.ravel())
-    return ridge(bark_net(bark_space(p, n, np.full(len(p), BARK[1])))).reshape(A.shape)
+    return bark_height(p, n, np.full(len(p), BARK[1])).reshape(A.shape)
 
 
 _WOOD = None
@@ -589,8 +632,10 @@ def placed_wood():
 
 def cells_on(tris, nrms, aux):
     """Each triangle's area, and the bark's cells per metre over it across (the most) and along (the least) its
-    furrows, from the cell space at its corners."""
-    S = np.stack([bark_space(tris[:, k], nrms[:, k], aux) for k in range(3)], axis=1)
+    furrows, from the cell space at its corners (the one weighted most over them, where spaces crossfade)."""
+    spaces = [bark_lattices(tris[:, k], nrms[:, k], aux) for k in range(3)]
+    main = np.argmax(np.stack([sum(spaces[k][j][1] for k in range(3)) for j in range(len(spaces[0]))], axis=1), axis=1)
+    S = np.stack([np.choose(main[:, None], [space[0] for space in spaces[k]]) for k in range(3)], axis=1)
     u, v = tris[:, 1] - tris[:, 0], tris[:, 2] - tris[:, 0]
     fn = np.cross(u, v)
     area = np.linalg.norm(fn, axis=1) / 2
@@ -624,8 +669,7 @@ class WillowBarkTests(unittest.TestCase):
         pl = np.array([-254.3, world.datum() + 2.0, 184.2]) + rng.uniform(-15, 15, n)[:, None] * lying + 0.3 * nl
         for name, p, nrm, aux in (("trunk", p, nrm, BARK[1]), ("lying", pl, nl, LYING)):
             with self.subTest(wood=name):
-                S = bark_space(p, nrm, np.full(n, aux))
-                self.assertAlmostEqual(float(np.mean(ridge(bark_net(S)))), bark.FAR_H, delta=0.03)
+                self.assertAlmostEqual(float(np.mean(bark_height(p, nrm, np.full(n, aux)))), bark.FAR_H, delta=0.03)
 
     def test_the_ridges_run_unbroken_round_the_furrows(self):
         # the shader's 3x3x3 search round the nearest centre must find the border it lies by; where it misses one, the
@@ -675,6 +719,26 @@ class WillowBarkSpaceTests(unittest.TestCase):
         cls.area, cls.across, cls.along = cells_on(tris, nrms, cls.aux)
         shown = (cls.across * cls.PIX_M < bark.FADE[0]) & (cls.across > bark.COARSE[0] * bark.CELL_PER_M)
         cls.shown = shown & (cls.above > 0.02)                  # above the ground
+        # each triangle's bearing round the trunk's axis from the hollow's, and how far its face turns round the trunk
+        w = placed()
+        mid = tris.mean(axis=1)
+        _, _, _, lx, lz = bark.TRUNK_AXIS
+        rise = mid[:, 1] - self_ground(w, *w.at)
+        off = mid[:, [0, 2]] - w.at - np.outer(rise, [lx, lz])
+        theta = np.arctan2(off[:, 1], off[:, 0])
+        gap = mesh_willow.gap_bearing(world.data()["meta"])
+        cls.from_gap = np.abs(np.degrees(wrapped(theta - gap)))
+        cls.in_gap = mesh_willow.gap_cut(theta, rise, gap) > 0.02
+        face = np.cross(tris[:, 1] - tris[:, 0], tris[:, 2] - tris[:, 0])
+        face /= np.linalg.norm(face, axis=1, keepdims=True)
+        cls.side_on = np.abs(face[:, 0] * -np.sin(theta) + face[:, 2] * np.cos(theta))
+
+    def width(self, m):
+        """The furrows' width over the triangles m (area-weighted median), metres."""
+        return weighted_median(1 / self.across[m], self.area[m])
+
+    def trunk(self):
+        return self.shown & (self.aux == BARK[1]) & (self.above > 1.0) & (self.above < 2.0)
 
     def test_the_trunk_axis_is_the_built_trunks(self):
         w = placed()
@@ -707,6 +771,23 @@ class WillowBarkSpaceTests(unittest.TestCase):
         ratio = weighted_median(1 / self.across[low], self.area[low]) / weighted_median(1 / self.across[trunk],
                                                                                          self.area[trunk])
         self.assertTrue(0.67 < ratio < 1.5, ratio)
+
+    def test_the_hollows_walls_have_the_trunks_cells(self):
+        # the hollow's walls face round the trunk, not out from it, so their bearing round its axis barely changes across
+        # them: cells wrapped round the axis grow several times the trunk's width there and smear into blotches
+        walls = self.shown & (self.aux == BARK[1]) & self.in_gap & (self.side_on > 0.7)
+        self.assertGreater(self.area[walls].sum(), 0.4)
+        ratio = self.width(walls) / self.width(self.trunk())
+        self.assertTrue(0.67 < ratio < 1.5, ratio)
+        long = self.across / np.maximum(self.along, 1e-9) >= 5
+        self.assertGreater(self.area[walls & long].sum() / self.area[walls].sum(), 0.9)
+
+    def test_the_flared_base_has_the_trunks_cells(self):
+        # the trunk flares to 1.6 times its girth at the ground; the same cells round it there would be as much wider
+        flare = self.shown & (self.aux == BARK[1]) & (self.above < 0.6) & (self.from_gap > 80)
+        self.assertGreater(self.area[flare].sum(), 2.0)
+        ratio = self.width(flare) / self.width(self.trunk())
+        self.assertTrue(0.83 < ratio < 1.2, ratio)
 
 
 class WillowMeshOracleTests(unittest.TestCase):

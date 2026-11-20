@@ -85,9 +85,12 @@ struct Res {
 // castle's cliff showed vertical streaks every 3.4 m. There the normal is taken again from central differences ROCK_E
 // either side along the grid's two axes, and blended in as the ground turns to rock (groundAlb: n.y 0.72 to 0.42). Each
 // pair crosses a slantwise face, so it spans the staircase; taken along x and z, the pair nearly along the face sampled
-// the staircase itself. A face along an axis makes no staircase
+// the staircase itself. A face along an axis makes no staircase. The sun's march leaves such a face ROCK_OUT_M out along
+// its normal (as far as it is blended in), clear of the steps: marched from the face, the steps shaded one another in
+// wedges with hatched edges, 17% of the cliff's rock at 12:30
 #define ROCK_CELL_M 1.9
 #define ROCK_E 3.
+#define ROCK_OUT_M 1.5
 // a rising ray still skimming the ground when its march's budget runs out goes on for up to CONT_N steps more, each at
 // least CONT_PX pixels long, so one that clears a long crest ends in the sky or on the far ground beyond it rather than
 // as a strip of ground in mid-air (debug bit 262144: called ground at once). A falling ray is called ground at once, as
@@ -121,9 +124,9 @@ Res trace(vec3 ro, vec3 rd) {
   int maxM = uQual == 0 ? 170 : (uQual == 1 ? 250 : 360);
   int maxR = (uQual == 0 || uDetail == 0 || (uDbg & 2) != 0) ? 0 : (uQual == 1 ? 64 : 100);
   int st = ST_MARCH, cnt = 0;
-  float t = 0.05, tPrev = 0.05, ta = 0., tb = 0., e = 0., g0 = 0., h1 = 0., h2 = 0., rtt = 0.;
+  float t = 0.05, tPrev = 0.05, ta = 0., tb = 0., e = 0., g0 = 0., h1 = 0., h2 = 0., gw = 0., rtt = 0.;
   float tMesh = texelFetch(tMeshT, ivec2(gl_FragCoord.xy), 0).r;
-  vec3 hp = vec3(0.), rro = vec3(0.), sn = vec3(0.);
+  vec3 hp = vec3(0.), rro = vec3(0.);
   if (ro.y > CEIL) { if (rd.y >= 0.) st = ST_DONE; else t = (ro.y - CEIL) / -rd.y; }
   if (uCone != 0 && st == ST_MARCH) {               // resume the baseline march state the block's cone pass replayed
     uvec4 cb = uvec4(texelFetch(tTree, ivec2(gl_FragCoord.xy) / 8 + ivec2(0, TREE_N), 0) * 255. + 0.5);
@@ -137,10 +140,8 @@ Res trace(vec3 ro, vec3 rd) {
     if (st == ST_SHINIT) {                           // where the shadow pass starts the sun march, or the sun term itself
       vec2 dd = hp.xz - r.s.tc.xy;                   // tree hits: start outward from the crown, not straight up
       vec3 vo = r.s.tp.w > 0. ? normalize(vec3(dd.x, max(length(dd), 0.5) * 0.6, dd.y)) : vec3(0., 0.6, 0.);
-      // a steep face's wide normal (ST_GWIDE) can point into its cell's own step: a sun march leaving along it started
-      // inside the staircase and shaded the steps' edges in hatching, so it leaves along the short step's normal (sn)
-      vec3 off = dot(sn, sn) > 0. ? sn : r.n;
-      r.so = hp + (r.mat == 3 ? vo : (r.mat == 2 ? vec3(0., 0.1, 0.) : off * (0.04 + r.t * 0.0008))) + uSunDir * 0.05;
+      r.so = hp + (r.mat == 3 ? vo : (r.mat == 2 ? vec3(0., 0.1, 0.) : r.n * (0.04 + r.t * 0.0008 + ROCK_OUT_M * gw)))
+           + uSunDir * 0.05;
       r.stt = 0.12 + r.t * 0.0015;
       r.sh = uSunDir.y < -0.03 ? 0. : 1.;
       r.shf = uSunDir.y > -0.03 && (uDbg & 1) == 0;
@@ -208,8 +209,8 @@ Res trace(vec3 ro, vec3 rd) {
       else {
         vec2 rise = (h1 - g0) * normalize(uLocU.xy) + (h2 - s.gy) * normalize(uLocV.xy);    // over 2 ROCK_E
         vec3 n = normalize(vec3(-rise.x, 2. * ROCK_E, -rise.y));
-        sn = r.n;                                    // the sun's march leaves along the short step's normal (ST_SHINIT)
-        r.n = normalize(mix(r.n, n, smoothstep(0.72, 0.42, n.y)));
+        gw = smoothstep(0.72, 0.42, n.y);
+        r.n = normalize(mix(r.n, n, gw));
         st = ST_SHINIT;
       }
       cnt++;

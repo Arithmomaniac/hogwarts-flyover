@@ -48,6 +48,19 @@ WOBBLE = ((0.06, 11, 0.9, 0.0), (0.045, 17, -1.3, 1.3))
 # close up, the ridges show a grain of streaks a couple of centimetres wide and a few tens long, along the furrows; it
 # varies their albedo by up to GRAIN either way about its mean, and fades out as a pixel grows from GRAIN_FADE[1] to [0]
 GRAIN, GRAIN_FADE = 0.45, (0.016, 0.008)
+# the trunk's circle holds the same cells at every height, so they widen with its girth: where the trunk is wider than
+# GIRTH_M (its flared base) it takes a ladder of finer cell spaces, each RUNG times its circle's radius, up to RUNGS steps,
+# crossfading over RUNG_BAND of each step. The hollow's walls face round the trunk rather than out from it, so their
+# bearing round the axis barely changes across them and the circle's cells smear there; as the wood turns side-on
+# (between WALL_TWIST, the tangent of its turn from facing out), they take cells of their own
+GIRTH_M, RUNG, RUNGS, RUNG_BAND = 0.9, 1.5, 2, (0.3, 0.7)
+WALL_TWIST = (1.2, 2.5)
+# the walls' cells lie in their distance from the axis (across them) and their height (along them); their bearing round
+# the axis, which changes up a wall that leans round the trunk, moves them only WALL_SPREAD cells a radian, so the
+# leaning walls' cells stay long. (The bearing is atan's, which jumps behind the trunk, where no wood faces side-on)
+WALL_SPREAD = 0.15
+# where two cell spaces crossfade, each one's borders show where it is nearer than the other by MERGE times its share
+MERGE = 0.6
 RIDGE_E, RIDGE_W = 0.06, 0.12           # the ridge's crest each side of the border, and its flank down into the furrow, in cells
 FAR_H = 0.54
 FADE = (0.42, 0.168)                    # cells per pixel: the pattern fades out between these
@@ -65,7 +78,8 @@ BARK_P3 = (" {                             // the Willow's bark: long ridges in 
            f"        const vec3 AX[{len(BARK_AXES)}] = vec3[{len(BARK_AXES)}]({_AXIS_LIST});\n"
            f"        vec3 d = AX[k == 120 ? 0 : k - {LYING - 1}], e1 = normalize(cross(d, abs(d.y) > 0.9 ? vec3(1., 0., 0.) : vec3(0., 1., 0.))), e2 = cross(d, e1);\n"
            f"        float R = k == 120 ? {ROUND[120]!r} : {ROUND['wood']!r}, rate = 0., h = {FAR_H!r};\n"
-           "        vec3 S = vec3(0.), a = e1, W = vec3(1., 0., 0.); int got = 0; float grain = 1.;\n"
+           "        vec3 S = vec3(0.), Sw = vec3(0.), a = e1, W = vec3(1., 0., 0.), lw = vec3(1., 0., 0.); vec2 sc = vec2(1.);\n"
+           "        int got = 0; float grain = 1., rw = 0.;\n"
            "        for (int j = ZERO; j < 5; j++) {                  // this pixel, then its four neighbours\n"
            "          vec3 q = p, m = n;\n"
            "          if (j > 0) {\n"
@@ -80,17 +94,33 @@ BARK_P3 = (" {                             // the Willow's bark: long ridges in 
            "#endif\n"
            "          }\n"
            f"          vec3 o = k == 120 ? q - vec3({_X0!r}, LAKE + {_Y0!r}, {_Z0!r}) - vec3({_LX!r}, 1., {_LZ!r}) * (q.y - LAKE - {_Y0!r}) : m - d * dot(m, d);\n"
-           "          o /= max(length(o), 1e-4);                         // the bearing round the wood\n"
+           "          float rho = length(o);                           // on the trunk, the distance from its axis\n"
+           "          o /= max(rho, 1e-4);                               // the bearing round the wood\n"
            "          float wb = 1., wt = 0., wy = 0.;                 // the trunk's circle swells and shrinks\n"
            f"          if (k == 120) {{ float th = atan(o.z, o.x), hy = q.y - LAKE - {_Y0!r}; wb = 1.{_WOBBLE}; wt = 0.{_WOBBLE_T}; wy = 0.{_WOBBLE_Y}; }}\n"
            "          // along the wood from the trunk's base, so the pattern keeps its place on the wood at any datum\n"
            f"          vec3 sj = vec3(R * wb * dot(o, e1), dot(q - vec3({_X0!r}, LAKE + {_Y0!r}, {_Z0!r}), d) * {STRETCH!r}, R * wb * dot(o, e2)) * {CELL_PER_M!r};\n"
-           "          if (j == 0) { S = sj; a = o; W = vec3(wb, wt, wy); } else { rate = max(rate, length(sj - S)); got++; }\n"
+           f"          vec3 sw = vec3(rho * {CELL_PER_M!r}, sj.y, atan(o.z, o.x) * {WALL_SPREAD!r});   // the hollow's walls' cells\n"
+           "          if (j == 0) {\n"
+           "            S = sj; Sw = sw; a = o; W = vec3(wb, wt, wy);\n"
+           "            if (k == 120) {                                // the trunk's rungs, and its walls' share\n"
+           f"              float tw = abs(dot(n, vec3(o.z, 0., -o.x))) / max(abs(dot(n, o)), 1e-3), ww = smoothstep({WALL_TWIST[0]!r}, {WALL_TWIST[1]!r}, tw);\n"
+           f"              float L = clamp(log(max(rho / {GIRTH_M!r}, 1.)) / {math.log(RUNG)!r}, 0., {float(RUNGS)!r}), ri = min(floor(L), {RUNGS - 1.0!r});\n"
+           f"              float fb = smoothstep({RUNG_BAND[0]!r}, {RUNG_BAND[1]!r}, L - ri);\n"
+           f"              lw = vec3((1. - fb) * (1. - ww), fb * (1. - ww), ww); sc = vec2(pow({RUNG!r}, ri), pow({RUNG!r}, ri + 1.));\n"
+           "            }\n"
+           "          } else { rate = max(rate, length(sj - S)); rw = max(rw, length(sw - Sw)); got++; }\n"
            "        }\n"
-           f"        if (got == 0) rate = pix * {CELL_PER_M!r};\n"
-           f"        float aa = smoothstep({FADE[0]!r}, {FADE[1]!r}, rate) * smoothstep({COARSE[0]!r}, {COARSE[1]!r}, rate / (pix * {CELL_PER_M!r}));\n"
-           "        if (aa > 0.) {\n"
-           "          vec3 c = floor(S), f = S - c, m1 = vec3(9.), mo = vec3(0.);\n"
+           f"        if (got == 0) {{ rate = pix * {CELL_PER_M!r}; rw = rate; }}\n"
+           "        float E = 9., top = 0., aa = 0.; vec3 U = vec3(1., 0., 0.), T = S; int sl = 0;\n"
+           "        for (int l = ZERO; l < 3; l++) {                  // each cell space with a share here\n"
+           "          float wl = l == 0 ? lw.x : l == 1 ? lw.y : lw.z, s = l == 0 ? sc.x : sc.y, rl = l == 2 ? rw : rate * s;\n"
+           "          if (wl < 1e-3) continue;\n"
+           f"          float al = smoothstep({FADE[0]!r}, {FADE[1]!r}, rl) * smoothstep({COARSE[0]!r}, {COARSE[1]!r}, rl / (pix * {CELL_PER_M!r}));\n"
+           "          if (al <= 0.) continue;\n"
+           "          aa += wl * al; top = max(top, wl);\n"
+           "          vec3 Q = l == 2 ? Sw : vec3(s * S.x, S.y, s * S.z);\n"
+           "          vec3 c = floor(Q), f = Q - c, m1 = vec3(9.), mo = vec3(0.);\n"
            "          for (int i = ZERO; i < 27; i++) {                // the nearest furrow's centre\n"
            f"            vec3 o = vec3(float(i % 3), float((i / 3) % 3), float(i / 9)) - 1., q = c + o; {_JITTER}\n"
            "            if (dot(r, r) < dot(m1, m1)) { m1 = r; mo = o; }\n"
@@ -101,14 +131,20 @@ BARK_P3 = (" {                             // the Willow's bark: long ridges in 
            "            vec3 b = r - m1;\n"
            "            if (dot(b, b) > 1e-6) { float eb = dot(0.5 * (m1 + r), normalize(b)); if (eb < e) { e = eb; u = normalize(b); } }\n"
            "          }\n"
-           f"          float w = clamp((e - {RIDGE_E!r}) / {RIDGE_W!r}, 0., 1.);   // down the ridge's flank\n"
+           f"          e += (1. - wl) * {MERGE!r};                          // crossfading: the nearer space's border shows\n"
+           "          if (e < E) { E = e; U = u; T = Q; sl = l; }\n"
+           "        }\n"
+           "        if (aa > 0.) {\n"
+           f"          float w = clamp((E - (1. - top) * {MERGE!r} - {RIDGE_E!r}) / {RIDGE_W!r}, 0., 1.);   // down the ridge's flank\n"
            f"          h = mix({FAR_H!r}, 1. - w * w * (3. - 2. * w), aa);\n"
-           "          // the border's normal in the wood's own directions: round it, and along it (with the swelling's slopes)\n"
-           "          float ur = u.x * dot(a, e1) + u.z * dot(a, e2), ua = W.x * (u.z * dot(a, e1) - u.x * dot(a, e2)) - W.y * ur;\n"
-           f"          vec3 g = (ua * cross(d, a) + ({STRETCH!r} * u.y + R * W.z * ur) * d) * {CELL_PER_M * 6 / RIDGE_W * 0.006!r} * w * (1. - w) * aa;\n"
+           "          // the border's normal in the wood's own directions: round it, and along it (with the swelling's slopes);\n"
+           "          // on the walls, out from the axis and along it\n"
+           "          float ur = U.x * dot(a, e1) + U.z * dot(a, e2), ua = W.x * (U.z * dot(a, e1) - U.x * dot(a, e2)) - W.y * ur;\n"
+           f"          vec3 g = sl == 2 ? U.x * a + {STRETCH!r} * U.y * d : ua * cross(d, a) + ({STRETCH!r} * U.y + R * W.z * ur) * d;\n"
+           f"          g *= {CELL_PER_M * 6 / RIDGE_W * 0.006!r} * w * (1. - w) * aa;\n"
            "          n = normalize(n - (g - n * dot(n, g)));\n"
            f"          float fine = aa * smoothstep({GRAIN_FADE[0]!r}, {GRAIN_FADE[1]!r}, pix);   // close up, the ridges' grain\n"
-           f"          grain = 1. + {GRAIN!r} * fine * (vnoise(vec2(S.x * 3. + S.z * 1.7, S.y * 2.5)) + vnoise(vec2(S.z * 3. - S.x * 1.7, S.y * 2.5 + 17.)) - 1.);\n"
+           f"          grain = 1. + {GRAIN!r} * fine * (vnoise(vec2(T.x * 3. + T.z * 1.7, T.y * 2.5)) + vnoise(vec2(T.z * 3. - T.x * 1.7, T.y * 2.5 + 17.)) - 1.);\n"
            "        }\n"
            "        vec3 plate = vec3(0.238, 0.204, 0.161) * grain;\n"
            "        alb = mix(vec3(0.028, 0.023, 0.018), plate, h) * (0.85 + 0.3 * vnoise(p.xz * 0.6 + p.y * 0.45));\n"

@@ -114,6 +114,18 @@ vec3 rockAlb(vec3 p, vec3 n) {
   float r = k > 0.97 ? rockTex(p.zy) : (k < 0.03 ? rockTex(p.xy + 31.) : mix(rockTex(p.xy + 31.), rockTex(p.zy), k));
   return mix(vec3(0.088, 0.082, 0.073) * r, vec3(0.05, 0.065, 0.03), smoothstep(0.55, 0.8, vnoise(p.xz * 0.3 + p.y * 0.2)) * 0.6);
 }
+// the rock's bumps on faces steeper than the ground's (shared with set piece 34, so the two shade alike), fading out
+// where a pixel spans them: value noise on two lattices turned 41 degrees and scaled 1.37 times against each other
+// (0.64: 0.9 over root 2, the spread of one), so that neither lattice's rows show. On one, the cliff's rock repeated
+// every 2 m along its face
+vec3 rockBump(vec3 p, vec3 n, float pix) {
+  float rk = smoothstep(0.72, 0.42, n.y) * (1. - smoothstep(0.3, 1.5, pix));
+  if (rk <= 0.) return n;
+  vec3 q = vec3(1.04 * p.x - 0.89 * p.z + 3.1, 1.37 * p.y + 5.7, 0.89 * p.x + 1.04 * p.z + 7.9);
+  vec3 d = vec3(vnoise(p.xz * 0.45 + p.y * 0.3), vnoise(p.zy * 0.45 + 5.), vnoise(p.xy * 0.45 + 9.))
+         + vec3(vnoise(q.xz * 0.45 + q.y * 0.3), vnoise(q.zy * 0.45 + 5.), vnoise(q.xy * 0.45 + 9.)) - 1.;
+  return normalize(n + d * 0.64 * rk);
+}
 
 vec3 groundAlb(vec3 p, TS s, float t, float pix, vec3 n, float shingle) {
   GS g = s.g;
