@@ -12,6 +12,7 @@ sys.path.insert(0, str(ROOT / "src"))
 
 import build_meshes  # noqa: E402
 import mesh_willow  # noqa: E402
+from mesh_geometry import panel  # noqa: E402
 from materials import code  # noqa: E402
 from materials.willow import BARK_AXES, TRUNK_AXIS  # noqa: E402
 from pagetest import smoke  # noqa: E402
@@ -50,19 +51,20 @@ class WillowRenderTests(RenderTestCase):
         return np.array([np.nan if v is None else v for v in found["lum"]], float).reshape(-1, found["w"])
 
     async def trunk_and_root(self, attr_of, hour=16.0):
-        """{"upright": (grid, axis up its furrows), "lying": ...}: diagnostic wood tagged attr_of(code), seen close up from
-        its sunlit side: a trunk on the Willow's own axis (its bark wraps round that axis), with no canopy to shade it, and
-        a root (a lying tube 20 degrees off its code's axis)."""
+        """{"upright": (grid, axis up its furrows), "lying": ..., "wall": ...}: diagnostic wood tagged attr_of(code), seen
+        close up from its sunlit side: a trunk on the Willow's own axis (its bark wraps round that axis), with no canopy to
+        shade it, a root (a lying tube 20 degrees off its code's axis) and a wall like the hollow's."""
         lit = await self.page.evaluate("(h) => __hog.light(h).dir", hour)
         sun = np.array([lit[0], 0.0, lit[2]]) / math.hypot(lit[0], lit[2])
         x0, y0, z0, lx, lz = TRUNK_AXIS
         base = np.array([x0, y0 + await self.page.evaluate("DATA.meta.lake"), z0])
         up = np.array([lx, 1.0, lz])
-        trunk = [mesh_willow.tube(np.array([base - up, base + 4.0 * up]), np.array([1.0, 1.0]), attr_of(120), 64, cap=False)]
-        eye = base + 1.7 * up + 2.5 * sun
         out = {}
-        await self.look(eye, math.atan2(-sun[0], -sun[2]), 0.12, hour, trunk)
-        out["upright"] = (await self.wood([attr_of(120)[1]], sun), 0)
+        # the trunk, then tubes as wide as its flare where its cells crossfade between two rungs, and at the next rung
+        for name, r in (("upright", 1.0), ("crossfaded", 1.1), ("flared", 1.5)):
+            trunk = [mesh_willow.tube(np.array([base - up, base + 4.0 * up]), np.array([r, r]), attr_of(120), 64, cap=False)]
+            await self.look(base + 1.7 * up + (r + 1.5) * sun, math.atan2(-sun[0], -sun[2]), 0.12, hour, trunk)
+            out[name] = (await self.wood([attr_of(120)[1]], sun), 0)
         lying = next(aux for aux, axis in BARK_AXES.items() if abs(axis[2]) > 0.99)   # furrows along z: across the view
         x, z = LAWN[0] + 26.0, LAWN[1]
         ground = await self.ground(x, z)
@@ -71,6 +73,19 @@ class WillowRenderTests(RenderTestCase):
         root = mesh_willow.tube(np.array([mid - 2.5 * a, mid + 2.5 * a]), np.array([0.36, 0.36]), attr_of(lying), 32)
         await self.look((x, ground + 1.2, z), EAST, 0.0, hour, [root])
         out["lying"] = (await self.wood([attr_of(lying)[1]], (-1.0, 0.0, 0.0)), 1)
+        # a wall of the hollow: a plate of the trunk's bark on a line out from the trunk's axis, facing round the axis as
+        # the walls do (its bearing round the axis barely changes across it), out on the lawn and facing the sun
+        gap = mesh_willow.gap_bearing(await self.page.evaluate("({extras: DATA.meta.extras})"))
+        out_dir = max((np.array([-sun[2], 0.0, sun[0]]) * s for s in (1, -1)),
+                      key=lambda v: v[0] * math.cos(gap) + v[2] * math.sin(gap))
+        c = base + 14.0 * out_dir
+        c[1] = await self.ground(c[0], c[2]) + 1.3
+        across, rise = out_dir * 0.8, np.array([0.0, 0.8, 0.0])
+        if np.cross(across, rise) @ sun < 0:
+            across = -across
+        plate = panel([c - across - rise, c + across - rise, c + across + rise, c - across + rise], attr_of(120))
+        await self.look(c + 1.8 * sun, math.atan2(-sun[0], -sun[2]), 0.0, hour, [plate])
+        out["wall"] = (await self.wood([attr_of(120)[1]], sun), 0)
         return out
 
     async def test_bark_close_up_shows_lit_plates_and_dark_furrows_along_the_wood(self):
@@ -93,7 +108,19 @@ class WillowRenderTests(RenderTestCase):
                          for sl, size in zip(ndi.find_objects(labels), np.bincount(labels.ravel())[1:]) if size >= 40]
                 self.assertGreater(float(np.median(spans)), 4.0, len(spans))          # long spindles, not polygons
                 ridge = lum[lum > np.percentile(lum, 75)]
-                self.assertGreater(float(ridge.std() / ridge.mean()), GRAIN_COV, "flat ridges, with no grain close up")
+                if name != "crossfaded":                # two spaces' ridges mix there, each with its own grain
+                    self.assertGreater(float(ridge.std() / ridge.mean()), GRAIN_COV, "flat ridges, with no grain close up")
+
+        def crossings(grid):
+            """Furrow edges per pixel across the middle third of the frame (the wood about face-on)."""
+            w = grid.shape[1]
+            g = grid[:, w // 3:2 * w // 3]
+            dark = g < 0.5 * np.nanpercentile(g, 75)
+            both = np.isfinite(g[:, 1:]) & np.isfinite(g[:, :-1])
+            return np.sum((dark[:, 1:] != dark[:, :-1]) & both) / max(np.sum(both), 1)
+        # the flared base's finer cells keep its furrows as wide as the trunk's above it, seen from as far off
+        ratio = crossings(bark["flared"][0]) / crossings(bark["upright"][0])
+        self.assertTrue(0.8 < ratio < 1.25, f"the flare's furrows {1 / ratio:.2f} times the trunk's width")
 
     @smoke
     async def test_willow_codes_shade_as_bark_knot_mouth_and_leaves(self):

@@ -71,9 +71,9 @@ MATERIALS = [
               refl="vec3(0.17, 0.168, 0.15)",
               refl_tail="                    // the boars' stone"),
     set_piece(34, "harbour-rock",
-              note="the harbour mouth's rock: the terrain's cliff rock (frag4.glsl rockAlb), so it matches the cliff "
-                   "around it",
-              p3=" { alb = rockAlb(p, n); spec = 0.05; shin = 20.; }",
+              note="the harbour mouth's rock: the terrain's cliff rock (frag4.glsl rockAlb and rockBump, matte), so it "
+                   "matches the cliff around it",
+              p3=" { alb = rockAlb(p, n); n = rockBump(p, n, pix); }",
               refl="vec3(0.1, 0.094, 0.084)",
               refl_tail="                   // the harbour mouth's rock"),
     set_piece(35, "ivy",

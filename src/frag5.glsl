@@ -48,8 +48,7 @@ vec3 shade(vec3 ro, vec3 rd, Res r) {
       burn = sm;
     }
     ao = mix(1., 0.55, s.dens);
-    float rk = smoothstep(0.72, 0.42, gn.y) * (1. - smoothstep(0.3, 1.5, pix));
-    if (rk > 0.) n = normalize(n + (vec3(vnoise(p.xz * 0.45 + p.y * 0.3), vnoise(p.zy * 0.45 + 5.), vnoise(p.xy * 0.45 + 9.)) - 0.5) * 0.9 * rk);
+    n = rockBump(p, n, pix);
   } else if (r.mat == 3) {
     n = vegNormal(p, s, gn);
     float hue = s.tp.z, crown = 1.;

@@ -1262,12 +1262,20 @@ CROWN_M, SPRING_M, CHANNEL_HALF_M, SHELL_HALF_M, FLOOR_M = 2.0, 0.8, 2.25, 6.5, 
 # the shell reaches past the cut's 4 m half-width by a texel's reach in the terrain's samples (2 m on a grid at 15°)
 IVY_TO_M, IVY_STRAND_M, IVY_PITCH_M = 0.8, 0.3, 0.2
 IVY_SPREAD_M, IVY_ABOVE_M = 1.2, 3.0   # the ivy's reach beyond the opening either side, and above its crown
-TUCK_M, TUCK_FROM_M, TUCK_GAP_M = 0.6, 1.0, 0.3  # the roof lies this far under the terrain (along its normal) until
-                                                  # the cut has lowered the terrain this far, then rises proud of it
-                                                  # over this much more: the two cross steeply, where the cut is deep,
-                                                  # not z-fighting across its shallow fade
-TUCK_STRETCH = 3.0                                # at most this many metres down per metre along the normal: deeper,
-                                                  # neighbouring points on sheer faces fold the roof over itself
+TUCK_M, PROUD_M = 0.6, 0.3                        # the roof this far under the terrain along its normal, beyond the cut,
+                                                  # and this far proud of it where the cut has only just set it back
+TUCK_DIP_M, TUCK_GAP_M = (0.5, 3.0), 0.3          # it comes out of the cliff, over TUCK_GAP_M more, where the cut has
+                                                  # set the cliff back by a depth wandering between these up the face
+                                                  # (the least on the cliff top, so the roof covers the cut's dip there),
+                                                  # so the line it comes out along wanders across the cut's 2 m ramp texel
+                                                  # as a rock edge does, not straight up the cut's side; the two cross
+                                                  # steeply there, not z-fighting
+FACE_TO_M = 6.0                                   # the roof's rows 0.2 m apart this far in, up the sheer face (0.5 m on
+                                                  # the cliff top beyond), so that line follows the face's height
+DIP_SLOPE, TUCK_SLOPE = 4.0, 10.0                 # the steepest slope the dip is measured across (steeper, the two
+                                                  # faces needn't be parallel) and the tuck goes down (an 84° face)
+TUCK_ROW_M = 0.2                                  # it comes out over a run of rows, never one alone: whether it's out is
+                                                  # the median of its row's and the rows either side's
 
 
 def vault(w):
@@ -1312,19 +1320,31 @@ def harbour_frame(scene):
 
     def top(a, w):
         a, w = np.broadcast_arrays(np.asarray(a, np.float64), np.asarray(w, np.float64))
-        x, z = np.moveaxis(at(a, w), -1, 0)
         e = 0.25
 
-        def lifted(f):                                                   # f and the length a metre along its normal
-            h = lambda dx, dz: f(x + dx, z + dz)                         # takes vertically (the gentler side's slope,
-            y = h(0, 0)                                                  # so a brink's edge counts as level)
-            one = lambda fw, bw: np.minimum(np.abs(fw - y), np.abs(y - bw)) / e
-            return y, np.minimum(np.sqrt(1 + one(h(e, 0), h(-e, 0)) ** 2 + one(h(0, e), h(0, -e)) ** 2), TUCK_STRETCH)
-        t, sw = lifted(lambda x, z: sample(whole, scene.local, x, z))
-        ground, sg = lifted(lambda x, z: np.asarray(scene.ground(x, z), np.float64))
-        k = np.clip(((t - ground) / sw - TUCK_FROM_M) / TUCK_GAP_M, 0.0, 1.0)   # under the terrain until the cut is
-        t = ground - TUCK_M * sg + (t + 0.05 * sw - ground + TUCK_M * sg) * k * k * (3 - 2 * k)   # deep, then proud
-        return np.where(np.abs(w) < CHANNEL_HALF_M + 0.5, np.maximum(t, lake + vault(w) + 0.6), t)   # over it, steeply
+        def surfaces(a):
+            x, z = np.moveaxis(at(a, w), -1, 0)
+
+            def lifted(f):                                               # f and the length a metre along its normal
+                h = lambda dx, dz: f(x + dx, z + dz)                     # takes vertically (the gentler side's slope,
+                y = h(0, 0)                                              # so a brink's edge counts as level)
+                one = lambda fw, bw: np.minimum(np.abs(fw - y), np.abs(y - bw)) / e
+                return y, np.sqrt(1 + one(h(e, 0), h(-e, 0)) ** 2 + one(h(0, e), h(0, -e)) ** 2)
+            t, sw = lifted(lambda x, z: sample(whole, scene.local, x, z))
+            ground, sg = lifted(lambda x, z: np.asarray(scene.ground(x, z), np.float64))
+            sg = np.minimum(sg, TUCK_SLOPE)                              # (a kink's slope sets no roof metres deep)
+            dip = np.maximum(t - ground, 0.0) / np.minimum(np.minimum(sw, sg), DIP_SLOPE)  # how far in the cut has
+            up = t - lake                                                # set the cliff back
+            wander = 0.5 + 0.3 * np.sin(0.25 * up + 0.4 * a + 1.7 * np.sign(w)) + 0.2 * np.sin(0.6 * up + 0.8 * w + 4.1)
+            steep = np.clip(sw - 1.5, 0.0, 1.0)                          # (on the face only: the cliff top is covered)
+            k = np.clip((dip - TUCK_DIP_M[0] - (TUCK_DIP_M[1] - TUCK_DIP_M[0]) * wander * steep) / TUCK_GAP_M, 0, 1)
+            return t, sw, ground, sg, dip, k
+        t, sw, ground, sg, dip, k = surfaces(a)
+        k = np.median([k, surfaces(a - TUCK_ROW_M)[-1], surfaces(a + TUCK_ROW_M)[-1]], axis=0)  # no lone row out or in
+        k = k * k * (3 - 2 * k)                                          # out of the cliff where the cut is deep enough
+        proud = t + (0.05 + (PROUD_M - 0.05) * np.exp(-dip)) * np.minimum(sw, TUCK_SLOPE)  # well proud where the
+        t = ground - TUCK_M * sg + (proud - ground + TUCK_M * sg) * k    # cliff is near; tucked under it beyond
+        return np.where(np.abs(w) < CHANNEL_HALF_M + 0.5, np.maximum(t, lake + vault(w) + 0.6), t)
     return m, u, side, at, g, top
 
 
@@ -1364,8 +1384,8 @@ def harbour(scene):
     m, u, side, at, g, top = harbour_frame(scene)
     a0, back, a1 = PORTAL_M, rec["depth"] - BACK_IN_M, rec["depth"] + ROOF_PAST_M
 
-    A, W = np.meshgrid(np.linspace(a0, a1, int(math.ceil((a1 - a0) / 0.5)) + 1),
-                       np.linspace(-SHELL_HALF_M, SHELL_HALF_M, int(2 * SHELL_HALF_M / 0.5) + 1), indexing="ij")
+    across = np.r_[np.arange(a0, FACE_TO_M, 0.2), np.linspace(FACE_TO_M, a1, int(math.ceil((a1 - FACE_TO_M) / 0.5)) + 1)]
+    A, W = np.meshgrid(across, np.linspace(-SHELL_HALF_M, SHELL_HALF_M, int(2 * SHELL_HALF_M / 0.5) + 1), indexing="ij")
     T = top(A, W)
 
     def sheet(Y, a, w):

@@ -1256,10 +1256,14 @@ class HarbourMouthTests(unittest.TestCase):
         import materials
         mat = next(m for m in materials.materials() if m.name == "harbour-rock")
         self.assertIsNotNone(mat.p3)
-        self.assertRegex(mat.p3, r"\balb = rockAlb\(p, n\);")
+        self.assertRegex(mat.p3, r"\balb = rockAlb\(p, n\); n = rockBump\(p, n, pix\);")
+        self.assertNotIn("spec", mat.p3)                                          # matte, as the terrain's rock
         frag4 = (ROOT / "src" / "frag4.glsl").read_text(encoding="utf-8")
         self.assertIn("vec3 rockAlb(vec3 p, vec3 n) {", frag4)
+        self.assertIn("vec3 rockBump(vec3 p, vec3 n, float pix) {", frag4)
         self.assertRegex(frag4.split("vec3 groundAlb(", 1)[1], r"mix\(a, rockAlb\(p, n\), rock \* 0\.9\)")
+        terrain = (ROOT / "src" / "frag5.glsl").read_text(encoding="utf-8").split("if (r.mat == 1) {", 1)[1]
+        self.assertIn("n = rockBump(p, n, pix);", terrain.split("} else if (r.mat == 3)", 1)[0])
 
     def test_the_roof_is_shaded_smoothly_as_the_cliff(self):
         found = [c for c in world.chunks("harbour-mouth")]
@@ -1319,29 +1323,96 @@ class HarbourMouthTests(unittest.TestCase):
             with self.subTest(h=h):
                 self.assertGreater(rough(roof), 0.25 * (rough(left) + rough(right)), (rough(roof), rough(left), rough(right)))
 
-    def test_the_roof_tucks_under_the_terrain_at_its_edges(self):
-        # where the cut no longer reaches the terrain's samples the roof sinks just under the cliff's own rock, so the two
-        # part along the uneven line where the cut stops showing: no straight seam, no z-fighting comb
-        tris, attr, normal = self.shell()
-        up = np.all(attr == mesh_grounds.HARBOUR_ROCK, axis=1) & (normal[:, 1] > 0.3)
-        pts = tris[up].reshape(-1, 3)
-        a, w, y = self.local(pts)
-        rec = self.mouth()[0]
-        edge = (np.abs(w) > mesh_grounds.SHELL_HALF_M - 0.01) | (a > rec["depth"] + mesh_grounds.ROOF_PAST_M - 0.01)
+    SHOTS = {"close": ([118.2, 6.0, -2.2], [99.8, 4.0, -7.0]), "context": ([151.3, 8.0, -14.3], [99.8, 4.0, -7.0])}
+
+    def depths(self, shot, w=160, h=100, vfov=40.0):
+        """Along the rays of an inspection shot's camera (grounds__harbour-mouth-close / -context), how far each meets
+        the mouth's rock and the terrain's heightfield (inf where it misses)."""
         data = world.data()
-        over = pts[edge, 1] - sample(decode(data["tex"]["locBed"]), Grid(data["meta"]["local"]), pts[edge, 0], pts[edge, 2])
-        self.assertGreater(int(edge.sum()), 20)
-        self.assertTrue(-3.0 < float(over.min()) and float(over.max()) < -0.4, (over.min(), over.max()))
-        bed, grid = decode(data["tex"]["locBed"]), Grid(data["meta"]["local"])
-        t = tris[up]                                                               # over the roof's whole surface:
-        bary = np.array([(i / 4, j / 4) for i in range(5) for j in range(5 - i)])
-        p = (t[:, None, 0] * (1 - bary.sum(1))[None, :, None] + t[:, None, 1] * bary[None, :, 0, None]
-             + t[:, None, 2] * bary[None, :, 1, None]).reshape(-1, 3)
-        under = p[:, 1] < sample(bed, grid, p[:, 0], p[:, 2])
-        dx, dz = (v.ravel() for v in np.meshgrid(np.arange(-1.0, 1.01, 0.1), np.arange(-1.0, 1.01, 0.1)))
-        apart = np.sqrt(dx ** 2 + dz ** 2 + (p[:, 1, None] - sample(bed, grid, p[:, 0, None] + dx, p[:, 2, None] + dz)) ** 2)
-        shallow = under & (apart.min(axis=1) < 0.2)                                # hidden only just, in 3D: on the
-        self.assertLess(float(shallow.mean()), 0.025)                              # sheer faces the march z-fights it
+        lake, bed, grid = float(data["meta"]["lake"]), decode(data["tex"]["locBed"]), Grid(data["meta"]["local"])
+        eye, target = (np.array(v, np.float64) + [0.0, lake, 0.0] for v in self.SHOTS[shot])
+        f = (target - eye) / np.linalg.norm(target - eye)
+        r = np.cross(f, [0.0, 1.0, 0.0])
+        r /= np.linalg.norm(r)
+        th = np.tan(np.radians(vfov) / 2)
+        j, i = np.meshgrid(np.arange(w), np.arange(h))
+        x, y = (2 * (j + 0.5) / w - 1) * th * w / h, (1 - 2 * (i + 0.5) / h) * th
+        d = f + x[..., None] * r + y[..., None] * np.cross(r, f)
+        d = (d / np.linalg.norm(d, axis=-1, keepdims=True)).reshape(-1, 3)
+        tris, attr, _ = self.shell()
+        rock = tris[np.all(attr == mesh_grounds.HARBOUR_ROCK, axis=1)]
+        mesh = np.full(len(d), np.inf)
+        for k in range(0, len(rock), 400):                                         # Möller-Trumbore, ray by triangle
+            t = rock[k:k + 400]
+            e1, e2, s = t[:, 1] - t[:, 0], t[:, 2] - t[:, 0], eye - t[:, 0]
+            p = np.cross(d[:, None, :], e2[None])
+            det = np.einsum("rtk,tk->rt", p, e1)
+            inv = np.where(np.abs(det) > 1e-12, 1.0 / np.where(np.abs(det) > 1e-12, det, 1.0), 0.0)
+            q = np.cross(s, e1)
+            u_, v_ = np.einsum("rtk,tk->rt", p, s) * inv, np.einsum("rk,tk->rt", d, q) * inv
+            at = np.einsum("tk,tk->t", e2, q)[None] * inv
+            mesh = np.minimum(mesh, np.where((u_ >= 0) & (v_ >= 0) & (u_ + v_ <= 1) & (at > 0.1), at, np.inf).min(axis=1))
+        ts = np.arange(1.0, 90.0, 0.05)
+        ground = np.full(len(d), np.inf)
+        for k in range(0, len(d), 2000):
+            p = eye + ts[None, :, None] * d[k:k + 2000, None, :]
+            below = p[..., 1] < sample(bed, grid, p[..., 0], p[..., 2])
+            ground[k:k + 2000] = np.where(below.any(axis=1), ts[below.argmax(axis=1)], np.inf)
+        return mesh, ground
+
+    def test_the_roof_and_the_cliff_nowhere_fight_in_the_harbour_views(self):
+        # the roof stands for the cut cliff, the terrain's rock round it: seen from the lake, where one goes under the
+        # other they cross steeply, not lying within a hand's breadth of each other in a comb of hatching
+        for shot in self.SHOTS:
+            mesh, ground = self.depths(shot)
+            fight = np.abs(mesh - ground) < 0.1
+            seen = (mesh < ground) | fight                                         # the roof's rock as the view shows it
+            with self.subTest(shot=shot):
+                self.assertGreater(int(seen.sum()), 1000)
+                self.assertLess(float(fight.sum() / seen.sum()), 0.025)
+
+    def test_the_roof_comes_out_of_the_cliff_along_a_wandering_line(self):
+        # not straight up the cut's side: across the face, where the roof crosses the terrain wanders as a rock edge does
+        import build_meshes
+        scene = build_meshes.Scene(world.data(), world.scene())
+        _, _, _, _, g, top = mesh_grounds.harbour_frame(scene)
+        lake = float(scene.meta["lake"])
+        a, w = np.arange(-0.5, 6.0, 0.1), np.arange(0.0, mesh_grounds.SHELL_HALF_M, 0.02)
+        for s in (-1.0, 1.0):
+            A, W = np.meshgrid(a, s * w, indexing="ij")
+            T = top(A, W)
+            out = (T - g(A, W) > 0)[:, :-1] & (T - g(A, W) <= 0)[:, 1:]
+            rows = np.flatnonzero(out.any(axis=1))
+            line = np.array([(T[i, out[i].argmax()] - lake, w[out[i].argmax()]) for i in rows])
+            line = line[line[:, 0] > 3.0]                                          # up the face, above the arch's feet
+            with self.subTest(side=s):
+                self.assertGreater(len(line), 20)
+                fit = np.polyval(np.polyfit(line[:, 0], line[:, 1], 1), line[:, 0])
+                self.assertGreater(float(np.std(line[:, 1] - fit)), 0.2)            # off any straight line, in metres
+
+    def roof_grid(self):
+        """The roof's heights on rows 0.2 m apart up the face, across the shell, with the uncut cliff's beside them."""
+        import build_meshes
+        scene = build_meshes.Scene(world.data(), world.scene())
+        rec = scene.meta["extras"]["harbour"]
+        _, _, _, at, _, top = mesh_grounds.harbour_frame(scene)
+        A, W = np.meshgrid(np.arange(mesh_grounds.PORTAL_M, rec["depth"], 0.2),
+                           np.arange(-mesh_grounds.SHELL_HALF_M, mesh_grounds.SHELL_HALF_M + 0.01, 0.5), indexing="ij")
+        x, z = np.moveaxis(at(A, W), -1, 0)
+        return rec, A, W, top(A, W), sample(mesh_grounds.uncut(scene, rec), scene.local, x, z)
+
+    def test_over_the_opening_the_roof_carries_the_cliff_the_cut_took_away(self):
+        # not sunk to the arch's crown where the cut has taken the whole face away down to the channel's floor
+        rec, A, W, T, U = self.roof_grid()
+        over = (np.abs(W) < mesh_grounds.CHANNEL_HALF_M) & (A < rec["depth"] - mesh_grounds.BACK_IN_M)
+        self.assertLess(float((U - T)[over].max()), 0.5)
+
+    def test_no_lone_row_of_the_roof_stands_out_of_the_cliff_as_a_blade(self):
+        # where the roof comes out of the cliff, it does so over a run of rows, not one row at a time
+        _, A, W, T, U = self.roof_grid()
+        mid = T[1:-1]
+        blade = (mid - T[:-2] > 3.0) & (mid - T[2:] > 3.0)
+        self.assertFalse(blade.any(), [(float(a), float(w)) for a, w in zip(A[1:-1][blade], W[1:-1][blade])])
 
     def test_ivy_hangs_in_leafy_strands_not_stacked_rectangles(self):
         tris, attr, _ = self.shell()
