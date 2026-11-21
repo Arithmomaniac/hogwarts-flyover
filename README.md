@@ -4,7 +4,7 @@
 
 [**Fly over Hogwarts**](https://arithmomaniac.github.io/hogwarts-flyover/)
 
-A standalone, offline-capable WebGL2 page showing Hogwarts, its grounds, Hogsmeade and the Forbidden Forest, placed within real Scottish topography. The castle, greenhouses, grounds, Hogsmeade, the Whomping Willow, the train and the Durmstrang ship are detailed meshes; the terrain, water and forest are raymarched. The captioned camera tour lasts about nine and a half minutes; you can also explore freely.
+A standalone, offline-capable WebGL2 page showing Hogwarts, its grounds, Hogsmeade and the Forbidden Forest, placed within real Scottish topography. The castle, greenhouses, grounds, Hogsmeade, the Whomping Willow, the train and the Durmstrang ship are detailed meshes, and so are the Forest's trees near the camera, which farther off are simpler drawn crowns; the terrain and water are raymarched. The captioned camera tour lasts about nine and a half minutes; you can also explore freely.
 
 This is a visualization of **White Hound's interpretation**, not a definitive location or architectural plan. Fictional geography comes only from [*The Map of Hogwarts* and related pages](https://web.archive.org/web/20261008141630/http://members.madasafish.com/~cj_whitehound/Fanfic/map_of_Hogwarts.htm); geographic context comes from elevation, satellite imagery and OpenStreetMap data. It does not use the films' castle or theme-park layout.
 
@@ -26,7 +26,7 @@ The overlay keeps the current landmark, tour progress, playback buttons and time
 | **Up/Down arrows** | Change time of day |
 | **Q**, **L**, **H** | Cycle quality, toggle detail, hide/show HUD |
 
-URL parameters are `t` (tour seconds), `tod` (hour, BST; default `18.5`), `q` (quality `0` to `2`), `scale` (fixed render scale instead of adaptive resolution), `pause=1`, `detail=0` and `hud=0`. For example, [pause near the castle/tree sequence](https://arithmomaniac.github.io/hogwarts-flyover/?t=60&pause=1).
+URL parameters are `t` (tour seconds), `tod` (hour, BST; default `18.5`), `q` (quality `0` to `2`), `scale` (fixed render scale instead of adaptive resolution), `pause=1`, `detail=0`, `hud=0` and `trees=raymarched` (the earlier raymarched trees, for comparison). For example, [pause near the castle/tree sequence](https://arithmomaniac.github.io/hogwarts-flyover/?t=60&pause=1).
 
 Click the scene to use keyboard shortcuts; inputs, buttons and dialogs keep their normal keyboard behavior. To run the overlay's browser checks with Python, Playwright and installed Microsoft Edge: `python -m unittest discover -s src -p test_ui.py`.
 

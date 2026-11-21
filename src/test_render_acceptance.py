@@ -77,7 +77,7 @@ RECORD_PROGRAMS = """(() => {
   const proto = WebGL2RenderingContext.prototype;
   const log = window.__programs = { linked: [], drawn: new Set(), recent: new Set(), current: null };
   const native = Object.fromEntries(["shaderSource", "attachShader", "linkProgram", "useProgram", "drawArrays",
-                                     "drawElements"].map((k) => [k, proto[k]]));
+                                     "drawElements", "drawArraysInstanced", "drawElementsInstanced"].map((k) => [k, proto[k]]));
   const draw = () => { log.drawn.add(log.current); log.recent.add(log.current); };
   proto.shaderSource = function (s, src) { s.__src = src; return native.shaderSource.call(this, s, src); };
   proto.attachShader = function (p, s) {
@@ -88,6 +88,8 @@ RECORD_PROGRAMS = """(() => {
   proto.useProgram = function (p) { log.current = p; return native.useProgram.call(this, p); };
   proto.drawArrays = function (...a) { draw(); return native.drawArrays.apply(this, a); };
   proto.drawElements = function (...a) { draw(); return native.drawElements.apply(this, a); };
+  proto.drawArraysInstanced = function (...a) { draw(); return native.drawArraysInstanced.apply(this, a); };
+  proto.drawElementsInstanced = function (...a) { draw(); return native.drawElementsInstanced.apply(this, a); };
 })();"""
 # every GL error flag raised since the page started (getError's first call), then the programs' states, each named by
 # its fragment shader's first lines; the page's own context, as getContext returns it to any caller
@@ -111,11 +113,13 @@ TOUR_TIME = """(step) => {
   }
   return { shown: m ? +m[1] : null, t: best[1], off: best[0], ms: performance.now() }; }"""
 # the last rendered frame's sun and size, the canvas's, and the quality each program that has drawn since `recent` was
-# emptied and reads one holds
+# emptied and reads one holds. The mesh trees' passes are left out: they read the quality only through frag1.glsl's
+# ZERO, min(uQual, 0), which is 0 whatever the quality, and the page sets it in none of them
 APPLIED = """(hour) => {
   const v = __hog.probe(0, 0), cv = document.getElementById("c"), gl = cv.getContext("webgl2");
-  const quality = [...__programs.recent].map((p) => [p, gl.getUniformLocation(p, "uQual")]).filter(([, u]) => u !== null)
-                                         .map(([p, u]) => gl.getUniform(p, u));
+  const trees = (p) => /^#define (TINST_PASS|TREE_DRAW|TREE_MESH) 1$/m.test((p.__src || [])[1] || "");
+  const quality = [...__programs.recent].filter((p) => !trees(p)).map((p) => [p, gl.getUniformLocation(p, "uQual")])
+                                         .filter(([, u]) => u !== null).map(([p, u]) => gl.getUniform(p, u));
   return { sun: v.sun, want: __hog.light(hour).dir, res: v.res, canvas: [cv.width, cv.height], quality }; }"""
 
 

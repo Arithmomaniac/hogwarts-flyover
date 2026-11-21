@@ -1327,7 +1327,8 @@ class HarbourMouthTests(unittest.TestCase):
 
     def depths(self, shot, w=160, h=100, vfov=40.0):
         """Along the rays of an inspection shot's camera (grounds__harbour-mouth-close / -context), how far each meets
-        the mouth's rock and the terrain's heightfield (inf where it misses)."""
+        the mouth's rock and the terrain's heightfield (inf where it misses), and how nearly parallel the two surfaces
+        are where it meets the rock (|cos| of the angle between their normals)."""
         data = world.data()
         lake, bed, grid = float(data["meta"]["lake"]), decode(data["tex"]["locBed"]), Grid(data["meta"]["local"])
         eye, target = (np.array(v, np.float64) + [0.0, lake, 0.0] for v in self.SHOTS[shot])
@@ -1341,7 +1342,7 @@ class HarbourMouthTests(unittest.TestCase):
         d = (d / np.linalg.norm(d, axis=-1, keepdims=True)).reshape(-1, 3)
         tris, attr, _ = self.shell()
         rock = tris[np.all(attr == mesh_grounds.HARBOUR_ROCK, axis=1)]
-        mesh = np.full(len(d), np.inf)
+        mesh, normal = np.full(len(d), np.inf), np.zeros((len(d), 3))
         for k in range(0, len(rock), 400):                                         # Möller-Trumbore, ray by triangle
             t = rock[k:k + 400]
             e1, e2, s = t[:, 1] - t[:, 0], t[:, 2] - t[:, 0], eye - t[:, 0]
@@ -1351,44 +1352,55 @@ class HarbourMouthTests(unittest.TestCase):
             q = np.cross(s, e1)
             u_, v_ = np.einsum("rtk,tk->rt", p, s) * inv, np.einsum("rk,tk->rt", d, q) * inv
             at = np.einsum("tk,tk->t", e2, q)[None] * inv
-            mesh = np.minimum(mesh, np.where((u_ >= 0) & (v_ >= 0) & (u_ + v_ <= 1) & (at > 0.1), at, np.inf).min(axis=1))
+            hit = np.where((u_ >= 0) & (v_ >= 0) & (u_ + v_ <= 1) & (at > 0.1), at, np.inf)
+            best, nearer = hit.argmin(axis=1), hit.min(axis=1) < mesh
+            normal[nearer] = np.cross(e1, e2)[best[nearer]]
+            mesh = np.minimum(mesh, hit.min(axis=1))
         ts = np.arange(1.0, 90.0, 0.05)
         ground = np.full(len(d), np.inf)
         for k in range(0, len(d), 2000):
             p = eye + ts[None, :, None] * d[k:k + 2000, None, :]
             below = p[..., 1] < sample(bed, grid, p[..., 0], p[..., 2])
             ground[k:k + 2000] = np.where(below.any(axis=1), ts[below.argmax(axis=1)], np.inf)
-        return mesh, ground
+        p = eye + np.where(np.isfinite(mesh), mesh, 0.0)[:, None] * d
+        h = lambda dx, dz: sample(bed, grid, p[:, 0] + dx, p[:, 2] + dz)
+        n = np.stack([(h(-0.25, 0) - h(0.25, 0)) / 0.5, np.ones(len(p)), (h(0, -0.25) - h(0, 0.25)) / 0.5], -1)
+        unit = lambda v: v / np.maximum(np.linalg.norm(v, axis=-1, keepdims=True), 1e-12)
+        return mesh, ground, np.abs(np.einsum("rk,rk->r", unit(n), unit(normal)))
 
     def test_the_roof_and_the_cliff_nowhere_fight_in_the_harbour_views(self):
-        # the roof stands for the cut cliff, the terrain's rock round it: seen from the lake, where one goes under the
-        # other they cross steeply, not lying within a hand's breadth of each other in a comb of hatching
+        # the roof stands for the cut cliff, the terrain's rock round it: seen from the lake, they never lie within a
+        # hand's breadth of each other running alongside (a comb of hatching); where one goes under the other they
+        # cross steeply, a line of pixels as any rock edge has
         for shot in self.SHOTS:
-            mesh, ground = self.depths(shot)
-            fight = np.abs(mesh - ground) < 0.1
-            seen = (mesh < ground) | fight                                         # the roof's rock as the view shows it
+            mesh, ground, parallel = self.depths(shot)
+            close = np.abs(mesh - ground) < 0.1
+            seen = (mesh < ground) | close                                         # the roof's rock as the view shows it
             with self.subTest(shot=shot):
                 self.assertGreater(int(seen.sum()), 1000)
-                self.assertLess(float(fight.sum() / seen.sum()), 0.025)
+                self.assertLess(float((close & (parallel > 0.85)).sum() / seen.sum()), 0.02)
 
-    def test_the_roof_comes_out_of_the_cliff_along_a_wandering_line(self):
-        # not straight up the cut's side: across the face, where the roof crosses the terrain wanders as a rock edge does
-        import build_meshes
-        scene = build_meshes.Scene(world.data(), world.scene())
-        _, _, _, _, g, top = mesh_grounds.harbour_frame(scene)
-        lake = float(scene.meta["lake"])
-        a, w = np.arange(-0.5, 6.0, 0.1), np.arange(0.0, mesh_grounds.SHELL_HALF_M, 0.02)
-        for s in (-1.0, 1.0):
-            A, W = np.meshgrid(a, s * w, indexing="ij")
-            T = top(A, W)
-            out = (T - g(A, W) > 0)[:, :-1] & (T - g(A, W) <= 0)[:, 1:]
-            rows = np.flatnonzero(out.any(axis=1))
-            line = np.array([(T[i, out[i].argmax()] - lake, w[out[i].argmax()]) for i in rows])
-            line = line[line[:, 0] > 3.0]                                          # up the face, above the arch's feet
-            with self.subTest(side=s):
-                self.assertGreater(len(line), 20)
-                fit = np.polyval(np.polyfit(line[:, 0], line[:, 1], 1), line[:, 0])
-                self.assertGreater(float(np.std(line[:, 1] - fit)), 0.2)            # off any straight line, in metres
+    def test_the_roofs_sides_climb_the_face_raggedly_not_straight(self):
+        # up the face, the roof's rock meets the cliff either side along a rock rib's ragged edge, not two straight
+        # lines up the face that set it apart as a pillar: its outermost rock, metre by metre up the face, strays from
+        # any straight line
+        tris, attr, _ = self.shell()
+        rock = tris[np.all(attr == mesh_grounds.HARBOUR_ROCK, axis=1)].reshape(-1, 3)
+        a, w, y = self.local(rock)
+        row = np.round(a, 2)
+        for s, name in ((-1.0, "left"), (1.0, "right")):
+            edge = []
+            for r in np.unique(row):
+                at = row == r
+                k = np.argmax(s * w[at])
+                edge.append((y[at][k], (s * w[at])[k]))                              # the row's outermost rock
+            edge = np.array(edge)
+            edge = edge[(edge[:, 0] > 3.0) & (edge[:, 0] < 30.0)]                    # up the face
+            with self.subTest(side=name):
+                self.assertGreater(len(edge), 6)
+                fit = np.polyval(np.polyfit(edge[:, 0], edge[:, 1], 1), edge[:, 0])
+                self.assertGreater(float(np.std(edge[:, 1] - fit)), 0.2)             # in metres
+                self.assertLess(float(np.median(np.diff(np.sort(edge[:, 0])))), 1.6)  # in small jogs, not storey-high
 
     def roof_grid(self):
         """The roof's heights on rows 0.2 m apart up the face, across the shell, with the uncut cliff's beside them."""
@@ -1408,10 +1420,16 @@ class HarbourMouthTests(unittest.TestCase):
         self.assertLess(float((U - T)[over].max()), 0.5)
 
     def test_no_lone_row_of_the_roof_stands_out_of_the_cliff_as_a_blade(self):
-        # where the roof comes out of the cliff, it does so over a run of rows, not one row at a time
-        _, A, W, T, U = self.roof_grid()
+        # where the roof comes out of the cliff, it does so over a run of rows, not one row at a time (within the
+        # outline of a row and of the rows either side: the rib's ragged sides close it there)
+        rec, A, W, T, U = self.roof_grid()
+        import build_meshes
+        top = mesh_grounds.harbour_frame(build_meshes.Scene(world.data(), world.scene()))[5]
+        reach = np.minimum(top.outline(A, -1.0)[0], top.outline(A, 1.0)[0])
+        within = (np.abs(W) <= reach)
+        within = within[1:-1] & within[:-2] & within[2:]
         mid = T[1:-1]
-        blade = (mid - T[:-2] > 3.0) & (mid - T[2:] > 3.0)
+        blade = (mid - T[:-2] > 3.0) & (mid - T[2:] > 3.0) & within
         self.assertFalse(blade.any(), [(float(a), float(w)) for a, w in zip(A[1:-1][blade], W[1:-1][blade])])
 
     def test_ivy_hangs_in_leafy_strands_not_stacked_rectangles(self):

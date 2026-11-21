@@ -1,8 +1,9 @@
 """The page's WebGL programs, assembled on the CPU as the page assembles them, for the glslang check (test_shaders.py).
 
 The page builds its programs in JavaScript (template_b.html): the raymarcher's fragment source with the #defines and the
-lamp glow put in, ten programs from it chosen by a #define line or written out, and the mesh passes' template literals.
-This module reads that script through assemble.py and takes the same steps. A step it does not recognise raises
+lamp glow put in, ten programs from it chosen by a #define line or written out, the mesh passes' template literals and,
+with mesh trees (MESH_TREES among the #defines: the default, which ?trees=raymarched turns off), the mesh trees' four
+programs. This module reads that script through assemble.py and takes the same steps. A step it does not recognise raises
 ValueError, so a change in the page's shader plumbing stops the check rather than leaving it checking something else.
 test_render_core.py compares the result with the sources the page hands to WebGL.
 """
@@ -127,16 +128,17 @@ class Script(Source):
         raise ValueError(f"shaders.py does not know how the page evaluates ${{{expr}}}")
 
     def source(self, ref):
-        """A shader source the page names: a literal, a derived source or a string written in place."""
+        """A shader source the page names: a literal, one derived from another by String.replace calls
+        (`const x = base.replace(old, new)...;`), or a string written in place."""
         if ref.startswith('"'):
             return self.string(ref)
         if ref == "vsSrc":
             return self.string(self.one(rf"\bconst vsSrc = ({STRING});", "vsSrc"))
-        if ref == "reflVs":
-            text = self.literal("meshVs")
-            chain = self.one(rf"\bconst reflVs = meshVs((?:\.replace\({LITERAL}, {LITERAL}\))+);", "reflVs")
-            for old, new in re.findall(rf"\.replace\(({LITERAL}), ({LITERAL})\)", chain, re.S):
-                text = js_replace(text, self.string(old), self.string(new), "reflVs")
+        if re.search(rf"\bconst {ref} = \w+\.replace\(", self.text):
+            base, chain = self.one(rf"\bconst {ref} = (\w+)((?:\.replace\({LITERAL},\s*{LITERAL}\))+);", ref)
+            text = self.source(base)
+            for old, new in re.findall(rf"\.replace\(({LITERAL}),\s*({LITERAL})\)", chain, re.S):
+                text = js_replace(text, self.string(old), self.string(new), ref)
             return text
         return self.literal(ref)
 
@@ -179,14 +181,36 @@ def programs(defs):
     for name, call in zip(mesh_names, calls):
         fs, vs = call.groups()
         out.append(Program(name, s.source(vs or "vsSrc"), s.source(fs)))
+    out.extend(tree_programs(s))
     shaders = set(re.findall(r"\bconst (\w+) = `#version", s.text))
     if shaders - s.used:
         raise ValueError(f"shader literals no program uses: {sorted(shaders - s.used)}")
     return out
 
 
-def cpu_defs(data, float_linear=True):
-    """The page's #define values (template_b.html's `defs`), from the registered world."""
+def tree_programs(s):
+    """The mesh trees' programs (the default; none with ?trees=raymarched), which the page compiles after the mesh
+    programs when MESH_TREES is among its #defines: raymarcher variants, some with a marker in their source replaced by a
+    shader literal."""
+    names, calls = s.one(r"\[(tinstP[\w, ]*)\] = await Promise\.all\(\[(.*?)\]\.map\(linked\)\);", "the tree programs")
+    calls = _items(calls, rf"program\(fragSrc\.replace\(({STRING}), ({STRING})\)(?:\.replace\(({STRING}), (\w+)\))?"
+                          rf"(?:, (\w+))?\)", "the tree programs")
+    names = [n.strip() for n in names.split(",")]
+    if len(calls) != len(names):
+        raise ValueError(f"{len(calls)} tree programs for {len(names)} names")
+    out = []
+    for name, call in zip(names, calls):
+        old, new, marker, insert, vs = call.groups()
+        fragment = js_replace(s.fragment, s.string(old), s.string(new), name)
+        if marker:
+            fragment = js_replace(fragment, s.string(marker), s.source(insert), name)
+        out.append(Program(name, s.source(vs or "vsSrc"), fragment))
+    return out if "MESH_TREES" in s.defs else []
+
+
+def cpu_defs(data, float_linear=True, trees=True):
+    """The page's #define values (template_b.html's `defs`), from the registered world; `trees`: with mesh trees, as the
+    page opens (False: with ?trees=raymarched)."""
     s = Source()
     meta, extras = data["meta"], data["meta"]["extras"]
     v2 = lambda a: f"vec2({fl(a[0])},{fl(a[1])})"
@@ -206,4 +230,6 @@ def cpu_defs(data, float_linear=True):
         defs[key] = f"vec4({fl(g['c'])},{fl(g['o'])},{fl(g['s'])},{fl(g['n'])})"
     if not float_linear:
         defs["MANUAL_BILERP"] = "1"
+    if trees:
+        defs["MESH_TREES"] = "1"
     return defs

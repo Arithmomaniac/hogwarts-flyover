@@ -1,0 +1,48 @@
+"""Mutations of the tree species kit that its asset tests must catch."""
+from tools.mutate.run import Mutation
+
+KIT = ("test_assets_trees.TreeKitTests",)
+COLOURS = ("test_assets_trees.TreeColourTests",)
+MUTATIONS = [
+    Mutation("unseeded", "mesh_trees.py", "    rng = np.random.default_rng(seed)\n", "    rng = np.random.default_rng()\n",
+             KIT, rebuild=False),
+    Mutation("not fitted to the placements' crowns", "mesh_trees.py", "    s = ratio * height / crown\n",
+             "    s = 1.0\n", KIT, rebuild=False),
+    Mutation("larger middle cards reach past the crown", "mesh_trees.py", "            if bound is not None:\n",
+             "            if False:\n", KIT, rebuild=False),
+    Mutation("leaf normals turned off their faces by the fit", "mesh_trees.py", "    return held(m._replace(pos=m.pos * scale,",
+             "    return (m._replace(pos=m.pos * scale,", KIT, rebuild=False),
+    Mutation("coarser levels left unmatched to the full level's cover", "mesh_trees.py",
+             "    return max(near, key=leaf_reach) if near else shaped[int(np.argmin(off))]",
+             "    return shaped[0]", KIT, rebuild=False),
+    Mutation("larger middle cards hang below the crown", "mesh_trees.py", "            if floor is not None:\n",
+             "            if False:\n", KIT, rebuild=False),
+    Mutation("over the vertex budget", "mesh_trees.py", "BUDGETS = ((1500, 1100),", "BUDGETS = ((1500, 1300),", KIT,
+             rebuild=False),
+    Mutation("cards wound against their normals", "mesh_trees.py", "tri = [0, 1, 2, 0, 2, 3] if",
+             "tri = [0, 2, 1, 0, 3, 2] if", KIT, rebuild=False),
+    Mutation("leaves lit card by card, not as a crown", "mesh_trees.py",
+             "leaning(unit_rows(0.7 * self.outward(pos) + 0.3 * local),", "leaning(unit_rows(local),", KIT, rebuild=False),
+    Mutation("the trunk stops at the origin", "mesh_trees.py", "SINK = 0.025", "SINK = 0.0", KIT, rebuild=False),
+    Mutation("a mature pine's crown hangs low", "mesh_trees.py", 'Species("scots-pine", "mature", True, 0.55, 18.0, '
+             "(0.23, 0.23), (11, 12), (0.5, 0.62),", 'Species("scots-pine", "mature", True, 0.55, 18.0, (0.23, 0.23), '
+             "(11, 12), (0.2, 0.3),", KIT, rebuild=False),
+    Mutation("cards so large the crown closes", "mesh_trees.py", "half = 0.75 * cr * size", "half = 3.0 * cr * size",
+             KIT, rebuild=False),
+    Mutation("no bark turns up the stem", "mesh_trees.py", "            if sp.upper[1] > sp.upper[0] else",
+             "            if False else", KIT, rebuild=False),
+    Mutation("the coarsest lumps shrink", "mesh_trees.py", "(hi - lo) / 2 * np.array([sx, 1.0, sx])",
+             "(hi - lo) / 2 * np.array([0.5 * sx, 1.0, 0.5 * sx])", KIT, rebuild=False),
+    Mutation("the coarsest lumps float over a forked trunk", "mesh_trees.py",
+             "    top[1] = max(top[1], min(tops))", "    top[1] = top[1]", KIT, rebuild=False),
+    Mutation("leaves all marked half deep", "mesh_trees.py", "return np.round(255 * np.clip(1 - d, 0, 1))",
+             "return np.full(len(pos), 128.0)", KIT, rebuild=False),
+    Mutation("cards' UVs off their square", "mesh_trees.py", "uv.append((corner + 1) / 2)", "uv.append((corner + 1) / 3)",
+             KIT, rebuild=False),
+    Mutation("a mature pine's share grows", "mesh_trees.py", 'Species("scots-pine", "mature", True, 0.55,',
+             'Species("scots-pine", "mature", True, 0.65,', KIT, rebuild=False),
+    Mutation("a birch stays grey up its stem", "materials/trees.py", '"bark_upper": _linear(206, 202, 190)',
+             '"bark_upper": _linear(120, 118, 110)', COLOURS, rebuild=False),
+    Mutation("pale oak leaves", "materials/trees.py", '"foliage": _linear(58, 80, 36)', '"foliage": _linear(150, 190, 120)',
+             COLOURS, rebuild=False),
+]

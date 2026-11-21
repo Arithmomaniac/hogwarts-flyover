@@ -544,7 +544,9 @@ def bark_space(p, n, aux):
     wobble = 1 + sum(a * np.sin(n * th + k * hy + ph) for a, n, k, ph in bark.WOBBLE)
     r = np.where(trunk, bark.ROUND[BARK[1]] * wobble, bark.ROUND["wood"])
     along = dot(p - [x0, y0, z0], d)
-    return np.stack([r * dot(o, e1), along * bark.STRETCH, r * dot(o, e2)], axis=1) * bark.CELL_PER_M
+    shift = np.where(trunk, 0.0, bark.LIMB_SHIFT)
+    return (np.stack([r * dot(o, e1), along * bark.STRETCH, r * dot(o, e2)], axis=1) * bark.CELL_PER_M
+            + shift[:, None] * np.stack([dot(p - [x0, y0, z0], e1), np.zeros(len(p)), dot(p - [x0, y0, z0], e2)], axis=1))
 
 
 def smoothstep(a, b, x):
@@ -567,6 +569,8 @@ def bark_lattices(p, n, aux):
     twist = np.abs(dot(n, np.cross([0.0, 1.0, 0.0], oh))) / np.maximum(np.abs(dot(n, oh)), 1e-3)
     trunk = np.asarray(aux) == BARK[1]
     wall = np.where(trunk, smoothstep(*bark.WALL_TWIST, twist), 0.0)
+    sharp = 1 + bark.WALL_SHARP * smoothstep(*bark.WALL_SLOPE, np.abs(n[:, 1]))
+    wall = np.clip((wall - 0.5) * sharp + 0.5, 0, 1)
     L = np.clip(np.log(np.maximum(rho / bark.GIRTH_M, 1.0)) / math.log(bark.RUNG), 0, bark.RUNGS)
     i = np.where(trunk, np.minimum(np.floor(L), bark.RUNGS - 1), 0.0)
     f = np.where(trunk, smoothstep(*bark.RUNG_BAND, L - i), 0.0)
@@ -630,12 +634,9 @@ def placed_wood():
     return _WOOD
 
 
-def cells_on(tris, nrms, aux):
-    """Each triangle's area, and the bark's cells per metre over it across (the most) and along (the least) its
-    furrows, from the cell space at its corners (the one weighted most over them, where spaces crossfade)."""
-    spaces = [bark_lattices(tris[:, k], nrms[:, k], aux) for k in range(3)]
-    main = np.argmax(np.stack([sum(spaces[k][j][1] for k in range(3)) for j in range(len(spaces[0]))], axis=1), axis=1)
-    S = np.stack([np.choose(main[:, None], [space[0] for space in spaces[k]]) for k in range(3)], axis=1)
+def surface_map(tris, S):
+    """Each triangle's area, its two directions in the world (t1, t2), and the map from steps along them to the change of
+    cell coordinates S (at its corners): (t, 2, 3)."""
     u, v = tris[:, 1] - tris[:, 0], tris[:, 2] - tris[:, 0]
     fn = np.cross(u, v)
     area = np.linalg.norm(fn, axis=1) / 2
@@ -643,9 +644,29 @@ def cells_on(tris, nrms, aux):
     t2 = np.cross(fn / (2 * area[:, None]), t1)
     edges = np.stack([np.stack([np.einsum("ij,ij->i", e, t) for t in (t1, t2)], -1)
                       for e in (u, v)], axis=1)
-    J = np.linalg.solve(edges, np.stack([S[:, 1] - S[:, 0], S[:, 2] - S[:, 0]], axis=1))
+    return area, t1, t2, np.linalg.solve(edges, np.stack([S[:, 1] - S[:, 0], S[:, 2] - S[:, 0]], axis=1))
+
+
+def cells_on(tris, nrms, aux):
+    """Each triangle's area, and the bark's cells per metre over it across (the most) and along (the least) its
+    furrows, from the cell space at its corners (the one weighted most over them, where spaces crossfade)."""
+    spaces = [bark_lattices(tris[:, k], nrms[:, k], aux) for k in range(3)]
+    main = np.argmax(np.stack([sum(spaces[k][j][1] for k in range(3)) for j in range(len(spaces[0]))], axis=1), axis=1)
+    S = np.stack([np.choose(main[:, None], [space[0] for space in spaces[k]]) for k in range(3)], axis=1)
+    area, _, _, J = surface_map(tris, S)
     sv = np.linalg.svd(J, compute_uv=False)
     return area, sv[:, 0], sv[:, 1]
+
+
+def furrows_on(tris, nrms, aux):
+    """For each of bark_lattices' cell spaces, each triangle's furrow direction in the world: the way its cells change least."""
+    spaces = [bark_lattices(tris[:, k], nrms[:, k], aux) for k in range(3)]
+    out = []
+    for j in range(len(spaces[0])):
+        _, t1, t2, J = surface_map(tris, np.stack([spaces[k][j][0] for k in range(3)], axis=1))
+        least = np.linalg.svd(J)[0][:, :, 1]
+        out.append(least[:, :1] * t1 + least[:, 1:] * t2)
+    return out
 
 
 def weighted_median(x, w):
@@ -716,6 +737,7 @@ class WillowBarkSpaceTests(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
         tris, nrms, cls.aux, cls.above, cls.out = placed_wood()
+        cls.tris, cls.nrms = tris, nrms
         cls.area, cls.across, cls.along = cells_on(tris, nrms, cls.aux)
         shown = (cls.across * cls.PIX_M < bark.FADE[0]) & (cls.across > bark.COARSE[0] * bark.CELL_PER_M)
         cls.shown = shown & (cls.above > 0.02)                  # above the ground
@@ -788,6 +810,43 @@ class WillowBarkSpaceTests(unittest.TestCase):
         self.assertGreater(self.area[flare].sum(), 2.0)
         ratio = self.width(flare) / self.width(self.trunk())
         self.assertTrue(0.83 < ratio < 1.2, ratio)
+
+    def test_limbs_side_by_side_show_different_cells(self):
+        # a limb's cells lie round its normal and along its code's direction, so two limbs of one code side by side show
+        # the same cells (the same pattern repeated) unless each is shifted by its own place: the share of the limbs' and
+        # roots' bark with a twin, within a quarter of a cell, on wood of its code more than half a metre away
+        from scipy.spatial import cKDTree
+        mid = self.tris.mean(axis=1)
+        nrm = self.nrms.mean(axis=1)
+        S = bark_space(mid, nrm / np.linalg.norm(nrm, axis=1, keepdims=True), self.aux)
+        wood = self.shown & (self.aux != BARK[1])
+        twin = np.zeros(len(mid), bool)
+        for aux in np.unique(self.aux[wood]):
+            rows = np.flatnonzero(wood & (self.aux == aux))
+            for i, j in cKDTree(S[rows]).query_pairs(0.25):
+                if np.linalg.norm(mid[rows[i]] - mid[rows[j]]) > 0.5:
+                    twin[rows[[i, j]]] = True
+        self.assertLess(self.area[twin].sum() / self.area[wood].sum(), 0.05)
+
+    def test_the_hollows_walls_and_the_trunk_crossfade_without_a_net(self):
+        # where the wood slopes, the walls' furrows follow the slope round the arch and the trunk's run out from its axis:
+        # where both show, their borders cross in a net of short cells. The share of the hollow's bark where the two
+        # largest cell spaces both weigh over 0.2 and their furrows cross by more than 20 degrees
+        gap = np.flatnonzero(self.shown & (self.aux == BARK[1]) & self.in_gap)
+        tris, nrms, aux = self.tris[gap], self.nrms[gap], self.aux[gap]
+        dirs = np.stack(furrows_on(tris, nrms, aux), axis=1)                       # (triangle, space, 3)
+        rng = np.random.default_rng(5)
+        k = 16
+        bc = rng.dirichlet(np.ones(3), (len(gap), k))
+        p = np.einsum("tsk,tkj->tsj", bc, tris).reshape(-1, 3)
+        n = np.einsum("tsk,tkj->tsj", bc, nrms).reshape(-1, 3)
+        w = np.stack([w for _, w in bark_lattices(p, n / np.linalg.norm(n, axis=1, keepdims=True), np.repeat(aux, k))], 1)
+        top = np.argsort(-w, axis=1)[:, :2]
+        row = np.repeat(np.arange(len(gap)), k)
+        cos = np.abs(np.einsum("ij,ij->i", dirs[row, top[:, 0]], dirs[row, top[:, 1]]))
+        net = (np.take_along_axis(w, top[:, 1:], 1)[:, 0] > 0.2) & (cos < math.cos(math.radians(20)))
+        share = np.sum(net * np.repeat(self.area[gap], k)) / (k * self.area[gap].sum())
+        self.assertLess(share, 0.012)
 
 
 class WillowMeshOracleTests(unittest.TestCase):

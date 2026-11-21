@@ -4,8 +4,11 @@ Each family in the manifest builds its own assets. Module mesh_<family>.py, wher
     build_footprint(scene, asset, component, polygons) -> {asset: [Mesh]} or None    one claimed building footprint
     build_castle_pieces(scene, asset, keep) -> {asset: [Mesh]} or None               an asset's castle-grid pieces
     build_extras(scene) -> {asset: [Mesh]}                                            assets claiming no mapped structure
+    kit() -> [Variant], kit_colours() -> {species: colours}                          a tree kit (mesh_trees.py)
 where `scene` is this build's Scene. A hook that returns None, and every family without a module, gets the generic
-footprint massing, the shapes the raymarched objects had. A hook may only return its own family's assets.
+footprint massing, the shapes the raymarched objects had. A hook may only return its own family's assets. A kit places
+nothing: it rides in the family's part to the payload's `kit` (encode_kit), and the page fits its variants to the trees
+its own placement rule stands.
 
 Usage: python -X utf8 src/build_meshes.py [output]                        the whole payload
        python -X utf8 src/build_meshes.py --family NAME --part FILE        one family's encoded part (stage S1)
@@ -41,6 +44,7 @@ DATA_JS = ROOT / "build" / "data.js"
 OUT = ROOT / "build" / "meshes.js"
 FORMAT, VERSION = "hogwarts-flyover/meshes", 4
 STREAMS = ("pos", "nrm", "attr", "idx")
+KIT_STREAMS = ("pos", "nrm", "attr", "uv", "idx")   # the tree kit's (encode_kit)
 RAW = STREAMS + ("thin",)           # decoded, each vertex also has its thin radius (mesh_thin), in its position's padding
 POS_STRIDE = 8                      # the vertex codec takes whole 4-byte words: a position's 6 bytes and its thin radius
 MAX_VERTS = 65535                   # chunks use 16-bit indices
@@ -317,11 +321,11 @@ def packed(streams):
             "idx": meshopt.encode_indices(np.frombuffer(streams["idx"], "<u2"))}
 
 
-def merge(encoded, source=None, shadow=None, towers=None, footprint=None):
+def merge(encoded, source=None, shadow=None, towers=None, footprint=None, kit=None):
     """The payload text from encoded assets: chunks, their level-of-detail groups and streams in sorted asset order,
     each stream packed, then zlib-compressed and base64-encoded; `footprint` is the footprint layer's entry
-    (mesh_footprint.encode). `levels` names the view the groups' switch distances are measured for
-    (mesh_levels.REF_ROWS output rows, FOV_DEG)."""
+    (mesh_footprint.encode) and `kit` the tree kit's (encode_kit). `levels` names the view the groups' switch distances
+    are measured for (mesh_levels.REF_ROWS output rows, FOV_DEG)."""
     chunks, groups, streams = [], [], {k: [] for k in RAW}
     for asset in sorted(encoded):
         chunks += [{**c, "group": c["group"] + len(groups)} for c in encoded[asset]["chunks"]]
@@ -330,7 +334,7 @@ def merge(encoded, source=None, shadow=None, towers=None, footprint=None):
             streams[k].append(encoded[asset]["streams"][k])
     payload = {"format": FORMAT, "version": VERSION, **({"source": source} if source else {}),
                **({"shadow": shadow} if shadow else {}), **({"towers": towers} if towers and any(towers) else {}),
-               **({"footprint": footprint} if footprint else {}),
+               **({"footprint": footprint} if footprint else {}), **({"kit": kit} if kit else {}),
                "levels": {"rows": mesh_levels.REF_ROWS, "fov": mesh_levels.FOV_DEG}, "groups": groups,
                "chunks": chunks,
                "streams": {k: base64.b64encode(zlib.compress(v, 9)).decode("ascii")
@@ -382,7 +386,74 @@ def decode_payload(text):
                     "attr": attr[v0:v1], "idx": local, "thin": thin[v0:v1]})
         v0, t0 = v1, t1
     payload["chunks"] = out
+    if "kit" in payload:
+        payload["kit"] = decode_kit(payload["kit"])
     return payload
+
+
+def encode_kit(variants, colours):
+    """A family's tree kit (mesh_trees.kit() and kit_colours()) as the payload's `kit`, which places nothing: the page
+    fits a variant to each tree its own placement rule stands. Per variant its name, species, class and share within
+    the class, its fit (crown radius, height, crown base, trunk radius) and, level by level, its vertex and triangle
+    counts and box; then the levels' streams in that order: positions as u16 in their level's box, octahedral int8
+    normals, (part, aux) bytes, UVs as u16 over [0, 1] and u16 indices, each zlib-compressed and base64-encoded."""
+    out, streams = [], {k: [] for k in KIT_STREAMS}
+    for v in variants:
+        levels = []
+        for m in v.levels:
+            uv = np.asarray(m.uv, np.float64)
+            if len(m.pos) > MAX_VERTS or uv.min(initial=0.0) < 0.0 or uv.max(initial=0.0) > 1.0:
+                raise ValueError(f"{v.name}: a level of {len(m.pos)} vertices or UVs outside [0, 1]")
+            lo = np.round(np.floor(m.pos.min(axis=0) * 1000) / 1000, 3)
+            hi = np.maximum(np.round(np.ceil(m.pos.max(axis=0) * 1000) / 1000, 3), lo + 0.001)
+            streams["pos"].append(np.round((m.pos - lo) / (hi - lo) * 65535).astype("<u2").tobytes())
+            streams["nrm"].append(oct_encode(np.asarray(m.nrm, np.float64)).tobytes())
+            streams["attr"].append(np.asarray(m.attr).astype(np.uint8).tobytes())
+            streams["uv"].append(np.round(uv * 65535).astype("<u2").tobytes())
+            streams["idx"].append(np.asarray(m.idx).astype("<u2").tobytes())
+            levels.append({"verts": len(m.pos), "tris": len(m.idx), "box": [float(x) for x in (*lo, *hi)]})
+        out.append({"name": v.name, "species": v.species, "conifer": bool(v.conifer), "share": round(float(v.share), 6),
+                    **{k: round(float(getattr(v, k)), 4) for k in ("crown_r", "height", "crown_base", "trunk_r")},
+                    "levels": levels})
+    return {"variants": out, "colours": {s: {k: c[k] for k in sorted(c)} for s, c in sorted(colours.items())},
+            "streams": {k: base64.b64encode(zlib.compress(b"".join(v), 9)).decode("ascii") for k, v in streams.items()}}
+
+
+def decode_kit(kit):
+    """The payload's `kit` as encode_kit quantized it: each variant with every level's pos, nrm, attr, uv and idx."""
+    raw = {k: zlib.decompress(base64.b64decode(kit["streams"][k])) for k in KIT_STREAMS}
+    levels = [lv for v in kit["variants"] for lv in v["levels"]]
+    verts, tris = sum(lv["verts"] for lv in levels), sum(lv["tris"] for lv in levels)
+    sizes = {"pos": 6 * verts, "nrm": 2 * verts, "attr": 2 * verts, "uv": 4 * verts, "idx": 6 * tris}
+    for k, n in sizes.items():
+        if len(raw[k]) != n:
+            raise ValueError(f"the kit's {k} stream holds {len(raw[k])} bytes but its levels need {n}")
+    pos = np.frombuffer(raw["pos"], "<u2").reshape(-1, 3)
+    nrm = np.frombuffer(raw["nrm"], np.int8).reshape(-1, 2)
+    attr = np.frombuffer(raw["attr"], np.uint8).reshape(-1, 2)
+    uv = np.frombuffer(raw["uv"], "<u2").reshape(-1, 2)
+    idx = np.frombuffer(raw["idx"], "<u2").reshape(-1, 3)
+    out, v0, t0 = [], 0, 0
+    for v in kit["variants"]:
+        mine = []
+        for lv in v["levels"]:
+            v1, t1 = v0 + lv["verts"], t0 + lv["tris"]
+            lo, hi = np.array(lv["box"][:3]), np.array(lv["box"][3:])
+            local = idx[t0:t1].astype(np.uint32)
+            if len(local) and local.max() >= lv["verts"]:
+                raise ValueError(f"a level of {v['name']} indexes past its {lv['verts']} vertices")
+            mine.append({**lv, "pos": lo + pos[v0:v1] / 65535 * (hi - lo), "nrm": oct_decode(nrm[v0:v1]),
+                         "attr": attr[v0:v1], "uv": uv[v0:v1] / 65535, "idx": local})
+            v0, t0 = v1, t1
+        out.append({**v, "levels": mine})
+    return {**kit, "variants": out}
+
+
+def family_kit(module):
+    """The family module's tree kit encoded for the payload (encode_kit), or None when it has none."""
+    if module is None or not hasattr(module, "kit"):
+        return None
+    return encode_kit(module.kit(), module.kit_colours() if hasattr(module, "kit_colours") else {})
 
 
 # ---------------------------------------------------------------- claims
@@ -677,6 +748,7 @@ def encode_part(family, data=None, scene=None):
     extents = bounds(meshes)
     encoded = encode_assets(meshes, mesh_levels.family_units(family, s, meshes) if s else None)
     marked = footprint_marks(encoded, data["meta"]["local"])
+    kit = family_kit(family_module(family))
     return {"family": family, "local": data["meta"]["local"],
             "assets": {a: {"chunks": e["chunks"], "groups": e["groups"],
                            "streams": {k: base64.b64encode(v).decode("ascii") for k, v in e["streams"].items()},
@@ -684,7 +756,7 @@ def encode_part(family, data=None, scene=None):
                                       if a in extents else None),
                            **({"footprint": mesh_footprint.pack(marked[a])} if a in marked else {})}
                        for a, e in encoded.items()},
-            "towers": tops, "report": report}
+            "towers": tops, "report": report, **({"kit": kit} if kit else {})}
 
 
 def footprint_entry(marked, local):
@@ -716,11 +788,14 @@ def merge_parts(parts, scene=None):
                 marked[asset] = mesh_footprint.unpack(e["footprint"])
         if any(p["towers"] or ()):
             towers = p["towers"]
+    kits = [p["kit"] for p in parts if "kit" in p]
+    if len(kits) > 1:
+        raise ValueError(f"{len(kits)} parts carry a tree kit; the payload holds one")
     for a in scene["assets"]:
         if (set(CLAIMS) & set(a) or a.get("status") in READY) and a["id"] not in encoded:
             raise ValueError(f"{a['id']} claims mapped structures but has no geometry")
     return merge(encoded, source_digests(), shadow_regions(extents, scene), towers,
-                 footprint_entry(marked, parts[0]["local"]) if parts else None)
+                 footprint_entry(marked, parts[0]["local"]) if parts else None, kits[0] if kits else None)
 
 
 def clearing_report(marked, data):
@@ -764,8 +839,11 @@ def main(argv):
         units.update(mesh_levels.family_units(family, s, meshes))
     encoded = encode_assets(meshes, units)
     marked = footprint_marks(encoded, data["meta"]["local"])
+    kits = [k for k in (family_kit(family_module(f)) for f in scene["families"]) if k]
+    if len(kits) > 1:
+        raise ValueError(f"{len(kits)} families carry a tree kit; the payload holds one")
     text = merge(encoded, source_digests(), shadow_regions(bounds(meshes), scene), tower_tops,
-                 footprint_entry(marked, data["meta"]["local"]))
+                 footprint_entry(marked, data["meta"]["local"]), kits[0] if kits else None)
     write(out, text)
     print("skyline:", "; ".join(report))
     print("trees cleared beside the meshes:", "; ".join(clearing_report(marked, data)))

@@ -69,6 +69,15 @@ vec3 shade(vec3 ro, vec3 rd, Res r) {
     alb = s.tp.w < 0. ? mix(dec, con, s.conF) * crown : (s.tp.w > 1.5 ? vec3(0.05, 0.04, 0.03) : (s.tp.x > 0.5 ? con : dec));
     ao = s.tp.w < 0. ? 0.7 : 0.3 + 0.7 * clamp((p.y - s.gy) / max(s.tc.w, 1.), 0., 1.);
     wrap = 0.3;
+#ifdef MESH_TREES
+    if (s.tp.w > 2.5) {                               // a mesh tree (tp.y its species): the kit's bark, turning to its upper
+      int sp = int(s.tp.y + 0.5);                     // colour by its aux (conF) and to the drawn crowns' far off; its leaves
+      float hf = clamp((p.y - s.gy) / max(s.tc.w, 1.), 0., 1.);   // the drawn crown's colour (its hue, turning crowns and
+      vec3 bark = mix(uTreeKit[3 * sp], uTreeKit[3 * sp + 1], s.conF);   // all), darkening into the crown by its aux
+      alb = s.tp.w > 3.5 ? mix(bark, vec3(0.05, 0.04, 0.03), smoothstep(uTreeFar.x, uTreeFar.y, t)) : (s.tp.x > 0.5 ? con : dec);
+      ao = s.tp.w > 3.5 ? 0.5 + 0.5 * hf : (0.45 + 0.55 * hf) * (1. - 0.5 * s.conF);
+    }
+#endif
   } else if (r.mat == 4) {                            // castle (meshes)
     bool mt = r.aux > 149.5;                          // mesh tower: re-ranked top in ctop, battlements unless the dome
     bool part = r.aux > 39.5 && r.aux < 49.5;         // mesh openings: 40 pane, 41 lit and 45 dimly lit at dusk, 42 oak, 43 their masonry lining, 44 steps, 47 iron
@@ -261,7 +270,7 @@ void main() {
   vec3 rd = normalize(uCamRot * vec3(uv * uTanHalf, 1.)), ro = uCamPos;
   float rk = 16. * uTanHalf / uRes.y, ax = max(abs(rd.x), abs(rd.z));
   int maxM = uQual == 0 ? 170 : (uQual == 1 ? 250 : 360);
-  int vmM = uDetail == 1 ? 1 : 2;
+  int vmM = uDetail == 1 ? VM_TREES : 2;
   float t0 = 0.05;
   int ph = 0, gi = 0, cnt = 0, k = -1, kp = -1;      // ph 0 grid march, 1 baseline replay, 2 done
   if (ro.y > CEIL) { if (rd.y >= 0.) ph = 2; else t0 = (ro.y - CEIL) / -rd.y; }
@@ -447,5 +456,203 @@ void main() {
   if (r.mat != 0) col = applyFog(col, ro, rd, r.t);
   col = pow(aces(col * uExposure), vec3(1. / 2.2));
   outColor = vec4(col, r.mat == 0 ? -1. : r.t);
+}
+#elif defined(TINST_PASS)
+// mesh trees: one texel per tree-table cell, for table rows uRow0 on: the tree treeSD's table path stands there (r = 0:
+// none) and the ground it stands on. The page reads them back after each tree pass and keeps the trees as instances
+uniform int uRow0;
+void main() {
+  ivec2 ic = ivec2(gl_FragCoord.xy) + ivec2(0, uRow0);
+  vec2 cc = vec2(ic) - TREE_G0;
+  vec4 h = hash42(cc);
+  vec2 v = texelFetch(tTree, ic, 0).rg;               // density and conifer share, as treeSD reads them
+  iOut0 = vec4(0.); iOut1 = vec4(0.); iOut2 = vec4(0.);
+  if (h.x >= v.x) return;
+  bool con = h.w < v.y;
+  float r, H = treeH(h, v.x, con, r);
+  vec2 ctr = (cc + 0.25 + 0.5 * h.yz) * 7.;
+  // treeSD shears a tree to the ground under each of its points (bed + detailH). Here: the bed and the relief at the
+  // centre (the relief as detailH has it from 700 m out, and its near octave apart) and their slopes across the crown,
+  // kept apart because the relief fades out with distance
+  float bed = 0., nF = 0., nN = 0.;
+  vec4 sl = vec4(0.);                                 // d bed / dx, d bed / dz, d relief / dx, d relief / dz
+  for (int k = ZERO; k < 5; k++) {
+    vec2 o = k == 0 ? vec2(0.) : (k < 3 ? vec2(k == 1 ? r : -r, 0.) : vec2(0., k == 3 ? r : -r));
+    GS g = sampleGround(ctr + o);
+    float f = detailH(ctr + o, g, 1000.);
+    if (k == 0) { bed = g.bed; nF = f; nN = detailH(ctr, g, 0.) - f; }
+    else if (k < 3) sl.xz += vec2(g.bed, f) * ((k == 1 ? 0.5 : -0.5) / r);
+    else sl.yw += vec2(g.bed, f) * ((k == 3 ? 0.5 : -0.5) / r);
+  }
+  iOut0 = vec4(ctr, r, H);
+  iOut1 = vec4(bed, nF, nN, h.w + (con ? 2. : 0.));
+  iOut2 = sl;
+}
+#elif defined(TREE_DRAW)
+// mesh trees, stage A: each instance's crown and trunk, in the shapes treeSD gives them, ray cast within a screen quad
+// round it (template_b.html treeVs). The depth pre-pass (the radial distance, at location 0) and the G-buffer pass (the
+// record trace() writes for a 3D tree) run this one program, so their depths agree bit for bit
+flat in vec4 vA;    // centre x, z, crown radius r, height H
+flat in vec4 vB;    // base height, the ground's slope (x, z), hue (+2: conifer)
+flat in float vF;   // the share of the tree this draws where it hands over to its mesh (TREE_MESH), by a dither; 1: all
+//__TREE_DEPTH__
+// the ray o + d s against a tree in its sheared frame (base at the origin, the ground's slope taken out): the nearest
+// s > smin on its crown or trunk, with its part (1 crown, 2 trunk; 0 none), the shapes treeSD's distances bound
+vec2 treeHit(vec3 o, vec3 d, float r, float H, bool con, float smin) {
+  vec2 best = vec2(1e30, 0.);
+  float rt = 0.25 + 0.012 * H, yt = con ? 0.5 * H : 0.64 * H;   // trunk: from 0.5 m down to its top inside the crown
+  float A = dot(d.xz, d.xz), B = dot(o.xz, d.xz), C = dot(o.xz, o.xz) - rt * rt, D = B * B - A * C;
+  if (D > 0. && A > 0.) {
+    float q = sqrt(D);
+    for (int i = 0; i < 2; i++) {
+      float s = (-B + (i == 0 ? -q : q)) / A, y = o.y + d.y * s;
+      if (s > smin && s < best.x && y >= -0.5 && y <= yt) best = vec2(s, 2.);
+    }
+  }
+  if (con) {                                          // cone: a base disc of radius r at 0.12 H, its apex at H
+    float k2 = r * r / (0.7744 * H * H), w0 = H - o.y;
+    A = dot(d.xz, d.xz) - k2 * d.y * d.y; B = dot(o.xz, d.xz) + k2 * w0 * d.y; C = dot(o.xz, o.xz) - k2 * w0 * w0;
+    D = B * B - A * C;
+    if (D >= 0. && abs(A) > 1e-9) {
+      float q = sqrt(D);
+      for (int i = 0; i < 2; i++) {
+        float s = (-B + (i == 0 ? -q : q)) / A, y = o.y + d.y * s;
+        if (s > smin && s < best.x && y >= 0.12 * H && y <= H) best = vec2(s, 1.);
+      }
+    }
+    if (abs(d.y) > 1e-9) {
+      float s = (0.12 * H - o.y) / d.y;
+      vec2 x = o.xz + d.xz * s;
+      if (s > smin && s < best.x && dot(x, x) <= r * r) best = vec2(s, 1.);
+    }
+  } else {                                            // ellipsoid: semi-axes r, 0.36 H, r about 0.64 H up
+    vec3 k = vec3(r, 0.36 * H, r), so = (o - vec3(0., 0.64 * H, 0.)) / k, sd = d / k;
+    A = dot(sd, sd); B = dot(so, sd); C = dot(so, so) - 1.; D = B * B - A * C;
+    if (D > 0.) {
+      float q = sqrt(D);
+      for (int i = 0; i < 2; i++) {
+        float s = (-B + (i == 0 ? -q : q)) / A;
+        if (s > smin && s < best.x) best = vec2(s, 1.);
+      }
+    }
+  }
+  return best;
+}
+void main() {
+#ifdef TREE_REFL
+  vec2 uv = (2. * (gl_FragCoord.xy * 2. + uJitter) - uRes) / uRes.y;   // the mirror is drawn at half resolution
+#else
+  vec2 uv = (2. * (gl_FragCoord.xy + uJitter) - uRes) / uRes.y;
+#endif
+  vec3 rd = normalize(uCamRot * vec3(uv * uTanHalf, 1.)), cam = uCamPos;
+#ifdef TREE_REFL
+  cam.y = 2. * LAKE - cam.y; rd.y = -rd.y;            // the mirror image on this ray is the tree on the mirrored ray
+#endif
+  if (vF < 1. && hash12(gl_FragCoord.xy + uJitter * 61.7) >= vF) discard;   // its mesh draws the rest (TREE_MESH)
+  bool con = vB.w >= 2.;
+  float H = vA.w;
+  // the sheared frame, its origin moved along the ray to the nearest approach to the tree's middle, so the quadratics
+  // stay well conditioned 5 km out
+  vec3 o = cam - vec3(vA.x, vB.x, vA.y), d = rd;
+  o.y -= dot(vB.yz, o.xz); d.y -= dot(vB.yz, d.xz);
+  float tc = -dot(o - vec3(0., 0.5 * H, 0.), d) / dot(d, d);
+  vec2 hit = treeHit(o + d * tc, d, vA.z, H, con, 0.05 - tc);
+  float t = tc + hit.x;
+  if (hit.y == 0. || ((uDbg & 2097152) == 0 && t >= TREE_FAR)) discard;   // the march's sheet from TREE_FAR on (debug: the table's edge)
+  vec3 hp = cam + rd * t;
+  vec2 dd = hp.xz - vA.xy;
+#ifdef TREE_REFL
+  // lit as reflFs lights the mirrored meshes, in shade()'s tree colours; the path length is the mirrored point's
+  if (hp.y < LAKE - 0.05) discard;                   // under the water: not reflected
+  vec3 q = o + d * t, n;                             // the hit in the tree's sheared frame
+  if (hit.y > 1.5) n = vec3(q.x, 0., q.z);
+  else if (!con) n = (q - vec3(0., 0.64 * H, 0.)) / vec3(vA.z * vA.z, 0.1296 * H * H, vA.z * vA.z);
+  else n = q.y < 0.12 * H + 1e-3 ? vec3(0., -1., 0.) : vec3(q.x, vA.z * vA.z / (0.7744 * H * H) * (H - q.y), q.z);
+  n = normalize(n + vec3(0., 1e-6, 0.));
+  float hue = vB.w - (con ? 2. : 0.), hf = clamp((hp.y - vB.x) / max(H, 1.), 0., 1.);
+  vec3 alb = hit.y > 1.5 ? vec3(0.05, 0.04, 0.03) : (con ? vec3(0.021, 0.037, 0.025) * (0.85 + 0.3 * hue)
+                                                         : mix(vec3(0.034, 0.058, 0.016), vec3(0.06, 0.074, 0.02), hue));
+  outColor = vec4(alb * (0.3 + 0.7 * hf) * (uSunCol * max(dot(n, uSunDir), 0.) + uSkyCol * (0.55 + 0.45 * n.y)), t);
+#else
+  bool shf = uSunDir.y > -0.03 && (uDbg & 1) == 0;   // trace()'s ST_SHINIT for a tree hit
+  float sh = uSunDir.y < -0.03 ? 0. : 1.;
+  if (shf && t >= SUN_NEAR && max(abs(hp.x), abs(hp.z)) < 5040.) { sh = sunCache(hp.xz); shf = false; }
+  gOut0 = vec4(t, float(3 + (shf ? 64 : 0)), con ? 1. : 0., 0.);
+  gOut1 = vec4(0., 1., 0., vB.x + dot(vB.yz, dd));   // the sheared ground under the hit, as treeSD's gy
+  gOut2 = vA;
+  gOut3 = vec4(con ? 1. : 0., con ? 0. : 0.36 * H, vB.w - (con ? 2. : 0.), hit.y);
+  gOut4 = vec4(rd, 0.);
+  gOut5 = vec4(0., 1., 0., 0.);
+  gOut6 = shf ? vec4(hp + normalize(vec3(dd.x, max(length(dd), 0.5) * 0.6, dd.y)) + uSunDir * 0.05, 0.12 + t * 0.0015)
+              : vec4(sh, 0., 0., -1.);
+#endif
+  gl_FragDepth = depthOf(t / length(vec3(uv * uTanHalf, 1.)));
+}
+#elif defined(TREE_MESH)
+// mesh trees, stage B: the payload kit's species, a variant fitted to each tree near the camera (template_b.html
+// treeMeshVs), drawn by the depth pre-pass and the G-buffer pass with the record a 3D tree writes, its part 3 (leaves)
+// or 4 (bark) and its normal its own; shade() takes its species' colours. A leaf card is cut to leaves, and a tree
+// handing over between two levels, or to its drawn crown (TREE_DRAW), is dithered between them alike in both passes
+in vec3 vP; in vec3 vN; in vec2 vUV; in float vAux; in float vGy;
+flat in uint vPart;  // 0 bark, 1 solid leaves, 2 a leaf card
+flat in vec4 vA;     // centre x, z, crown radius r, height H
+flat in vec4 vB;     // base height, the ground's slope (x, z), hue (+2: conifer)
+flat in vec4 vI;     // species, the farther level's share where two hand over, this level the farther (1) or not, unused
+float leafMask(vec2 uv) {                             // a leaf card's leaves: one round-tipped leaf in each cell of a 3.5 grid
+  vec2 g = uv * 3.5, c = floor(g);
+  float m = -1.;
+  for (int j = ZERO; j < 9; j++) {
+    vec2 k = c + vec2(float(j % 3 - 1), float(j / 3 - 1));
+    vec4 h = hash42(k + 31.7);
+    vec2 q = g - k - 0.2 - 0.6 * h.xy;
+    float a = 6.2832 * h.z, ca = cos(a), sa = sin(a);
+    m = max(m, 1. - length(vec2(ca * q.x + sa * q.y, ca * q.y - sa * q.x) / vec2(0.62, 0.3)));
+  }
+  return m;
+}
+// how far along d the ray from o (in the tree's sheared frame) is inside the tree as treeSD has it, before it leaves:
+// its crown or its trunk, or from bark its trunk only (0 if it never is)
+float treeExit(vec3 o, vec3 d, float r, float H, bool con, bool bark) {
+  float s = 0., rt = 0.25 + 0.012 * H, yt = con ? 0.5 * H : 0.64 * H;
+  float A = dot(d.xz, d.xz), B = dot(o.xz, d.xz), C = dot(o.xz, o.xz) - rt * rt, D = B * B - A * C;
+  if (D > 0. && A > 0.) { float e = (-B + sqrt(D)) / A, y = o.y + d.y * e; if (y >= -0.5 && y <= yt) s = e; }
+  if (bark) return max(s, 0.);
+  if (con) {                                          // the cone between its base disc at 0.12 H and its apex at H
+    float k2 = r * r / (0.7744 * H * H), w0 = H - o.y;
+    A = dot(d.xz, d.xz) - k2 * d.y * d.y; B = dot(o.xz, d.xz) + k2 * w0 * d.y; C = dot(o.xz, o.xz) - k2 * w0 * w0;
+    D = B * B - A * C;
+    if (D >= 0. && abs(A) > 1e-9) for (int i = 0; i < 2; i++) {
+      float e = (-B + (i == 0 ? -1. : 1.) * sqrt(D)) / A, y = o.y + d.y * e;
+      if (y >= 0.12 * H && y <= H) s = max(s, e);
+    }
+    if (abs(d.y) > 1e-9) { float e = (0.12 * H - o.y) / d.y; vec2 x = o.xz + d.xz * e; if (dot(x, x) <= r * r) s = max(s, e); }
+  } else {                                            // the ellipsoid, semi-axes r, 0.36 H, r about 0.64 H up
+    vec3 k = vec3(r, 0.36 * H, r), so = (o - vec3(0., 0.64 * H, 0.)) / k, sd = d / k;
+    A = dot(sd, sd); B = dot(so, sd); C = dot(so, so) - 1.; D = B * B - A * C;
+    if (D > 0.) s = max(s, (-B + sqrt(D)) / A);
+  }
+  return max(s, 0.);
+}
+void main() {
+  if (vI.y > 0. && (vI.z < 0.5) == (hash12(gl_FragCoord.xy + uJitter * 61.7) < vI.y)) discard;   // the other level's share
+  if (vPart == 2u && leafMask(vUV) < 0.) discard;
+  vec3 d = vP - uCamPos; float t = length(d);
+  vec3 n = normalize(vN);
+  if (vPart == 0u && dot(n, d) > 0.) n = -n;        // bark seen from behind (a limb's open end): its near side
+  bool con = vB.w >= 2., shf = uSunDir.y > -0.03 && (uDbg & 1) == 0;   // trace()'s ST_SHINIT for a tree hit
+  float sh = uSunDir.y < -0.03 ? 0. : 1.;
+  if (shf && t >= SUN_NEAR && max(abs(vP.x), abs(vP.z)) < 5040.) { sh = sunCache(vP.xz); shf = false; }
+  // the sun's march starts where its ray leaves this tree as the march sees it, so the tree never shades itself through
+  // the shapes it no longer has: its normals and its leaves' depth in the crown (aux) shade it instead
+  vec3 o = vP - vec3(vA.x, vB.x, vA.y), sd = uSunDir;
+  o.y -= dot(vB.yz, o.xz); sd.y -= dot(vB.yz, sd.xz);
+  vec3 so = vP + uSunDir * (treeExit(o, sd, vA.z, vA.w, con, vPart == 0u) + 0.05);
+  gOut0 = vec4(t, float(3 + (shf ? 64 : 0)), vAux, 0.);
+  gOut1 = vec4(n, vGy);
+  gOut2 = vA;
+  gOut3 = vec4(con ? 1. : 0., vI.x, vB.w - (con ? 2. : 0.), vPart == 0u ? 4. : 3.);
+  gOut4 = vec4(d / t, 0.);
+  gOut5 = vec4(0., 1., 0., 0.);
+  gOut6 = shf ? vec4(so, 0.12 + t * 0.0015) : vec4(sh, 0., 0., -1.);
 }
 #endif

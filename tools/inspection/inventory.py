@@ -16,13 +16,16 @@ The objects, in the order the inspection shoots them:
   clearings.LINEAR), the ground classes (frag4.glsl classCol), the terrain the decisions shape (the castle's mound and
   cliff, the cabin's terrace, the Willow's knoll and the like), the hills, and the footprints the manifest leaves
   unbuilt (absences: nothing may stand there);
+- a tree of each of the payload kit's species and forms (a mature and a young Scots pine, a yew, an oak, a beech, a
+  birch), each shot at the one nearest its seed that stands apart (tools.inspection.shoot);
 - the renderer's set pieces and surfaces: lake water, its reflections by day and by night, streams, greenhouse glass,
   mesh shadows, trees, the sky and the night, levels of detail and thin parts at distance;
 - a still of each of the tour's waypoints (template_c.html WP), naming the objects its caption names.
 
 Owners are the sessions that fix what an object shows: the castle, greenhouses and transport went through phase 0 and
 the first-pass reviews, so the trunk keeper takes them, as it takes the tour; grounds are lane A's, Hogsmeade lane B's,
-the Willow lane C's, the site (terrain, trees, clearings, ground) lane D's, and the renderer integration's.
+the Willow lane C's, the mesh trees' species lane T's, the site (terrain, trees, clearings, ground) lane D's, and the
+renderer integration's.
 `uncovered` lists what no object covers; the CLI fails while anything is.
 """
 import argparse
@@ -43,9 +46,10 @@ PAYLOAD = BUILD / "meshes.js"
 OUT_DIR = BUILD / "inspection"
 
 OWNERS = {"castle": "trunk keeper", "greenhouses": "trunk keeper", "transport": "trunk keeper", "grounds": "lane A",
-          "village": "lane B", "willow": "lane C", "site": "lane D", "renderer": "integration", "tour": "trunk keeper"}
+          "village": "lane B", "willow": "lane C", "trees": "lane T", "site": "lane D", "renderer": "integration",
+          "tour": "trunk keeper"}
 SESSIONS = frozenset(OWNERS.values())
-KINDS = ("asset", "part", "sample", "outlier", "absence", "surface", "clearing", "terrain", "tour")
+KINDS = ("asset", "part", "sample", "outlier", "species", "absence", "surface", "clearing", "terrain", "tour")
 UNNAMED = ("village-house", "village-wing")
 GROUND_CLASSES = ("rough meadow", "lawn", "rough scrubland", "earth track", "vegetable beds", "forest floor",
                   "Quidditch pitch", "shingle", "overgrown garden")         # frag4.glsl classCol, by class index
@@ -69,6 +73,7 @@ NOT_VISUAL = {
     "live-origin-provenance": "where the cited pages were fetched",
     "performance-budget": "frame time, measured by the timing run, not seen",
     "willow-generator": "that the Willow is rebuilt byte for byte from a seed",
+    "trees-generator": "that the trees' variants are built from a seed, and that the generator places none",
     "elevation-model": "which elevation model the terrain comes from; its result is the terrain the site objects show",
     "castle-plan-interiors-excluded": "rooms, corridors and statues inside the castle: nothing to see from outside",
     "static-exteriors": "that nothing animates: a still cannot show it (the motion evidence does)",
@@ -77,6 +82,11 @@ NOT_VISUAL = {
 # castle-plan labels the manifest does not trace, at the pointer dots of castle_plan.gif (744 x 533 px)
 CASTLE_PLAN_PX = {"Ch": (195, 128), "NB": (178, 202), "EW": (440, 176), "WW": (284, 415), "HW": (295, 356),
                   "FO": (365, 376)}
+# where the search for a tree of a species starts, by class (conifer or not): the pines between the station and the
+# castle's shore (wh-forest's "swathe of pine trees between the station and the lake"), and the Forest's edge by the hut
+TREE_SEEDS = {True: (145.0, 80.0), False: (-330.9, -193.1)}
+TREE_TITLES = {"scots-pine-mature": "A mature Scots pine", "scots-pine-young": "A young Scots pine", "yew": "A yew",
+               "oak": "An oak", "beech": "A beech", "birch": "A birch"}
 
 
 @dataclass(frozen=True)
@@ -128,16 +138,18 @@ def load(path):
 class World:
     """What the inventory is built from: the manifest, the registered world's meta, the tour, each asset's payload
     boxes, Hogsmeade's planned buildings and small structures, the footprint groups and castle pieces with their
-    owners, a point of each ground class, and the ground's height."""
+    owners, a point of each ground class, the ground's height, and the tree kit's variants (name, conifer, share, crown
+    radius and height)."""
 
     def __init__(self, manifest, meta, waypoints, boxes, groups, units=(), small=None, components=None, pieces=(),
-                 classes=None, corridor=None, ground=None, sides=None):
+                 classes=None, corridor=None, ground=None, sides=None, kit=()):
         self.manifest, self.meta, self.waypoints = manifest, meta, waypoints
         self.boxes, self.groups = boxes, groups
         self.units, self.small = list(units), small or {}
         self.components, self.pieces = components or {}, list(pieces)
         self.classes, self.corridor, self.sides = classes or {}, corridor, sides or {}
         self._ground = ground
+        self.kit = list(kit)
 
     def ground(self, x, z):
         return float(self._ground(x, z)) if self._ground else 0.0
@@ -178,9 +190,11 @@ class World:
                 {"id": c["id"], "x": c["x"], "z": c["z"], "area": c["area"]})
         pieces = [dict(p, owner=scene.piece_owners[p["id"]]) for p in scene.castle_labelled[1]]
         classes, sides = ground_classes(data)
+        kit = [{k: v[k] for k in ("name", "conifer", "share", "crown_r", "height")}
+               for v in (payload.get("kit") or {}).get("variants", ())]
         return cls(manifest, meta, tour.waypoints(PAGE.read_text(encoding="utf-8", errors="replace")), boxes, groups,
                    village_units(village, scene), small_structures(village), components, pieces,
-                   classes, corridor_point(data, meta), ground, sides)
+                   classes, corridor_point(data, meta), ground, sides, kit)
 
 
 def village_units(village, scene):
@@ -712,6 +726,29 @@ def willow_objects(world):
     ]
 
 
+def tree_form(name):
+    """A kit variant's species and form, as its name gives them: scots-pine-mature-1 is a scots-pine-mature."""
+    return name.rsplit("-", 1)[0]
+
+
+def tree_objects(world):
+    """A tree of each of the kit's species and forms, with every decision on the Forest's trees that a picture can
+    show. Its point is its class's seed (TREE_SEEDS): the shot frames the tree it finds from there (shoot.py)."""
+    decisions = tuple(d for d in decisions_of(world, "forest-trees") if d not in NOT_VISUAL)
+    forms = {}
+    for v in world.kit:
+        forms.setdefault(tree_form(v["name"]), []).append(v)
+    out = []
+    for form, variants in forms.items():
+        height = max(v["height"] for v in variants)
+        out.append(Obj(id=f"trees/{form}", title=TREE_TITLES.get(form, form), family="trees", kind="species",
+                       at=at_point(world, *TREE_SEEDS[variants[0]["conifer"]], height / 2), size=round(1.3 * height, 1),
+                       assets=("forest-trees",), decisions=decisions, elevation=10.0,
+                       sample=f"the page's {form} trees (the kit's {', '.join(v['name'] for v in variants)}): the one "
+                              "nearest its class's seed that stands apart, where its whole form shows"))
+    return out
+
+
 VILLAGE_VIEWS = {  # named building: (close-up, context) labels of tools/review/village.py
     "dervish-and-banges": ("Dervish & Banges' bracket clock, 15:00", "Down the High Street from Dervish & Banges, 15:00"),
     "gladrags": ("Gladrags' blind, 15:00", None),
@@ -928,7 +965,7 @@ def renderer_objects(world):
             else (-43.5, 2.0, 260.7), 10.0, (), ("greenhouse-glass",), elevation=20.0),
         obj("shadows", "Mesh shadows on the ground in the evening", (60.0, 0.0, -60.0), 200.0,
             (View("the castle's shadow at 18:30", (60.0, 30.0, -300.0), (60.0, 0.0, -60.0), 18.5),)),
-        obj("trees", "Trees close: broadleaves, pines, the first turning leaves", (-951.0, 14.0, 46.0), 40.0,
+        obj("trees", "Trees close: broadleaves and pines", (-951.0, 14.0, 46.0), 40.0,
             elevation=30.0),        # over the canopy: lower, the camera stood inside a crown
         obj("night", "The whole scene at night", (0.0, 30.0, 0.0), 800.0,
             (View("from 700 m at night", (420.0, 140.0, -620.0), (0.0, 30.0, 0.0), "night"),)),
@@ -988,7 +1025,8 @@ def tour_objects(world, objects):
 
 def build(world):
     objects = (castle_objects(world) + greenhouse_objects(world) + transport_objects(world) + grounds_objects(world)
-               + willow_objects(world) + village_objects(world) + site_objects(world) + renderer_objects(world))
+               + willow_objects(world) + village_objects(world) + site_objects(world) + tree_objects(world)
+               + renderer_objects(world))
     return objects + tour_objects(world, objects)
 
 

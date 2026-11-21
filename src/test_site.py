@@ -2176,6 +2176,95 @@ class PackedSiteTests(unittest.TestCase):
         commonest = np.array([np.bincount(c).argmax() for c in round_it.T])
         self.assertGreater(float(np.mean(surface[texel(E, N)] == commonest)), 0.8)
 
+    OUTFLOW_LINK_M = 8.0    # the grounds map's streams joined to the lake across gaps narrower than this: its outflow
+    OUTFLOW_ROAD_M = 8.0    # it keeps its ink's width this near a road, where a bridge carries the road over it
+
+    def outflow_ink(self):
+        """The lake's outflow as the grounds map inks it: (E, N) of its pixels' centres, castle-relative, and their
+        distances (m) from the map's edge."""
+        from scipy import ndimage as ndi
+        import build_final
+
+        water = np.load(inputs.require("original-intermediates") / "build" / "cls_g.npy") == common.C_WATER
+        lab, _ = ndi.label(water)
+        lake = lab == 1 + int(np.argmax(np.bincount(lab.ravel())[1:]))
+        streams = build_final.drop_small(ndi.binary_opening(water & ~lake, iterations=1), 80)
+        link = build_final.disk(round(self.OUTFLOW_LINK_M / 2 / build_final.PG))
+        lab, _ = ndi.label(ndi.binary_dilation(streams | lake, structure=link))
+        v, u = np.nonzero(streams & (lab == lab[lake].max()))
+        E, N = (np.asarray(c, float) for c in build_final.g2w(u + 0.5, v + 0.5))
+        edge = np.minimum.reduce([u, v, water.shape[1] - 1 - u, water.shape[0] - 1 - v]) * build_final.PG
+        return E, N, edge
+
+    def test_the_lakes_outflow_is_drawn_as_wide_as_the_river_it_stands_for(self):
+        """Where the maps' streams stand for the site's watercourses, the lake's outflow stands for its river, Allt
+        Mhartuin at X. White Hound inks it as a thin line: drawn as inked, 2 to 3 m wide, it read from afar as a dark
+        thread, where the river is carved 4 m wide beyond his maps. Wherever the build draws it, it is about as wide as
+        that: twice the deepest distance into the drawn stream within 1.5 m of each pixel of its ink, but for the
+        narrowest tenth, where it narrows to nothing towards the map's edge and keeps its ink's width by the roads."""
+        if self.site["carve_in_maps"]:
+            self.skipTest("the site carves its river through the maps")
+        from scipy import ndimage as ndi
+
+        E, N, _ = self.outflow_ink()
+        step = 0.25
+        e0, n0 = E.min() - 8.0, N.min() - 8.0
+        fe, fn = np.meshgrid(np.arange(e0, E.max() + 8.0, step), np.arange(n0, N.max() + 8.0, step))
+        wet = self.ms.sample(self.ms.sd_bytes(self.layer("locB")[..., 1]), self.grid, fe, fn) < 0.0
+        deepest = ndi.maximum_filter(ndi.distance_transform_edt(wet) * step, size=2 * int(1.5 / step) + 1)
+        width = 2.0 * deepest[np.rint((N - n0) / step).astype(int), np.rint((E - e0) / step).astype(int)]
+        drawn = width[width > 0.0]
+        self.assertGreater(len(drawn), 3000)                # most of its ink: all but where the castle's base buries it
+        river, spread = self.site["carve"]["river"], np.percentile(drawn, [10, 50, 90]).round(2)
+        self.assertGreater(spread[0], river - 0.5, spread)
+        self.assertLess(spread[1], river + 1.5, spread)
+
+    def test_the_lakes_outflow_keeps_its_inks_width_in_its_water_and_bed(self):
+        """Drawn wider than its ink, the lake's outflow still runs in its ink's channel: where its water and bed took
+        the drawn width, wet 2 m texels stood two abreast, and the page drew the water's edge stepped along their
+        centres, a staircase of water and dark slabs in the burn. So every wet texel by it lies on its ink (at the
+        site's freeze build, all within 0.8 m of a pixel of it; widened, a sixth stood 1 to 1.8 m off). And its water
+        runs on with its ink towards the map's edge, narrowing there as the ink does: narrowed as fast as the drawn
+        width, which is deeper, it stopped 20 m short of the edge, where the drawn burn runs on."""
+        if self.site["carve_in_maps"]:
+            self.skipTest("the site carves its river through the maps")
+        from scipy import ndimage as ndi
+        from scipy.spatial import cKDTree
+
+        E, N, edge = self.outflow_ink()
+        lab, _ = ndi.label(self.layer("locW") > 0.0, np.ones((3, 3), bool))
+        i, j = np.nonzero((lab > 0) & (lab != 1 + int(np.argmax(np.bincount(lab.ravel())[1:]))))   # not the lake's own
+        wet = np.column_stack([np.asarray(c, float) for c in self.grid.to_world(i, j)])
+        off, _ = cKDTree(np.column_stack([E, N])).query(wet)
+        by = off < 8.0
+        self.assertGreater(int(by.sum()), 300)
+        self.assertLess(float(np.mean(off[by] > 1.0)), 0.01)
+        last = cKDTree(np.column_stack([E[edge < 20.0], N[edge < 20.0]])).query(wet)[0] < 1.5   # its last 20 m
+        self.assertGreaterEqual(int(last.sum()), 3)
+
+    def test_the_lakes_outflow_keeps_its_inks_width_where_a_road_crosses_it(self):
+        """The outflow keeps its ink's width near a road, so the bridge carrying the road over it spans it as inked:
+        widened up to the footbridge's path north-west of the castle, its ends there came in from 5 m off the path's
+        centre to 2.4 m, and the bridge's faces with them, its parapets broken and standing half their height above the
+        path. Within OUTFLOW_ROAD_M of the map's road ink, the drawn stream by the outflow keeps to its ink (at the
+        site's freeze build, 99% within 0.8 m of a pixel of it; widened, 1.6 m)."""
+        if self.site["carve_in_maps"]:
+            self.skipTest("the site carves its river through the maps")
+        from scipy.spatial import cKDTree
+        import build_final
+
+        E, N, _ = self.outflow_ink()
+        rv, ru = np.nonzero(np.load(inputs.require("original-intermediates") / "build" / "native_g.npz")["earth"])
+        road = cKDTree(np.column_stack([np.asarray(c, float) for c in build_final.g2w(ru + 0.5, rv + 0.5)]))
+        step = 0.25
+        fe, fn = np.meshgrid(np.arange(E.min() - 8.0, E.max() + 8.0, step), np.arange(N.min() - 8.0, N.max() + 8.0, step))
+        wet = self.ms.sample(self.ms.sd_bytes(self.layer("locB")[..., 1]), self.grid, fe, fn) < 0.0
+        at = np.column_stack([fe[wet], fn[wet]])
+        off, _ = cKDTree(np.column_stack([E, N])).query(at)
+        near = (off < 6.0) & (road.query(at)[0] < self.OUTFLOW_ROAD_M)
+        self.assertGreater(int(near.sum()), 300)
+        self.assertLess(float(np.percentile(off[near], 99)), 1.0)
+
     def grounds_points(self):
         """Hagrid's cabin, the gates' centre and the drive from them to the castle's front, in castle-relative metres."""
         import grounds_grade

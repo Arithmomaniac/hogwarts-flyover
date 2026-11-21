@@ -41,8 +41,10 @@ DBG_NO_CONE = 512                           # the primary march starts at the ca
 # active samplers per program, on both GPUs (limit 16): the raymarched objects' four (the castle's two distance fields,
 # the building codes and the boundary walls) left every raymarching program when the meshes replaced them, the
 # surface class moved into locB's third channel, read with texelFetch, and the mesh casters' shadow layers moved from
-# the shadow pass to the shading pass, which looks them up for each pixel
-SAMPLERS = {"p1": 10, "far": 10, "shadow": 11, "shade": 15, "cone": 9, "sun": 10, "classify": 1, "mesh": 1, "resolve": 1}
+# the shadow pass to the shading pass, which looks them up for each pixel. The mesh trees' four programs (the default
+# page's; none with ?trees=raymarched): the drawn crowns, the instance pass, the species meshes and the mirror's crowns
+SAMPLERS = {"p1": 10, "far": 10, "shadow": 11, "shade": 15, "cone": 9, "sun": 10, "classify": 1, "mesh": 1, "resolve": 1,
+            "trees": 1, "treeInstances": 6, "treeMeshes": 1, "treeMirror": 0}
 GRID = """(step) => {
     const v = __hog.probe(0, 0), [w, h] = v.res, out = [];
     for (let y = 1; y < h; y += step) for (let x = 1; x < w; x += step) { const p = __hog.probe(x, y); out.push([p.mat, p.t]); }
