@@ -64,11 +64,16 @@ def levelled():
         decoded = build_meshes.decode_payload(build_meshes.merge_parts(parts, scene()))
     else:
         decoded = build_meshes.decode_payload(PAYLOAD.read_text(encoding="utf-8"))
-    for chunk in decoded["chunks"]:
+    for chunk in decoded["chunks"] + [lv for v in decoded.get("kit", {}).get("variants", ()) for lv in v["levels"]]:
         for value in chunk.values():
             if isinstance(value, np.ndarray):
                 value.flags.writeable = False
     return decoded
+
+
+def kit():
+    """The payload's tree kit as build_meshes.decode_kit has it (shared and read-only), or None without one."""
+    return levelled().get("kit")
 
 
 @functools.lru_cache(maxsize=None)

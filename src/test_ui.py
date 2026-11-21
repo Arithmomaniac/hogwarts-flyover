@@ -193,6 +193,7 @@ class OverlayTests(unittest.IsolatedAsyncioTestCase):
         async with self.stepped_loop_clock():
             await page.evaluate("""() => {
               const proto = WebGL2RenderingContext.prototype, drawArrays = proto.drawArrays, drawElements = proto.drawElements;
+              const drawArraysInstanced = proto.drawArraysInstanced, drawElementsInstanced = proto.drawElementsInstanced;
               window.__draws = 0;
               window.__meshDraws = 0;
               proto.drawArrays = function(...args) {
@@ -202,6 +203,15 @@ class OverlayTests(unittest.IsolatedAsyncioTestCase):
               proto.drawElements = function(...args) {
                 __meshDraws++;
                 return drawElements.apply(this, args);
+              };
+              // the mesh trees: their drawn crowns and their species meshes
+              proto.drawArraysInstanced = function(...args) {
+                __draws++;
+                return drawArraysInstanced.apply(this, args);
+              };
+              proto.drawElementsInstanced = function(...args) {
+                __meshDraws++;
+                return drawElementsInstanced.apply(this, args);
               };
               for(let i=0;i<120;i++) __testClock.step(250);
             }""")

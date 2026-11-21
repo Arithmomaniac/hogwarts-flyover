@@ -3,12 +3,14 @@ checked-in payload carries every claimed asset. That it is reproducible without 
 check, which the trunk keeper runs at merges."""
 
 import base64
+import collections
 import importlib
 import json
 import math
 from pathlib import Path
 import sys
 import tempfile
+import types
 import unittest
 from unittest import mock
 import zlib
@@ -367,6 +369,74 @@ class BuiltPayloadTests(unittest.TestCase):
         claiming = {a["id"] for a in scene["assets"] if {"components", "castle_pieces", "rule"} & set(a)}
         self.assertLessEqual(claiming, built)
         self.assertLessEqual(built, {a["id"] for a in scene["assets"]})
+
+    def test_payload_carries_the_tree_kit_of_the_family_that_builds_one(self):
+        modules = [build_meshes.family_module(f) for f in world.scene()["families"]]
+        kits = [m.kit() for m in modules if m is not None and hasattr(m, "kit")]
+        found = world.kit()
+        if not kits:
+            self.assertIsNone(found)
+            return
+        self.assertEqual([v["name"] for v in found["variants"]], [v.name for v in kits[0]])
+        for built, v in zip(found["variants"], kits[0]):
+            with self.subTest(variant=v.name):
+                self.assertEqual([lv["tris"] for lv in built["levels"]], [len(m.idx) for m in v.levels])
+                self.assertAlmostEqual(built["crown_r"], v.crown_r, places=3)
+                self.assertAlmostEqual(built["height"], v.height, places=3)
+
+
+class TreeKitTests(unittest.TestCase):
+    """The tree kit (build_meshes.encode_kit): a family's variants ride its part into the payload, which places none of
+    them, and decode as they were built within their quantization."""
+    Level = collections.namedtuple("Level", "pos nrm attr idx uv")
+    Variant = collections.namedtuple("Variant", "name species conifer share crown_r height crown_base trunk_r levels")
+    COLOURS = {"oak": {"bark": (0.08, 0.07, 0.06), "bark_upper": (0.1, 0.09, 0.07), "foliage": (0.04, 0.08, 0.02),
+                       "autumn_share": 0.0}}
+    SCENE = {"families": ["trees"], "assets": [{"id": "forest-trees", "family": "trees", "status": "planned"}]}
+
+    def variants(self):
+        rng = np.random.default_rng(7)
+
+        def level(n, m):
+            nrm = rng.normal(size=(n, 3))
+            uv = rng.uniform(size=(n, 2)).astype(np.float32)
+            uv[0], uv[1] = (0.0, 0.0), (1.0, 1.0)            # a card's corners reach both ends of the UV range
+            return self.Level(rng.uniform((-3.0, -0.4, -3.0), (3.0, 12.0, 3.0), (n, 3)),
+                              nrm / np.linalg.norm(nrm, axis=1, keepdims=True), rng.integers(0, 256, (n, 2)).astype(np.uint8),
+                              rng.integers(0, n, (m, 3)).astype(np.uint32), uv)
+        return [self.Variant(f"oak-{k + 1}", "oak", False, 0.5, 3.0, 12.0, 4.0, 0.3, (level(60, 90), level(20, 24), level(8, 6)))
+                for k in range(2)]
+
+    def test_the_kit_round_trips_within_its_quantum(self):
+        variants = self.variants()
+        kit = build_meshes.decode_kit(json.loads(json.dumps(build_meshes.encode_kit(variants, self.COLOURS))))
+        self.assertEqual(kit["colours"], json.loads(json.dumps(self.COLOURS)))
+        for v, built in zip(variants, kit["variants"]):
+            self.assertEqual((built["name"], built["species"], built["conifer"], built["share"], built["crown_r"],
+                              built["height"], built["crown_base"], built["trunk_r"]), v[:8])
+            for m, lv in zip(v.levels, built["levels"]):
+                quantum = (np.array(lv["box"][3:]) - np.array(lv["box"][:3])) / 65535
+                self.assertTrue(np.all(np.abs(lv["pos"] - m.pos) <= quantum / 2 + 1e-9))
+                np.testing.assert_array_equal(lv["idx"], m.idx)
+                np.testing.assert_array_equal(lv["attr"], m.attr)
+                np.testing.assert_allclose(lv["uv"], m.uv, atol=0.5 / 65535 + 1e-7)
+                self.assertGreater((lv["nrm"] * m.nrm).sum(axis=1).min(), 0.995)
+
+    def test_a_familys_kit_rides_its_part_into_the_payload(self):
+        variants = self.variants()
+        module = types.SimpleNamespace(kit=lambda: variants, kit_colours=lambda: self.COLOURS)
+        local = {"nx": 40, "ny": 40, "aff": world.rotated_grid(40).aff.tolist()}
+        with mock.patch.object(build_meshes, "massing", return_value=({}, [], [])), \
+                mock.patch.object(build_meshes, "family_module", return_value=module):
+            part = json.loads(json.dumps(build_meshes.encode_part("trees", data={"meta": {"local": local}},
+                                                                  scene=self.SCENE)))
+        self.assertEqual(part["assets"], {})
+        payload = build_meshes.decode_payload(build_meshes.merge_parts([part], self.SCENE))
+        self.assertEqual(payload["chunks"], [])
+        self.assertEqual([v["name"] for v in payload["kit"]["variants"]], ["oak-1", "oak-2"])
+        np.testing.assert_array_equal(payload["kit"]["variants"][1]["levels"][2]["idx"], variants[1].levels[2].idx)
+        with self.assertRaises(ValueError):
+            build_meshes.merge_parts([part, {**part, "family": "other"}], {**self.SCENE, "families": ["trees", "other"]})
 
 
 class PayloadOracleTests(unittest.TestCase):

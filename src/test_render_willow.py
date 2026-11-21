@@ -122,6 +122,27 @@ class WillowRenderTests(RenderTestCase):
         ratio = crossings(bark["flared"][0]) / crossings(bark["upright"][0])
         self.assertTrue(0.8 < ratio < 1.25, f"the flare's furrows {1 / ratio:.2f} times the trunk's width")
 
+    async def test_parallel_limbs_show_different_bark(self):
+        # a limb's cells lie round its normal and along its code's direction, so two limbs of one code side by side
+        # repeat one pattern unless each is shifted by its own place: a root and the same root 0.8 m higher, each seen from
+        # the same place beside it, show different furrows
+        lying = next(aux for aux, axis in BARK_AXES.items() if abs(axis[2]) > 0.99)
+        x, z = LAWN[0] + 26.0, LAWN[1]
+        ground = await self.ground(x, z)
+        along = np.array(BARK_AXES[lying])
+        grids = []
+        # (the free camera keeps at least 1.5 m over the ground, so both roots sit higher than that, each level with it)
+        for rise in (1.6, 2.4):
+            mid = np.array([x + 1.6, ground + rise, z])
+            root = mesh_willow.tube(np.array([mid - 2.5 * along, mid + 2.5 * along]), np.array([0.36, 0.36]), (7, lying), 32)
+            await self.look((x, ground + rise, z), EAST, 0.0, 16.0, [root])
+            seen = await self.page.evaluate("__hog.probe(0, 0).pos")
+            self.assertAlmostEqual(seen[1], ground + rise, delta=0.01, msg="the camera was not level with the root")
+            grids.append(await self.wood([lying], (-1.0, 0.0, 0.0)))
+        both = np.isfinite(grids[0]) & np.isfinite(grids[1])
+        self.assertGreater(both.sum(), 3000, "too little of the roots is lit and facing the camera")
+        self.assertLess(float(np.corrcoef(grids[0][both], grids[1][both])[0, 1]), 0.5)
+
     @smoke
     async def test_willow_codes_shade_as_bark_knot_mouth_and_leaves(self):
         # without their own cases these codes fall through to the sails' pale canvas

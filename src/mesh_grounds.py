@@ -1264,18 +1264,24 @@ IVY_TO_M, IVY_STRAND_M, IVY_PITCH_M = 0.8, 0.3, 0.2
 IVY_SPREAD_M, IVY_ABOVE_M = 1.2, 3.0   # the ivy's reach beyond the opening either side, and above its crown
 TUCK_M, PROUD_M = 0.6, 0.3                        # the roof this far under the terrain along its normal, beyond the cut,
                                                   # and this far proud of it where the cut has only just set it back
-TUCK_DIP_M, TUCK_GAP_M = (0.5, 3.0), 0.3          # it comes out of the cliff, over TUCK_GAP_M more, where the cut has
-                                                  # set the cliff back by a depth wandering between these up the face
-                                                  # (the least on the cliff top, so the roof covers the cut's dip there),
-                                                  # so the line it comes out along wanders across the cut's 2 m ramp texel
-                                                  # as a rock edge does, not straight up the cut's side; the two cross
-                                                  # steeply there, not z-fighting
-FACE_TO_M = 6.0                                   # the roof's rows 0.2 m apart this far in, up the sheer face (0.5 m on
-                                                  # the cliff top beyond), so that line follows the face's height
-DIP_SLOPE, TUCK_SLOPE = 4.0, 10.0                 # the steepest slope the dip is measured across (steeper, the two
-                                                  # faces needn't be parallel) and the tuck goes down (an 84° face)
-TUCK_ROW_M = 0.2                                  # it comes out over a run of rows, never one alone: whether it's out is
-                                                  # the median of its row's and the rows either side's
+TUCK_DIP_M, TUCK_GAP_M = 0.5, 0.3                 # on the cliff top it comes out of the terrain, over TUCK_GAP_M more,
+                                                  # where the cut has set it back this far (so it covers the cut's dip)
+FACE_TO_M, FACE_ROW_M = 6.0, 0.1                  # the roof's rows this far apart this far in, up the sheer face (0.5 m on
+                                                  # the cliff top beyond), so the rib's sides follow the face's height
+TUCK_SLOPE = 10.0                                 # the steepest the tuck goes down (an 84° face)
+RIB_HALF_M = (5.0, 7.5)                           # up the sheer face, the roof stands out of the cliff as a rock rib
+                                                  # whose sides wander between these either side of the channel row by
+                                                  # row (about 2 m apart up the face): a ragged edge, not two straight
+                                                  # lines; its closed sides dive into the cliff, crossing it square
+RIB_CELL_M = (4.0, 1.5)                           # the heights over which its sides wander, coarse and fine
+
+
+def noise1(x):
+    """Value noise on [0, 1] along x: hashed values at the integers, eased between."""
+    i = np.floor(x)
+    f = x - i
+    h = lambda k: (np.sin(k * 12.9898 + 78.233) * 43758.5453) % 1.0
+    return h(i) + (h(i + 1) - h(i)) * f * f * (3 - 2 * f)
 
 
 def vault(w):
@@ -1318,33 +1324,39 @@ def harbour_frame(scene):
     g = lambda a, w: np.asarray(scene.ground(*np.moveaxis(at(a, w), -1, 0)), np.float64)
     whole = uncut(scene, rec)
 
-    def top(a, w):
+    def outline(a, s):
+        """How far either side (s = ±1) of the channel the roof reaches on row a: the shell's half-width on the cliff
+        top, a rib's ragged side up the sheer face."""
+        a = np.asarray(a, np.float64)
+        y = lambda d: sample(whole, scene.local, *np.moveaxis(at(a + d, 0.0 * a), -1, 0))
+        up, steep = y(0.0) - lake, np.clip(np.abs(y(0.25) - y(-0.25)) / 0.5 - 1.5, 0.0, 1.0)
+        rag = 0.6 * noise1(up / RIB_CELL_M[0] + 17.0 * s) + 0.4 * noise1(up / RIB_CELL_M[1] + 5.0 * s)
+        return SHELL_HALF_M + steep * (RIB_HALF_M[0] + (RIB_HALF_M[1] - RIB_HALF_M[0]) * rag - SHELL_HALF_M), steep
+
+    def top(a, w, out=None):
+        """The roof's height at local (a, w): proud of the cliff where the cut has set the cliff back (or on the rib,
+        within its outline up the face), tucked under it beyond; out (0 or 1) overrides which."""
         a, w = np.broadcast_arrays(np.asarray(a, np.float64), np.asarray(w, np.float64))
+        x, z = np.moveaxis(at(a, w), -1, 0)
         e = 0.25
 
-        def surfaces(a):
-            x, z = np.moveaxis(at(a, w), -1, 0)
-
-            def lifted(f):                                               # f and the length a metre along its normal
-                h = lambda dx, dz: f(x + dx, z + dz)                     # takes vertically (the gentler side's slope,
-                y = h(0, 0)                                              # so a brink's edge counts as level)
-                one = lambda fw, bw: np.minimum(np.abs(fw - y), np.abs(y - bw)) / e
-                return y, np.sqrt(1 + one(h(e, 0), h(-e, 0)) ** 2 + one(h(0, e), h(0, -e)) ** 2)
-            t, sw = lifted(lambda x, z: sample(whole, scene.local, x, z))
-            ground, sg = lifted(lambda x, z: np.asarray(scene.ground(x, z), np.float64))
-            sg = np.minimum(sg, TUCK_SLOPE)                              # (a kink's slope sets no roof metres deep)
-            dip = np.maximum(t - ground, 0.0) / np.minimum(np.minimum(sw, sg), DIP_SLOPE)  # how far in the cut has
-            up = t - lake                                                # set the cliff back
-            wander = 0.5 + 0.3 * np.sin(0.25 * up + 0.4 * a + 1.7 * np.sign(w)) + 0.2 * np.sin(0.6 * up + 0.8 * w + 4.1)
-            steep = np.clip(sw - 1.5, 0.0, 1.0)                          # (on the face only: the cliff top is covered)
-            k = np.clip((dip - TUCK_DIP_M[0] - (TUCK_DIP_M[1] - TUCK_DIP_M[0]) * wander * steep) / TUCK_GAP_M, 0, 1)
-            return t, sw, ground, sg, dip, k
-        t, sw, ground, sg, dip, k = surfaces(a)
-        k = np.median([k, surfaces(a - TUCK_ROW_M)[-1], surfaces(a + TUCK_ROW_M)[-1]], axis=0)  # no lone row out or in
+        def lifted(f):                                                   # f and the length a metre along its normal
+            h = lambda dx, dz: f(x + dx, z + dz)                         # takes vertically (the gentler side's slope,
+            y = h(0, 0)                                                  # so a brink's edge counts as level)
+            one = lambda fw, bw: np.minimum(np.abs(fw - y), np.abs(y - bw)) / e
+            return y, np.sqrt(1 + one(h(e, 0), h(-e, 0)) ** 2 + one(h(0, e), h(0, -e)) ** 2)
+        t, sw = lifted(lambda x, z: sample(whole, scene.local, x, z))
+        ground, sg = lifted(lambda x, z: np.asarray(scene.ground(x, z), np.float64))
+        sg = np.minimum(sg, TUCK_SLOPE)                                  # (a kink's slope sets no roof metres deep)
+        dip = np.maximum(t - ground, 0.0) / sw                           # how far in the cut has set the cliff back
+        k = np.clip((dip - TUCK_DIP_M) / TUCK_GAP_M, 0.0, 1.0)
         k = k * k * (3 - 2 * k)                                          # out of the cliff where the cut is deep enough
+        reach, steep = outline(a, np.where(w < 0, -1.0, 1.0))
+        k = np.maximum(k, (np.abs(w) <= reach + 1e-6) * steep) if out is None else np.full_like(k, out)  # the rib
         proud = t + (0.05 + (PROUD_M - 0.05) * np.exp(-dip)) * np.minimum(sw, TUCK_SLOPE)  # well proud where the
         t = ground - TUCK_M * sg + (proud - ground + TUCK_M * sg) * k    # cliff is near; tucked under it beyond
         return np.where(np.abs(w) < CHANNEL_HALF_M + 0.5, np.maximum(t, lake + vault(w) + 0.6), t)
+    top.outline = outline
     return m, u, side, at, g, top
 
 
@@ -1384,8 +1396,11 @@ def harbour(scene):
     m, u, side, at, g, top = harbour_frame(scene)
     a0, back, a1 = PORTAL_M, rec["depth"] - BACK_IN_M, rec["depth"] + ROOF_PAST_M
 
-    across = np.r_[np.arange(a0, FACE_TO_M, 0.2), np.linspace(FACE_TO_M, a1, int(math.ceil((a1 - FACE_TO_M) / 0.5)) + 1)]
-    A, W = np.meshgrid(across, np.linspace(-SHELL_HALF_M, SHELL_HALF_M, int(2 * SHELL_HALF_M / 0.5) + 1), indexing="ij")
+    across = np.r_[np.arange(a0, FACE_TO_M, FACE_ROW_M), np.linspace(FACE_TO_M, a1, int(math.ceil((a1 - FACE_TO_M) / 0.5)) + 1)]
+    S = np.linspace(-1.0, 1.0, int(2 * SHELL_HALF_M / 0.5) + 1)                  # across, to the outline either side
+    left, right = top.outline(across, -1.0)[0], top.outline(across, 1.0)[0]
+    A = np.repeat(across[:, None], len(S), axis=1)
+    W = np.where(S < 0, S * left[:, None], S * right[:, None])
     T = top(A, W)
 
     def sheet(Y, a, w):
@@ -1423,19 +1438,23 @@ def harbour(scene):
         w = s * CHANNEL_HALF_M
         quad = [(a0, floor, w), (back, floor, w), (back, lake + SPRING_M, w), (a0, lake + SPRING_M, w)]
         parts.append(toward(panel(quad, HARBOUR_ROCK), np.array([0.0, 0.0, -s])))
-        a = A[:, 0]                                                                # and the block's closed sides
-        sunk = np.minimum(g(a, s * SHELL_HALF_M + 0 * a) - 1.0, T[:, -1 if s > 0 else 0] - 0.5)   # under its tucked edge
-        tri = [[(a[i], sunk[i], s * SHELL_HALF_M), (a[i + 1], sunk[i + 1], s * SHELL_HALF_M),
-                (a[i + 1], T[i + 1, -1 if s > 0 else 0], s * SHELL_HALF_M)] for i in range(len(a) - 1)]
-        tri += [[(a[i], sunk[i], s * SHELL_HALF_M), (a[i + 1], T[i + 1, -1 if s > 0 else 0], s * SHELL_HALF_M),
-                 (a[i], T[i, -1 if s > 0 else 0], s * SHELL_HALF_M)] for i in range(len(a) - 1)]
+        a = A[:, 0]                                                                # and the block's closed sides,
+        col = -1 if s > 0 else 0                                                   # down from the outline into the
+        we = W[:, col]                                                             # cliff, under its tucked surface
+        sunk = np.minimum(np.minimum(g(a, we) - 1.0, top(a, we, out=0.0) - 0.3), T[:, col] - 0.5)
+        tri = [[(a[i], sunk[i], we[i]), (a[i + 1], sunk[i + 1], we[i + 1]),
+                (a[i + 1], T[i + 1, col], we[i + 1])] for i in range(len(a) - 1)]
+        tri += [[(a[i], sunk[i], we[i]), (a[i + 1], T[i + 1, col], we[i + 1]),
+                 (a[i], T[i, col], we[i])] for i in range(len(a) - 1)]
         parts.append(toward(faceted(np.array(tri), HARBOUR_ROCK), np.array([0.0, 0.0, s])))
     ws = np.linspace(-CHANNEL_HALF_M, CHANNEL_HALF_M, 17)                          # the closed back, under the vault
     parts.append(toward(panel([(back, floor, CHANNEL_HALF_M), (back, floor, -CHANNEL_HALF_M)]
                               + [(back, lake + float(vault(w)), w) for w in ws], HARBOUR_ROCK),
                         np.array([-1.0, 0.0, 0.0])))
     face = []                                                                      # the portal's face round the arch
-    wf = np.linspace(-SHELL_HALF_M, SHELL_HALF_M, int(2 * SHELL_HALF_M / 0.25) + 1)
+    n = int((SHELL_HALF_M - CHANNEL_HALF_M) / 0.25) + 1                            # (columns at the channel's edges)
+    wf = np.r_[np.linspace(-left[0], -CHANNEL_HALF_M, n)[:-1], np.linspace(-CHANNEL_HALF_M, CHANNEL_HALF_M, 19),
+               np.linspace(CHANNEL_HALF_M, right[0], n)[1:]]
     tf = top(np.full_like(wf, a0), wf)
     low = np.where(np.abs(wf) <= CHANNEL_HALF_M, lake + vault(wf), np.minimum(g(np.full_like(wf, a0), wf) - 1.0, floor))
     low = np.minimum(low, tf - 0.1)

@@ -1,6 +1,8 @@
 """Every program the page links compiles and links under Khronos glslang's OpenGL ES 3.00 rules, in both float-filtering
-variants (MANUAL_BILERP, for GPUs without OES_texture_float_linear): a CPU check that runs before any browser.
-shaders.py assembles the sources as the page does; test_render_core checks that the page compiles exactly those."""
+variants (MANUAL_BILERP, for GPUs without OES_texture_float_linear) and with mesh trees (the default) as well as without
+(?trees=raymarched): a CPU check that runs before any browser. shaders.py assembles the sources as the page does;
+test_render_core checks that the page compiles exactly those, and test_render_trees that the raymarched dial's page
+does."""
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 import re
@@ -44,8 +46,10 @@ class ShaderTests(unittest.TestCase):
 
     def test_every_program_compiles_and_links_in_both_filtering_variants(self):
         for float_linear in (True, False):
-            with self.subTest(float_linear=float_linear):
-                self.assertEqual(complaints(shaders.programs(shaders.cpu_defs(self.data, float_linear)), self.exe), {})
+            for trees in (False, True):
+                with self.subTest(float_linear=float_linear, trees=trees):
+                    programs = shaders.programs(shaders.cpu_defs(self.data, float_linear, trees))
+                    self.assertEqual(complaints(programs, self.exe), {})
 
     def test_the_check_rejects_a_broken_program(self):
         good = shaders.programs(shaders.cpu_defs(self.data))[0]

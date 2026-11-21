@@ -49,9 +49,10 @@ TREES_FROM_M, TREES_FULL_M = mesh_footprint.TREES_FROM_M, mesh_footprint.TREES_F
 RELIEF_FULL_M = 3.0      # frag1.glsl detailH: the micro-relief is whole from this far from a wall
 TEXEL_REACH_M = 2.0 * math.sqrt(2.0)    # common.TEXEL_REACH_M: a bilinear lookup reads texel centres a diagonal away
 # the assets the footprint layer leaves off on purpose: linear features (a strip cleared along them would read as a
-# cutout), the train and the ship, the Willow (a tree among trees) and the street furniture (in streets, where no tree
-# grows)
-UNMARKED = {"track", "train", "ship", "grounds-walls", "field-boundaries", "bridges", "willow", "street-furniture"}
+# cutout), the train and the ship, the Willow (a tree among trees), the Forest's trees (they stand where the layer lets
+# them) and the street furniture (in streets, where no tree grows)
+UNMARKED = {"track", "train", "ship", "grounds-walls", "field-boundaries", "bridges", "willow", "forest-trees",
+            "street-furniture"}
 QUANTIZED = 1.02         # the payload's 16-bit positions move a level's measured deviation by under 1% (measured 0.7%)
 STRUCTURE_M = 64.0       # the widest unit a family that builds its own levels makes: the village's widest building, 54 m
 LONG_THIN_M = (0.5, 0.25)   # a long thin part, found apart from mesh_thin: at least this long, at most this across

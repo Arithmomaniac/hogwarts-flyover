@@ -37,6 +37,10 @@ BEDS_GRADE = 0.15                                          # on ground no steepe
 SHORE_RISE_M = 0.35                                        # a low shore's level above the lake, from which its floor falls
 BEACH_GRADE = 0.25                                         # at this grade through the water's edge to the lake's depth
 SOURCE_M = 40.0                                            # a burn cut off by its map's edge narrows to nothing across this
+OUTFLOW_LINK_M = 8.0                                       # a map's streams joined to its lake across gaps narrower than
+                                                           # this are the lake's outflow (its ink stops short of roads)
+OUTFLOW_ROAD_M = (8.0, 4.0)                                # the outflow keeps its ink's width this near a road, widening
+                                                           # across the next: a bridge over it spans it as inked
 FORECOURT_SIDE_M = 2.0                                     # the main doors' forecourt reaches this far beyond their steps'
                                                            # sides, past the edge noise (frag4.glsl groundAlb's 1.2 m)
 
@@ -74,6 +78,26 @@ def cut_off(stream, source, res, reach=SOURCE_M):
     near = np.clip(1.0 - ndi.distance_transform_edt(~edge) * res / reach, 0.0, 1.0)
     half = np.maximum(-ndi.minimum_filter(stream, size=2 * int(round(reach / 4 / res)) + 1), 0.0)
     return (stream + half * near).astype(np.float32)
+
+
+def outflow_sd(sd, streams, lake, width, roads):
+    """`sd`, the signed distance (m) of a map's `streams`, with the lake's outflow among them, the pieces joined to the
+    lake across gaps narrower than OUTFLOW_LINK_M, widened by the difference between `width` (if given) and the median
+    width of their ink. It keeps its ink's width within OUTFLOW_ROAD_M[0] of the map's `roads`, widening across the
+    next OUTFLOW_ROAD_M[1], so a bridge carrying a road over it spans it as inked: widened up to the footbridge's path,
+    its ends there came in from 5 m off the path's centre to 2.4 m, and the bridge's faces with them, its parapets
+    broken and standing half their height above the path."""
+    if not width:
+        return sd
+    lab, _ = ndi.label(ndi.binary_dilation(streams | lake, structure=disk(round(OUTFLOW_LINK_M / 2 / PG))))
+    out = streams & (lab == lab[lake].max())
+    if not out.any():
+        return sd
+    inside = ndi.distance_transform_edt(out)
+    ink = np.median(inside[out & (inside == ndi.maximum_filter(inside, size=3))]) * PG - 0.5 * PG   # its half-width
+    keep, ease = OUTFLOW_ROAD_M
+    away = np.clip((ndi.distance_transform_edt(~roads) * PG - keep) / ease, 0.0, 1.0) if roads.any() else 1.0
+    return np.minimum(sd, sdf(out, PG) - (width / 2.0 - ink) * away)
 
 
 def sample(img, u, v, order=1, cval=0.0):
@@ -244,7 +268,16 @@ def main():
     wh = drop_small(ndi.binary_opening(wh, iterations=1), 80)
     sd_lake = sdf(lake_full, PG)
     lake_sd = np.where(inG, sample(sd_lake, gu, gv, cval=500), 500.0)
-    stream = np.where(useH, sample(sdf(wh, PG), hu, hv, cval=50), np.where(useG, sample(sdf(wg & ~lake_full, PG), gu, gv, cval=50), 50.0))
+    # where the site carves no watercourse inside the maps, their streams stand for its own, and the lake's outflow for
+    # its river, as wide as that is carved beyond them: inked as a thin line, and drawn as inked, 2 to 3 m wide, it read
+    # from afar as a dark thread
+    river_w = None if SITE["carve_in_maps"] else SITE["carve"]["river"]
+    sd_g, sd_h = sdf(wg & ~lake_full, PG), sample(sdf(wh, PG), hu, hv, cval=50)
+    out_g = outflow_sd(sd_g, wg & ~lake_full, lake_full, river_w, mg["earth"])
+    stream = np.where(useH, sd_h, np.where(useG, sample(out_g, gu, gv, cval=50), 50.0))
+    # the streams as inked, which their water and beds keep to through the steps below: given the drawn width, wet
+    # texels two abreast drew the water's edge stepped along their centres
+    ink = np.where(useH, sd_h, np.where(useG, sample(sd_g, gu, gv, cval=50), 50.0))
     # the site's real watercourses (OSM) through the frame, as texel lines in their downstream order with widths (m)
     osm = json.load(open(P("osm.json")))
     riv = Image.new("L", (NX, NY), 0); dr = ImageDraw.Draw(riv); lines = []
@@ -264,10 +297,13 @@ def main():
     if not SITE["carve_in_maps"]:       # inside White Hound's maps, the maps' own streams stand for the real ones
         river &= useF; river_sd = np.where(useF, river_sd, 50.0)
     stream = np.minimum(stream, river_sd)
+    ink = np.minimum(ink, river_sd)
     # the maps' burns that run off their edges with nothing beyond to carry them on rise or sink there: Hogsmeade's two
     # burns met at its map's edge in a broad slab that ended square in the meadow (renderer/streams)
     stream = cut_off(stream, np.where(useH, 1, np.where(useG, 2, 0)), RES)
+    ink = cut_off(ink, np.where(useH, 1, np.where(useG, 2, 0)), RES)     # narrowing from its own width, not the drawn
     stream = np.where(lake_sd < 3.0, 50.0, stream)
+    ink = np.where(lake_sd < 3.0, 50.0, ink)
 
     # ---------------- boundary wall, inside-grounds polygon ----------------
     chain = wall_chain_polygon(mg["wall"])
@@ -452,6 +488,7 @@ def main():
     if SITE["graded"]:          # where the castle's base buries the lake's outflow, it runs under the base, not over it
         buried = (F - F_open > 1.0) & (F > LAKE - 0.3)
         stream = np.where(buried, np.maximum(stream, 50.0), stream)
+        ink = np.where(buried, np.maximum(ink, 50.0), ink)
     # the maps' hatched plots (the vegetable patch, 5c) are beds throughout, but for the buildings and paths on them and
     # the banks the castle's base builds round its level ground, which are lawn, and run on across gaps narrower than
     # BEDS_GAP_M, such as over the outflow the castle's base buries: read texel by texel, the hatching's strokes and the
@@ -624,7 +661,7 @@ def main():
     if lost.any():
         raise RuntimeError(f"trees removed where no rule or recorded clearing accounts for them: {lost.sum() * RES * RES:.0f}"
                            f" m² round ({E[lost].mean():.0f}, {N[lost].mean():.0f})")
-    st_m = (stream < 0) & land & (lake_sd > 2.0)
+    st_m = (ink < 0) & land & (lake_sd > 2.0)
     Fst = ndi.grey_erosion(ndi.gaussian_filter(F, 2.0), size=5)
     if SITE["graded"]:      # the carved watercourses never rise along their course
         beside = ndi.binary_dilation(river, iterations=2)

@@ -51,6 +51,20 @@ class CoverageTests(unittest.TestCase):
             with self.subTest(object=o.id):
                 self.assertIn("a-new-street-decision", o.decisions)
 
+    def test_each_form_of_the_tree_kit_has_a_tree_with_the_forest_trees_decisions(self):
+        """A tree of each species and form the kit builds (its pines mature and young), which takes the Forest's trees'
+        decisions from the manifest as the lamps take the street furniture's: one a lane adds reaches every tree."""
+        world = copy.copy(self.world)
+        world.manifest = copy.deepcopy(self.world.manifest)
+        trees = next(a for a in world.manifest["assets"] if a["id"] == "forest-trees")
+        trees["decisions"] = [*trees["decisions"], "a-new-tree-decision"]
+        species = inventory.tree_objects(world)
+        self.assertEqual({o.id for o in species}, {"trees/scots-pine-mature", "trees/scots-pine-young", "trees/yew",
+                                                   "trees/oak", "trees/beech", "trees/birch"})
+        for o in species:
+            with self.subTest(object=o.id):
+                self.assertIn("a-new-tree-decision", o.decisions)
+
     def test_a_decision_only_the_dark_shows_is_covered_only_by_an_object_shot_after_dark(self):
         """village-night-windows rides on the village's houses, shot at 15:00 when no window is lit: the High Street
         at dusk covers it, and without that shot it is uncovered."""

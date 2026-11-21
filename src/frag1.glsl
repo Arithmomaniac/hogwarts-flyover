@@ -4,7 +4,7 @@ precision highp int;
 precision highp sampler2D;
 //__DEFINES__
 #define SDIV 4
-#ifdef SPLIT_P1
+#if defined(SPLIT_P1) || (defined(TREE_DRAW) && !defined(TREE_REFL)) || defined(TREE_MESH)
 layout(location = 0) out vec4 gOut0;
 layout(location = 1) out vec4 gOut1;
 layout(location = 2) out vec4 gOut2;
@@ -12,6 +12,10 @@ layout(location = 3) out vec4 gOut3;
 layout(location = 4) out vec4 gOut4;
 layout(location = 5) out vec4 gOut5;
 layout(location = 6) out vec4 gOut6;
+#elif defined(TINST_PASS)
+layout(location = 0) out vec4 iOut0;
+layout(location = 1) out vec4 iOut1;
+layout(location = 2) out vec4 iOut2;
 #else
 out vec4 outColor;
 #endif
@@ -83,6 +87,26 @@ uniform vec4 uTx[NTW];     // tower: roof type
 #define TMAX 46000.0
 #define VEGMAX 23.0
 #define TREE_FAR 2600.0
+#ifdef MESH_TREES
+// mesh trees (the default; ?trees=raymarched leaves MESH_TREES out): their own pass draws the tree table's trees, so
+// the primary march takes vegetation mode 3
+// (evalTop) where it took mode 1. Debug bit 1048576 brings the raymarched trees back (mode 1), the within-page A/B's
+// other arm. Trees stand in the table's cells (|x|, |z| < 5040 m), so an outside tree's crown (r <= 4.9 m, its centre
+// 1.75 m into its cell) comes no nearer than 5036.85 m: within TREE_EDGE the march needs none of them
+#define VM_TREES ((uDbg & 1048576) != 0 ? 1 : 3)
+#define TREE_EDGE 5036.0
+// the lake's mirror pass draws the table's trees too (template_c.html drawReflections): while it does (uTreeRefl), a
+// ray reflected off the main lake marches none of them within TREE_FAR of its path, and the sheet beyond (evalTop;
+// trace()'s r is the hit)
+uniform int uTreeRefl;
+#define VM_REFL (VM_TREES == 3 && uTreeRefl != 0 && abs(r.s.wy - LAKE) < 0.25 ? 3 : 2)
+uniform vec3 uTreeKit[24];     // the kit's species colours (linear): bark, upper bark and leaves, species by species; shade()
+                               // takes the bark's, the leaves taking the drawn crowns' colours
+uniform vec2 uTreeFar;         // a mesh tree's bark turns to the drawn crowns' (shade()) between these distances (m)
+#else
+#define VM_TREES 1
+#define VM_REFL 2
+#endif
 #define PI 3.14159265
 
 // ------------------------------------------------------------------ hashing / noise

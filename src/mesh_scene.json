@@ -2878,9 +2878,85 @@
           "note": "integration found that the walls and attic alone cast no shadow for the kirkyard's wall, the blind or the fence: seen from above, they left the kirkyard's wall (56 m²), the blind (9 m²), the fence (4.5 m²) and the gardens' walls (up to 3.6 m² each) farther than 0.75 m from the caster; with them, no patch of more than 0.3 m²"
         }
       ]
+    },
+    "trees-species": {
+      "text": "The Forest's trees are Scots pines, mature (as in the swathe of pines between the station and the lake) and young (as in Grawp's stand of small pines); yews; oaks; and beeches, with birches as a third, lesser broadleaf (trees-birch).",
+      "basis": [
+        {"source": "wh-forest", "quote": "most areas of the Forest are primarily deciduous"},
+        {"source": "wh-forest", "quote": "except for the swathe of pine trees between the station and the lake"},
+        {
+          "source": "wh-forest",
+          "quote": "The wood at this point is apparently deciduous (the beech tree certainly is) and very dense."
+        },
+        {"source": "wh-forest", "quote": "they encounter oak trees and a carpet of fallen leaves (not needles)"},
+        {"source": "wh-forest", "quote": "we get our first glimpse of conifers, in the form of two elderly yews"},
+        {"source": "wh-forest", "quote": "to come to an area of small pine trees"}
+      ]
+    },
+    "trees-birch": {
+      "text": "Birches, the commonest broadleaf of the site's Highland woods, are a fifth of the broadleaves. White Hound names oaks and beeches, and remarks that the books never mention birch; the site fills that gap.",
+      "basis": [
+        {
+          "source": "wh-forest",
+          "quote": "even where deciduous woods occur they are primarily silver birch: one type of deciduous tree which has never been mentioned in relation to Hogwarts"
+        },
+        {"source": "wh-location", "quote": "Deciduous ones are usually heavily biased towards birch, alder and ash."},
+        {
+          "source": "user",
+          "note": "a landscape choice that contradicts no quoted book evidence: the books name no tree against it, so under the user's rule this departure from White Hound's conclusion needs no decision"
+        }
+      ],
+      "inferred": true
+    },
+    "trees-form": {
+      "text": "The trees are well grown and dark. Their trunks show under crowns that part unevenly, so light comes through them; a mature pine's crown is high and flat-topped on a bare stem, while the yews and the young pines keep their leaves almost to the ground.",
+      "basis": [
+        {
+          "source": "wh-forest",
+          "quote": "Its trees where it meets the Hogwarts grounds are mostly well-grown and dark"
+        },
+        {
+          "source": "wh-forest",
+          "quote": "Towards the edge, however, they are wider-set, so that there is a visible difference in the amount of light getting through them"
+        },
+        {"source": "wh-forest", "quote": "yews do grow quite close to the ground"}
+      ],
+      "inferred": true
+    },
+    "trees-in-leaf": {
+      "text": "Every tree is in leaf, as the scene is; no broadleaf has turned.",
+      "basis": [{"source": "wh-location", "quote": "we see that trees come into leaf very early at Hogwarts"}]
+    },
+    "trees-colours": {
+      "text": "Each species' colours are the linear albedo of its sunlit summer bark and leaves: dark greens, darkest on the yews; a pine's stem turning orange-red, and a birch's white above its dark foot.",
+      "basis": [
+        {
+          "source": "wh-forest",
+          "quote": "Its trees where it meets the Hogwarts grounds are mostly well-grown and dark"
+        }
+      ],
+      "inferred": true
+    },
+    "trees-generator": {
+      "text": "A seeded build-time generator (src/mesh_trees.py) builds two or three variants of each species, each at three levels of detail within the renderer's budgets, with its crown radius and height recorded. It places none: the renderer fits a variant to each of the Forest's placements, so every clearance holds.",
+      "basis": [
+        {
+          "source": "user",
+          "note": "user's suggestion: a higher order helper for generating and placing trees, each of them a mesh"
+        }
+      ]
+    },
+    "trees-reach": {
+      "text": "The page draws the Forest's trees as meshes by default, each where the raymarched tree stood: its species variant to 70 m from the camera (200 m for a tree that stands apart, with at most 12 others within 25 m, as on a lawn), its drawn crown beyond to 2.6 km, and the raymarched trees' canopy sheet farther. ?trees=raymarched keeps the raymarched trees for comparison.",
+      "basis": [
+        {
+          "source": "user",
+          "note": "chose the mesh trees as the page's default from the review sheets and frame times; this changes how scope-exterior's ordinary trees are drawn, not where they stand"
+        }
+      ]
     }
   },
-  "families": ["castle", "greenhouses", "transport", "village", "grounds", "willow"],
+  "families": ["castle", "greenhouses", "transport", "village", "grounds", "willow", "trees"],
   "assets": [
     {
       "id": "castle",
@@ -4568,6 +4644,38 @@
         "high-street-footway",
         "village-high-street",
         "village-ancillary"
+      ]
+    },
+    {
+      "id": "forest-trees",
+      "family": "trees",
+      "title": "The Forest's trees",
+      "status": "planned",
+      "sources": [
+        {"source": "wh-forest", "quote": "most areas of the Forest are primarily deciduous"},
+        {"source": "wh-forest", "quote": "except for the swathe of pine trees between the station and the lake"},
+        {
+          "source": "wh-forest",
+          "quote": "Its trees where it meets the Hogwarts grounds are mostly well-grown and dark"
+        }
+      ],
+      "parts": [
+        "Scots pines, mature and young",
+        "yews",
+        "oaks",
+        "beeches",
+        "birches",
+        "three levels of detail per variant"
+      ],
+      "materials": ["each species' bark, turning up the stem on pines and birches", "each species' leaves"],
+      "decisions": [
+        "trees-species",
+        "trees-birch",
+        "trees-form",
+        "trees-in-leaf",
+        "trees-colours",
+        "trees-generator",
+        "trees-reach"
       ]
     }
   ],

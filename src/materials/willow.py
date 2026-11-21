@@ -59,6 +59,12 @@ WALL_TWIST = (1.2, 2.5)
 # the axis, which changes up a wall that leans round the trunk, moves them only WALL_SPREAD cells a radian, so the
 # leaning walls' cells stay long. (The bearing is atan's, which jumps behind the trunk, where no wood faces side-on)
 WALL_SPREAD = 0.15
+# where the wood slopes (|n.y| over WALL_SLOPE), the walls' furrows follow the slope round the arch and the trunk's run out
+# from its axis, so their crossfade would be a net: there it narrows WALL_SHARP times, to a seam
+WALL_SLOPE, WALL_SHARP = (0.1, 0.3), 8.0
+# every other piece of wood shifts its cells LIMB_SHIFT cells a metre of its own place across its code's direction, so
+# limbs side by side along one code (their normals and their lengths alike) don't show the same cells
+LIMB_SHIFT = 1.5
 # where two cell spaces crossfade, each one's borders show where it is nearer than the other by MERGE times its share
 MERGE = 0.6
 RIDGE_E, RIDGE_W = 0.06, 0.12           # the ridge's crest each side of the border, and its flank down into the furrow, in cells
@@ -100,11 +106,14 @@ BARK_P3 = (" {                             // the Willow's bark: long ridges in 
            f"          if (k == 120) {{ float th = atan(o.z, o.x), hy = q.y - LAKE - {_Y0!r}; wb = 1.{_WOBBLE}; wt = 0.{_WOBBLE_T}; wy = 0.{_WOBBLE_Y}; }}\n"
            "          // along the wood from the trunk's base, so the pattern keeps its place on the wood at any datum\n"
            f"          vec3 sj = vec3(R * wb * dot(o, e1), dot(q - vec3({_X0!r}, LAKE + {_Y0!r}, {_Z0!r}), d) * {STRETCH!r}, R * wb * dot(o, e2)) * {CELL_PER_M!r};\n"
+           "          // every other piece of wood shifted by its own place across its code's direction\n"
+           f"          if (k != 120) {{ vec3 b = q - vec3({_X0!r}, LAKE + {_Y0!r}, {_Z0!r}); sj.xz += {LIMB_SHIFT!r} * vec2(dot(b, e1), dot(b, e2)); }}\n"
            f"          vec3 sw = vec3(rho * {CELL_PER_M!r}, sj.y, atan(o.z, o.x) * {WALL_SPREAD!r});   // the hollow's walls' cells\n"
            "          if (j == 0) {\n"
            "            S = sj; Sw = sw; a = o; W = vec3(wb, wt, wy);\n"
            "            if (k == 120) {                                // the trunk's rungs, and its walls' share\n"
            f"              float tw = abs(dot(n, vec3(o.z, 0., -o.x))) / max(abs(dot(n, o)), 1e-3), ww = smoothstep({WALL_TWIST[0]!r}, {WALL_TWIST[1]!r}, tw);\n"
+           f"              ww = clamp((ww - 0.5) * (1. + {WALL_SHARP!r} * smoothstep({WALL_SLOPE[0]!r}, {WALL_SLOPE[1]!r}, abs(n.y))) + 0.5, 0., 1.);\n"
            f"              float L = clamp(log(max(rho / {GIRTH_M!r}, 1.)) / {math.log(RUNG)!r}, 0., {float(RUNGS)!r}), ri = min(floor(L), {RUNGS - 1.0!r});\n"
            f"              float fb = smoothstep({RUNG_BAND[0]!r}, {RUNG_BAND[1]!r}, L - ri);\n"
            f"              lw = vec3((1. - fb) * (1. - ww), fb * (1. - ww), ww); sc = vec2(pow({RUNG!r}, ri), pow({RUNG!r}, ri + 1.));\n"

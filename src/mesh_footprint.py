@@ -10,7 +10,8 @@ POLICY says how each manifest asset marks the ground:
   ENCLOSURE  its convex hull: a fenced garden encloses its ground, whatever stands in it (the hut garden's hull keeps
              within 1.6 m of White Hound's traced outline, inside the clearing its fence makes anyway);
   None       nothing: the linear features (walls, hedges, the track, bridges), the train and the ship, the Willow (a
-             tree among trees) and the street furniture (posts and lamps in the streets, which have no trees).
+             tree among trees), the Forest's trees (they stand where the layer lets them) and the street furniture
+             (posts and lamps in the streets, which have no trees).
 
 Silhouettes are rasterized at FINE cells per texel (0.5 m), and each texel holds the least distance over its own cell
 rather than the distance at its centre. The page's bilinear lookup then reads below the tree line (0.5 m) at every point
@@ -34,7 +35,7 @@ POLICY = {
     "station": BUILT, "track": None, "train": None, "ship": None,
     "hut": BUILT, "hut-garden": ENCLOSURE, "pitch": BUILT, "gates": BUILT, "grounds-walls": None,
     "field-boundaries": None, "tomb": BUILT, "harbour-mouth": BUILT, "bridges": None,
-    "willow": None,
+    "willow": None, "forest-trees": None,
     "dervish-and-banges": BUILT, "gladrags": BUILT, "three-broomsticks": BUILT, "zonkos": BUILT,
     "post-office": BUILT, "hogs-head": BUILT, "scrivenshafts": BUILT, "honeydukes": BUILT, "puddifoots": BUILT,
     "kirk": BUILT, "school": BUILT, "distillery": BUILT, "village-hall": BUILT, "carriage-hangar": BUILT,

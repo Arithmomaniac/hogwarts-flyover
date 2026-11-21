@@ -22,6 +22,7 @@ sys.path.insert(0, str(ROOT / "src"))
 sys.path.insert(1, str(ROOT))
 
 import assets_testing as at  # noqa: E402
+import mesh_trees  # noqa: E402
 from pagetest import PAGE, PageTestCase  # noqa: E402
 from tools.manifest.families.village import SHOPS  # noqa: E402
 from tools.review import tour  # noqa: E402
@@ -203,6 +204,8 @@ class TourFramingTests(PageTestCase):
         _, positions = await self.page.evaluate(tour.TRACK, tour.STEP_S)
         p = np.asarray(positions, float)
         for asset in at.scene()["assets"]:
+            if asset["family"] == mesh_trees.FAMILY:     # the tree kit places nothing: its trees are the tree table's
+                continue
             corners = at.payload_part(asset["id"])[0].reshape(-1, 3)
             lo, hi = corners.min(0), corners.max(0)
             if max(hi[0] - lo[0], hi[2] - lo[2]) > SPREAD_M:

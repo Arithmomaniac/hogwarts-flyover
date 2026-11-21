@@ -13,6 +13,9 @@
   const floatBlend = !!gl.getExtension("EXT_float_blend");   // blending into 32-bit floats: the lake's mirrored small lights
   gl.pixelStorei(gl.UNPACK_ALIGNMENT, 1);
   const TREE_N = 1440;               // 3D-tree table: one texel per 7 m tree cell, cells -720..719 (+-5 km round the castle)
+  // mesh trees (the default; ?trees=raymarched marches them instead, for comparison): the table's trees drawn by their
+  // own pass rather than raymarched
+  const TREES_ON = Q.get("trees") !== "raymarched";
   const CONE_ROWS = 2048 - TREE_N;   // band below the tree table: cone start per 8x8 block (columns < CG[0].c), max-height grid beyond
   // conservative max-height grid levels for the cone pre-pass: first column in the band, origin (m), cell size (m), cells per side
   const CG = [{ c: 240, o: -5120, s: 20, n: 512 }, { c: 752, o: -36480, s: 160, n: 456 }, { c: 1208, o: -36480, s: 1280, n: 57 }];
@@ -193,6 +196,7 @@ vec3 lampGlow(int mat, float aux) {
   //__LAMP_CODES__
   [["CG_FINE", CG[0]], ["CG_MID", CG[1]], ["CG_FAR", CG[2]]].forEach(([k, g]) => { defs[k] = `vec4(${fl(g.c)},${fl(g.o)},${fl(g.s)},${fl(g.n)})`; });
   if (!fLin) defs.MANUAL_BILERP = "1";
+  if (TREES_ON) defs.MESH_TREES = "1";
   const fragSrc = $("fragSrc").textContent.replace("//__DEFINES__", Object.entries(defs).map(([k, v]) => `#define ${k} ${v}`).join("\n"))
     .replace("//__LAMPS__", lampGlsl);
   const vsSrc = "#version 300 es\nvoid main(){ vec2 p = vec2(float((gl_VertexID << 1) & 2), float(gl_VertexID & 2)); gl_Position = vec4(p * 2.0 - 1.0, 0.0, 1.0); }";
@@ -507,6 +511,104 @@ void main() {
       program(glassFs, meshVs), program(meshDistFs, meshVs), program(lakeFs), program(lightFs, lightVs)].map(linked));
   }
   catch (e) { window.__hog = { error: String(e.message || e) }; return fail("Mesh shader failed to compile:\n" + (e.message || e)); }
+  // mesh trees (TREES_ON): each tree an instanced screen quad, the screen box of its sheared bounding box, within which
+  // frag5.glsl's TREE_DRAW ray casts the crown and trunk treeSD would march. It draws into the depth pre-pass and the
+  // G-buffer pass as the meshes do. The instances are the instance pass's (TINST_PASS), read back after each tree pass;
+  // the ground under each is placed as the march sees it from the camera (frag1.glsl detailH: its fade, its near octave).
+  // Where the payload's kit stands its meshes in (uMeshBand: from x in, dithered out to y; y 0: nowhere; uSparseBand for
+  // a tree that stands apart, aS), a quad draws only its share of the tree, the rest its mesh's (TREE_MESH)
+  const treeVs = `#version 300 es
+precision highp float; precision highp int;
+layout(location = 0) in vec4 aA;      // centre x, z, crown radius, height
+layout(location = 1) in vec4 aB;      // bed, the relief from 700 m out, its near octave, hue (+2: conifer)
+layout(location = 2) in vec4 aC;      // the bed's slope (x, z), the relief's slope (x, z)
+layout(location = 3) in float aS;     // 1: the tree stands apart (treesApart)
+uniform vec3 uCamPos; uniform mat3 uCamRot; uniform float uTanHalf; uniform vec2 uRes, uJitter, uMeshBand, uSparseBand; uniform int uDbg;
+flat out vec4 vA; flat out vec4 vB; flat out float vF;
+void main() {
+  float t = distance(uCamPos, vec3(aA.x, aB.x, aA.y)), f = 1. - smoothstep(2200., 3200., t);
+  float base = aB.x + (aB.y + (t < 700. ? aB.z : 0.)) * f;
+  vec2 g = aC.xy + aC.zw * f;
+  vA = aA; vB = vec4(base, g, aB.w);
+  vec2 band = aS > 0.5 ? uSparseBand : uMeshBand;
+  vF = band.y > 0. ? clamp((t - band.x) / (band.y - band.x), 0., 1.) : 1.;
+  vec3 c[8];
+  for (int k = 0; k < 8; k++) {                     // the box's corners, sheared with the ground as the tree is
+    vec2 q = vec2((k & 1) != 0 ? aA.z : -aA.z, (k & 2) != 0 ? aA.z : -aA.z);
+    vec3 v = transpose(uCamRot) * (vec3(aA.x + q.x, base + dot(g, q) + ((k & 4) != 0 ? aA.w : -0.5), aA.y + q.y) - uCamPos);
+    c[k] = v;
+  }
+  // its screen box: of its corners beyond a plane 3 cm before the camera and of where its edges cross that plane, so
+  // that a box across the plane covers what lies beyond it, and a tree beside the camera, off the view, nothing (were
+  // that the whole view, a forest's trees beside the camera would ray cast it all). The ray cast keeps no hit nearer
+  // than 5 cm along its ray (frag5.glsl TREE_DRAW), 3.6 cm deep at the view's corners
+  vec2 lo = vec2(1e30), hi = vec2(-1e30), sc = vec2(uRes.y / uRes.x, 1.);
+  for (int k = 0; k < 8; k++) {
+    vec3 v = c[k];
+    if (v.z >= 0.03) { vec2 s = v.xy / (max(v.z, 1e-3) * uTanHalf) * sc; lo = min(lo, s); hi = max(hi, s); }
+    for (int e = 1; e < 8; e *= 2) {                // each edge once, from its corner without the bit
+      vec3 w = c[k | e];
+      if ((k & e) == 0 && (v.z - 0.03) * (w.z - 0.03) < 0.) {
+        vec2 s = mix(v.xy, w.xy, (0.03 - v.z) / (w.z - v.z)) / (0.03 * uTanHalf) * sc;
+        lo = min(lo, s); hi = max(hi, s);
+      }
+    }
+  }
+  // to window coordinates as meshVs projects (its jitter), widened by a pixel; nothing when no part lies beyond the
+  // plane. The drawn crowns reach TREE_FAR, where the march's canopy sheet takes over (frag3.glsl evalTop); debug bit
+  // 2097152: to the table's edge
+  vec2 j = 2. * uJitter / uRes, px = 2. / uRes;
+  lo = max(lo - j - px, -1.); hi = min(hi - j + px, 1.);
+  bool off = vF <= 0. || any(greaterThan(lo, hi)) || ((uDbg & 2097152) == 0 && t - aA.z - aA.w - 10. > ${defOf("TREE_FAR")});
+  gl_Position = off ? vec4(2., 2., 2., 1.) : vec4((gl_VertexID & 1) != 0 ? hi.x : lo.x, (gl_VertexID & 2) != 0 ? hi.y : lo.y, 0., 1.);
+}`;
+  // the lake's mirror (template_c.html drawReflections): each tree's box mirrored about the lake, every tree drawn whole
+  const treeReflVs = treeVs.replace("vec3 v = transpose(uCamRot) * (vec3(aA.x + q.x, base + dot(g, q) + ((k & 4) != 0 ? aA.w : -0.5), aA.y + q.y) - uCamPos);",
+    `vec3 w = vec3(aA.x + q.x, base + dot(g, q) + ((k & 4) != 0 ? aA.w : -0.5), aA.y + q.y), v = transpose(uCamRot) * (vec3(w.x, 2. * ${defs.LAKE} - w.y, w.z) - uCamPos);`);
+  // the kit's species (a payload with a kit): each near tree a variant (template_c.html treeMeshFrame), turned about its
+  // axis and fitted to its crown radius and height, standing upright on the ground the drawn crown stands on
+  const treeMeshVs = `#version 300 es
+precision highp float; precision highp int;
+invariant gl_Position;                 // the depth pre-pass and the G-buffer pass must rasterise identical depths
+layout(location = 0) in vec3 aPos;     // u16 within the level's box
+layout(location = 1) in vec2 aOct;     // octahedral normal, i8
+layout(location = 2) in uvec2 aAttr;   // part (0 bark, 1 solid leaves, 2 a leaf card), aux
+layout(location = 3) in vec2 aUV;      // a leaf card's corner, u16 over [0, 1]
+layout(location = 4) in vec4 aA;       // the tree (treeVs): centre x, z, crown radius, height
+layout(location = 5) in vec4 aB;       // bed, the relief from 700 m out, its near octave, hue (+2: conifer)
+layout(location = 6) in vec4 aC;       // the bed's slope (x, z), the relief's slope (x, z)
+layout(location = 7) in vec4 aD;       // the farther level's share where two hand over, this level the farther (1), its turn
+uniform vec3 uLo, uHi, uCamPos; uniform mat3 uCamRot; uniform float uTanHalf; uniform vec2 uRes, uJitter;
+uniform vec4 uFit;                     // the variant's crown radius and height, its species, unused
+out vec3 vP; out vec3 vN; out vec2 vUV; out float vAux; out float vGy;
+flat out uint vPart; flat out vec4 vA; flat out vec4 vB; flat out vec4 vI;
+void main() {
+  float t = distance(uCamPos, vec3(aA.x, aB.x, aA.y)), f = 1. - smoothstep(2200., 3200., t);
+  float base = aB.x + (aB.y + (t < 700. ? aB.z : 0.)) * f;
+  vec2 g = aC.xy + aC.zw * f, k = vec2(aA.z / uFit.x, aA.w / uFit.y);
+  mat2 turn = mat2(cos(aD.z), sin(aD.z), -sin(aD.z), cos(aD.z));
+  vec3 q = uLo + aPos * (uHi - uLo);
+  vec2 xz = turn * q.xz * k.x;
+  vec3 p = vec3(aA.x + xz.x, base + q.y * k.y, aA.y + xz.y);
+  vec3 n = vec3(aOct, 1. - abs(aOct.x) - abs(aOct.y));
+  if (n.z < 0.) n.xy = (1. - abs(n.yx)) * vec2(n.x >= 0. ? 1. : -1., n.y >= 0. ? 1. : -1.);
+  n.xz = turn * n.xz;
+  vec3 v = transpose(uCamRot) * (p - uCamPos);
+  gl_Position = vec4(v.x * uRes.y / (uRes.x * uTanHalf) - 2. * uJitter.x / uRes.x * v.z, v.y / uTanHalf - 2. * uJitter.y / uRes.y * v.z,
+                     (v.z * ${fl((MESH_FAR + MESH_NEAR) / (MESH_FAR - MESH_NEAR))} - ${fl(2 * MESH_FAR * MESH_NEAR / (MESH_FAR - MESH_NEAR))}), v.z);
+  vP = p; vN = n / vec3(k.x, k.y, k.x); vUV = aUV; vAux = float(aAttr.y) / 255.; vGy = base + dot(g, xz);
+  vPart = aAttr.x; vA = aA; vB = vec4(base, g, aB.w); vI = vec4(uFit.z, aD.xy, 0.);
+}`;
+  let tinstP = null, treeDrawP = null, treeMeshP = null, treeReflP = null;
+  if (TREES_ON) {
+    try {
+      [tinstP, treeDrawP, treeMeshP, treeReflP] = await Promise.all([program(fragSrc.replace("#version 300 es", "#version 300 es\n#define TINST_PASS 1")),
+        program(fragSrc.replace("#version 300 es", "#version 300 es\n#define TREE_DRAW 1").replace("//__TREE_DEPTH__", depthOf), treeVs),
+        program(fragSrc.replace("#version 300 es", "#version 300 es\n#define TREE_MESH 1"), treeMeshVs),
+        program(fragSrc.replace("#version 300 es", "#version 300 es\n#define TREE_DRAW 1\n#define TREE_REFL 1").replace("//__TREE_DEPTH__", depthOf), treeReflVs)].map(linked));
+    }
+    catch (e) { window.__hog = { error: String(e.message || e) }; return fail("Tree shader failed to compile:\n" + (e.message || e)); }
+  }
   // mesh sun shadows: one depth layer per footprint (layer 0 every caster, then the payload's finer regions), cached
   // per sun direction and payload; every caster over a footprint is drawn, never only what the camera sees
   const SH_RES = 2048, SH_LAYERS = +defs.MESH_SH_LAYERS, SH_UNIT = 30, MESH_T_UNIT = 19;
@@ -639,6 +741,166 @@ void main() {
     gl.drawArrays(gl.TRIANGLES, 0, 3);
     gl.bindFramebuffer(gl.FRAMEBUFFER, null);
     treeGen++;
+    if (TREES_ON) treeInstances();
+  }
+  // mesh trees: the instance pass's trees, read back TREE_STRIP table rows at a time and kept as instances (12 floats:
+  // the pass's three outputs) sorted by TREE_TILE-cell tile, which the view culls whole. Each tile's box bounds its trees
+  // wherever the vertex shader puts them: the relief at any distance, and the ground's slope across the crown. A tree
+  // with TREE_SPARSE_N or fewer others within TREE_SPARSE_R m stands apart, as a lawn's or a glade's trees do (the
+  // forest's have 31, the median): its species reach farther with the sparse dial on (template_c.html TREE_LOD_SPARSE)
+  const TREE_TILE = 120, TREE_STRIP = 240, TREE_NT = Math.ceil(TREE_N / TREE_TILE), TREE_SPARSE_R = 25, TREE_SPARSE_N = 12;
+  let treeInst = null;
+  if (TREES_ON) setStatic(tinstP);
+  function treeInstances() {
+    const t0 = performance.now(), W = TREE_N, S = TREE_STRIP;
+    if (!gl.getExtension("EXT_color_buffer_float")) throw new Error("mesh trees need float render targets");
+    const tex = [0, 1, 2].map(() => mkTex(W, S, gl.RGBA32F, gl.RGBA, gl.FLOAT, null, gl.NEAREST)), fb = gl.createFramebuffer();
+    gl.bindFramebuffer(gl.FRAMEBUFFER, fb);
+    tex.forEach((x, k) => gl.framebufferTexture2D(gl.FRAMEBUFFER, gl.COLOR_ATTACHMENT0 + k, gl.TEXTURE_2D, x, 0));
+    gl.drawBuffers([gl.COLOR_ATTACHMENT0, gl.COLOR_ATTACHMENT1, gl.COLOR_ATTACHMENT2]);
+    if (gl.checkFramebufferStatus(gl.FRAMEBUFFER) !== gl.FRAMEBUFFER_COMPLETE) throw new Error("TREE_INSTANCES_INCOMPLETE");
+    gl.useProgram(tinstP); gl.viewport(0, 0, W, S);
+    const uRow0 = gl.getUniformLocation(tinstP, "uRow0"), rows = tex.map(() => new Float32Array(4 * W * S));
+    let n = 0, inst = new Float32Array(12 << 16), tile = new Uint16Array(1 << 16);
+    for (let y0 = 0; y0 < TREE_N; y0 += S) {
+      gl.uniform1i(uRow0, y0);
+      gl.drawArrays(gl.TRIANGLES, 0, 3);
+      rows.forEach((a, k) => { gl.readBuffer(gl.COLOR_ATTACHMENT0 + k); gl.readPixels(0, 0, W, S, gl.RGBA, gl.FLOAT, a); });
+      for (let i = 0; i < W * S; i++) {
+        if (!(rows[0][4 * i + 2] > 0)) continue;
+        if (n === tile.length) {
+          const a = new Float32Array(2 * inst.length), b = new Uint16Array(2 * tile.length);
+          a.set(inst); b.set(tile); inst = a; tile = b;
+        }
+        for (let k = 0; k < 12; k++) inst[12 * n + k] = rows[k >> 2][4 * i + (k & 3)];
+        tile[n++] = Math.floor((y0 + Math.floor(i / W)) / TREE_TILE) * TREE_NT + Math.floor((i % W) / TREE_TILE);
+      }
+    }
+    gl.readBuffer(gl.COLOR_ATTACHMENT0);
+    gl.bindFramebuffer(gl.FRAMEBUFFER, null); gl.deleteFramebuffer(fb); tex.forEach((x) => gl.deleteTexture(x));
+    const NT = TREE_NT * TREE_NT, at = new Uint32Array(NT + 1);
+    for (let i = 0; i < n; i++) at[tile[i] + 1]++;
+    for (let k = 0; k < NT; k++) at[k + 1] += at[k];
+    const first = at.slice(0, NT), data = new Float32Array(12 * n);
+    const lo = new Float32Array(3 * NT).fill(Infinity), hi = new Float32Array(3 * NT).fill(-Infinity);
+    for (let i = 0; i < n; i++) {
+      const k = tile[i], d = 12 * at[k]++, s = 12 * i;
+      for (let j = 0; j < 12; j++) data[d + j] = inst[s + j];
+      const x = inst[s], z = inst[s + 1], r = inst[s + 2], H = inst[s + 3], bed = inst[s + 4];
+      const dy = Math.abs(inst[s + 5]) + Math.abs(inst[s + 6]) + 1.5 * r * (Math.hypot(inst[s + 8], inst[s + 9]) + Math.hypot(inst[s + 10], inst[s + 11]));
+      const a = [x - r, bed - dy - 0.5, z - r], b = [x + r, bed + dy + H, z + r];
+      for (let c = 0; c < 3; c++) { lo[3 * k + c] = Math.min(lo[3 * k + c], a[c]); hi[3 * k + c] = Math.max(hi[3 * k + c], b[c]); }
+    }
+    const tiles = [];
+    for (let k = 0; k < NT; k++) {
+      if (at[k] > first[k]) tiles.push({ first: first[k], count: at[k] - first[k], lo: Array.from(lo.subarray(3 * k, 3 * k + 3)), hi: Array.from(hi.subarray(3 * k, 3 * k + 3)) });
+    }
+    if (treeInst) { gl.deleteBuffer(treeInst.buf); gl.deleteBuffer(treeInst.sbuf); gl.deleteVertexArray(treeInst.vao); }
+    const sparse = treesApart(data, n), buf = gl.createBuffer(), sbuf = gl.createBuffer(), vao = gl.createVertexArray();
+    gl.bindVertexArray(vao); gl.bindBuffer(gl.ARRAY_BUFFER, buf); gl.bufferData(gl.ARRAY_BUFFER, data, gl.STATIC_DRAW);
+    for (let k = 0; k < 3; k++) { gl.enableVertexAttribArray(k); gl.vertexAttribPointer(k, 4, gl.FLOAT, false, 48, 16 * k); gl.vertexAttribDivisor(k, 1); }
+    gl.bindBuffer(gl.ARRAY_BUFFER, sbuf); gl.bufferData(gl.ARRAY_BUFFER, sparse, gl.STATIC_DRAW);
+    gl.enableVertexAttribArray(3); gl.vertexAttribPointer(3, 1, gl.FLOAT, false, 4, 0); gl.vertexAttribDivisor(3, 1);
+    gl.bindVertexArray(null);
+    treeInst = { vao, buf, sbuf, n, data, sparse, apart: sparse.reduce((s, v) => s + v, 0), tiles, gen: treeGen, ms: performance.now() - t0 };
+  }
+  // whether each tree stands apart (1) or not (0): TREE_SPARSE_N or fewer others within TREE_SPARSE_R, counted on a grid
+  // of cells that side, so that each tree looks in its own cell and the eight round it
+  function treesApart(data, n) {
+    const R = TREE_SPARSE_R, out = new Float32Array(n);
+    if (!n) return out;
+    let x0 = Infinity, z0 = Infinity, x1 = -Infinity, z1 = -Infinity;
+    for (let i = 0; i < n; i++) {
+      const x = data[12 * i], z = data[12 * i + 1];
+      x0 = Math.min(x0, x); x1 = Math.max(x1, x); z0 = Math.min(z0, z); z1 = Math.max(z1, z);
+    }
+    const gx = Math.floor((x1 - x0) / R) + 1, gz = Math.floor((z1 - z0) / R) + 1;
+    const cell = new Uint32Array(n), at = new Uint32Array(gx * gz + 1), order = new Uint32Array(n);
+    for (let i = 0; i < n; i++) at[(cell[i] = Math.floor((data[12 * i + 1] - z0) / R) * gx + Math.floor((data[12 * i] - x0) / R)) + 1]++;
+    for (let c = 0; c < gx * gz; c++) at[c + 1] += at[c];
+    const next = at.slice(0, gx * gz);
+    for (let i = 0; i < n; i++) order[next[cell[i]]++] = i;
+    for (let i = 0; i < n; i++) {
+      const x = data[12 * i], z = data[12 * i + 1], cx = cell[i] % gx, cz = (cell[i] - cx) / gx;
+      let others = 0;
+      near: for (let j = Math.max(cz - 1, 0); j <= Math.min(cz + 1, gz - 1); j++) {
+        for (let k = Math.max(cx - 1, 0); k <= Math.min(cx + 1, gx - 1); k++) {
+          for (let e = at[j * gx + k]; e < at[j * gx + k + 1]; e++) {
+            const o = order[e], dx = data[12 * o] - x, dz = data[12 * o + 1] - z;
+            if (o !== i && dx * dx + dz * dz < R * R && ++others > TREE_SPARSE_N) break near;
+          }
+        }
+      }
+      out[i] = others <= TREE_SPARSE_N ? 1 : 0;
+    }
+    return out;
+  }
+  // the payload's tree kit (build_meshes.encode_kit), checked and inflated before any GL object is made: each variant's
+  // fit and three levels, and its species' colours
+  const KIT_COLOURS = ["bark", "bark_upper", "foliage"], KIT_SPECIES = 8, KIT_VARIANTS = 255;   // a tree's variant is a byte (tileTrees)
+  async function decodeKit(kit) {
+    if (!kit) return null;
+    const V = kit.variants, C = kit.colours, species = C && typeof C === "object" ? Object.keys(C) : [];
+    if (!Array.isArray(V) || !V.length || V.length > KIT_VARIANTS || !species.length || species.length > KIT_SPECIES
+        || !species.every((s) => KIT_COLOURS.every((c) => Array.isArray(C[s][c]) && C[s][c].length === 3 && C[s][c].every(Number.isFinite))))
+      throw new Error("bad tree kit");
+    let nv = 0, nt = 0;
+    for (const v of V) {
+      if (!species.includes(v.species) || !(v.crown_r > 0 && v.height > 0 && v.share >= 0) || !Array.isArray(v.levels) || v.levels.length !== 3)
+        throw new Error(`bad tree kit variant ${v.name}`);
+      for (const l of v.levels) {
+        if (![l.verts, l.tris].every(Number.isInteger) || l.verts < 3 || l.verts > 65535 || l.tris < 1
+            || !Array.isArray(l.box) || l.box.length !== 6 || !l.box.every(Number.isFinite))
+          throw new Error(`bad tree kit level of ${v.name}`);
+        nv += l.verts; nt += l.tris;
+      }
+    }
+    const [pos, nrm, attr, uv, idx] = await Promise.all(["pos", "nrm", "attr", "uv", "idx"].map((k) => inflate(kit.streams[k])));
+    if (pos.length !== 6 * nv || nrm.length !== 2 * nv || attr.length !== 2 * nv || uv.length !== 4 * nv || idx.length !== 6 * nt)
+      throw new Error("the tree kit's streams do not match its levels");
+    const ix = new Uint16Array(idx.buffer, idx.byteOffset, 3 * nt);
+    let t0 = 0;
+    for (const v of V) for (const l of v.levels) {
+      for (let i = 3 * t0, e = 3 * (t0 + l.tris); i < e; i++) if (ix[i] >= l.verts) throw new Error(`a level of ${v.name} indexes past its vertices`);
+      t0 += l.tris;
+    }
+    return { V, species, C, streams: [pos, nrm, attr, uv], idx: ix };
+  }
+  // the kit on the GPU: a vertex array per variant level, whose per-tree attributes (locations 4-7, 64-byte records)
+  // read the frame's buffer of near trees (template_c.html treeMeshFrame); its colours go to the shading pass
+  let treeKit = null;
+  function uploadKit(k) {
+    if (treeKit) { treeKit.levels.forEach((l) => gl.deleteVertexArray(l.vao)); treeKit.buffers.forEach((b) => gl.deleteBuffer(b)); }
+    treeKit = null;
+    if (!k) return;
+    const buf = (target, data, usage) => { const b = gl.createBuffer(); gl.bindBuffer(target, b); gl.bufferData(target, data, usage); return b; };
+    gl.bindVertexArray(null);
+    const vb = k.streams.map((d) => buf(gl.ARRAY_BUFFER, d, gl.STATIC_DRAW)), ib = buf(gl.ELEMENT_ARRAY_BUFFER, k.idx, gl.STATIC_DRAW);
+    const inst = buf(gl.ARRAY_BUFFER, 64 * 1024, gl.DYNAMIC_DRAW), variants = [], levels = [];
+    let v0 = 0, t0 = 0;
+    k.V.forEach((v, vi) => {
+      const fit = [v.crown_r, v.height, k.species.indexOf(v.species), 0];
+      for (const l of v.levels) {
+        const vao = gl.createVertexArray();
+        gl.bindVertexArray(vao);
+        gl.bindBuffer(gl.ARRAY_BUFFER, vb[0]); gl.enableVertexAttribArray(0); gl.vertexAttribPointer(0, 3, gl.UNSIGNED_SHORT, true, 6, 6 * v0);
+        gl.bindBuffer(gl.ARRAY_BUFFER, vb[1]); gl.enableVertexAttribArray(1); gl.vertexAttribPointer(1, 2, gl.BYTE, true, 2, 2 * v0);
+        gl.bindBuffer(gl.ARRAY_BUFFER, vb[2]); gl.enableVertexAttribArray(2); gl.vertexAttribIPointer(2, 2, gl.UNSIGNED_BYTE, 2, 2 * v0);
+        gl.bindBuffer(gl.ARRAY_BUFFER, vb[3]); gl.enableVertexAttribArray(3); gl.vertexAttribPointer(3, 2, gl.UNSIGNED_SHORT, true, 4, 4 * v0);
+        gl.bindBuffer(gl.ARRAY_BUFFER, inst);
+        for (let a = 0; a < 4; a++) { gl.enableVertexAttribArray(4 + a); gl.vertexAttribPointer(4 + a, 4, gl.FLOAT, false, 64, 16 * a); gl.vertexAttribDivisor(4 + a, 1); }
+        gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER, ib);
+        levels.push({ vao, lo: l.box.slice(0, 3), hi: l.box.slice(3), count: 3 * l.tris, offset: 6 * t0, tris: l.tris, fit, variant: vi });
+        v0 += l.verts; t0 += l.tris;
+      }
+      variants.push({ index: vi, name: v.name, species: v.species, conifer: !!v.conifer, share: v.share, ratio: v.crown_r / v.height });
+    });
+    gl.bindVertexArray(null);
+    const colours = new Float32Array(9 * KIT_SPECIES);
+    k.species.forEach((s, i) => KIT_COLOURS.forEach((c, j) => colours.set(k.C[s][c], 9 * i + 3 * j)));
+    gl.useProgram(p3P); gl.uniform3fv(gl.getUniformLocation(p3P, "uTreeKit"), colours);
+    treeKit = { variants, levels, buffers: [...vb, ib, inst], inst, capacity: 1024, species: k.species,
+                con: variants.filter((v) => v.conifer), dec: variants.filter((v) => !v.conifer) };
   }
   // A payload's footprint layer (build_meshes, mesh_footprint) stands in for the data's building distances (locA's
   // alpha) while that payload is loaded, so the trees and the micro-relief follow the meshes; without one, the data's
@@ -662,6 +924,7 @@ void main() {
   }
   let meshUploads = 0;
   async function uploadMeshes(payload) {
+    if (TREES_ON && !payload) uploadKit(null);
     if (!payload) { setFootprint(null); return Object.assign([], { gen: ++meshUploads, shadow: [], groups: [] }); }
     if (payload.format !== MESH_FORMAT || payload.version !== MESH_VERSION) throw new Error("unsupported mesh payload");
     // validate everything before creating GL objects, so a rejected payload leaves nothing behind
@@ -705,6 +968,7 @@ void main() {
     if (shadow.length > SH_LAYERS - 1 || !shadow.every((b) => b.length === 6 && b.every(Number.isFinite)))
       throw new Error("bad mesh shadow regions");
     const foot = await footprintOf(payload);
+    const kit = TREES_ON ? await decodeKit(payload.kit) : null;
     // after every chunk's triangles, its narrow parts' again as their edges' index pairs, a shadow layer's lines
     const elems = new Uint16Array(3 * nt + 6 * payload.chunks.reduce((n, c) => n + (c.narrow || []).reduce((k, r) => k + r[0], 0), 0));
     elems.set(idx);
@@ -750,6 +1014,7 @@ void main() {
     out.gen = ++meshUploads;
     out.towerTops = towerTops;
     out.shadow = shadow;
+    if (TREES_ON) uploadKit(kit);
     setFootprint(foot);
     return out;
   }
@@ -859,6 +1124,8 @@ void main() {
   const UK = uniforms(clsP);
   setStatic(meshP);
   const UM = uniforms(meshP), UD = uniforms(meshDP);
+  if (TREES_ON) [treeDrawP, treeMeshP, treeReflP].forEach(setStatic);
+  const UTr = TREES_ON ? uniforms(treeDrawP) : null, UTm = TREES_ON ? uniforms(treeMeshP) : null, UTrR = TREES_ON ? uniforms(treeReflP) : null;
   gl.useProgram(resP);
   const UR = uniforms(resP);
   gl.uniform1i(UR.tG0, 22);

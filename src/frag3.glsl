@@ -1,7 +1,9 @@
 // ------------------------------------------------------------------ combined terrain / water / vegetation evaluation
 struct TS { GS g; float gy; float wy; float vy; float vd; float dens; float conF; vec4 tc; vec4 tp; };
 
-// vm: 0 no vegetation, 1 trees (3D trees near, canopy sheet far), 2 canopy sheet only
+// vm: 0 no vegetation, 1 trees (3D trees near, canopy sheet far), 2 canopy sheet only, 3 mesh trees (MESH_TREES: none
+// within TREE_FAR, which their own pass draws, and mode 1 beyond it, the canopy sheet; debug bit 2097152: none within
+// TREE_EDGE, the drawn crowns reaching the table's edge)
 // vy: canopy-sheet height (folded into the terrain height); vd: distance bound to the 3D trees
 TS evalTop(vec3 p, float td, int vm) {
   TS s;
@@ -10,6 +12,18 @@ TS evalTop(vec3 p, float td, int vm) {
   s.wy = s.g.bed + s.g.wd;
   s.vy = -1e9; s.vd = 1e5; s.dens = 0.; s.conF = 0.; s.tc = vec4(0.); s.tp = vec4(0.);
   if (vm > 0 && (uDbg & 8) == 0) {
+#ifdef MESH_TREES
+    if (vm == 3) {
+      // within TREE_FAR a bound on the trees beyond the table, all the march sees; never under 1 m, as every bound that
+      // is not a tree's own distance: the march takes s.vd < eps for a tree's surface, and the edge's distance reaches
+      // 0. A ray reflected off the lake (td 1e5) measures its path from the camera mirrored in the lake, where the
+      // mirror pass's crowns end. Beyond, mode 1 draws the canopy sheet, as the march draws it from TREE_FAR on
+      float te = TREE_EDGE - max(abs(p.x), abs(p.z));
+      float tp = td < 1e5 ? td : distance(p, vec3(uCamPos.x, 2. * LAKE - uCamPos.y, uCamPos.z));
+      if (te > 0. && (tp < TREE_FAR || (uDbg & 2097152) != 0)) { s.vd = max(te, 1.); return s; }
+      vm = 1;
+    }
+#endif
     float d0 = vegDensity(p.xz, s.g, s.conF);
     s.dens = d0 * vegMask(s.g);
     float ty = max(s.gy, s.wy);
@@ -34,6 +48,13 @@ TS evalTop(vec3 p, float td, int vm) {
 float topOf(TS s) { return max(max(s.gy, s.wy), s.vy); }
 
 vec3 vegNormal(vec3 p, TS s, vec3 gn) {
+#ifdef MESH_TREES
+  if (s.tp.w > 2.5) {                                 // a mesh tree's own normal (its record's): bark as it is, leaves jittered
+    if (s.tp.w > 3.5) return gn;
+    vec3 j = vec3(vnoise(p.xz * 3.1 + p.y), vnoise(p.zy * 3.1 + 4.), vnoise(p.xy * 3.1 + 8.)) - 0.5;
+    return normalize(gn + j * 0.5);
+  }
+#endif
   if (s.tp.w < 0.) return normalize(mix(gn, vec3(0., 1., 0.), 0.55));
   vec2 d = p.xz - s.tc.xy;
   vec3 n;
@@ -106,6 +127,8 @@ bool steepCell(GS g) {                               // the local layer's 2 x 2 
                 texelFetch(tLocH, clamp(i + ivec2(0, 1), ivec2(0), n - 1), 0).r, texelFetch(tLocH, clamp(i + 1, ivec2(0), n - 1), 0).r);
   return max(max(h.x, h.y), max(h.z, h.w)) - min(min(h.x, h.y), min(h.z, h.w)) > ROCK_CELL_M;
 }
+#endif
+#if defined(SPLIT_P1) || defined(TREE_DRAW) || defined(TREE_MESH)
 float sunCache(vec2 xz) {
   vec2 x = xz / 7. + TREE_G0 - 0.5, i = floor(x), f = x - i;
   ivec2 a = clamp(ivec2(i), ivec2(0), ivec2(TREE_N - 1)), b = clamp(ivec2(i) + 1, ivec2(0), ivec2(TREE_N - 1));
@@ -113,6 +136,8 @@ float sunCache(vec2 xz) {
   float v01 = texelFetch(tTree, ivec2(a.x, b.y), 0).a, v11 = texelFetch(tTree, b, 0).a;
   return mix(mix(v00, v10, f.x), mix(v01, v11, f.x), f.y);
 }
+#endif
+#ifdef SPLIT_P1
 
 // The primary march (P1 and FAR_TILE): terrain, water and trees, and each hit's lake reflection. The shadow pass
 // marches the sun term from the start trace() records; the meshes draw themselves over this record where nearer.
@@ -160,11 +185,11 @@ Res trace(vec3 ro, vec3 rd) {
     r.it += 1.;
     // ---- where to sample and what the sample needs (vm: vegetation mode)
     vec3 p = vec3(0.); float td = 0.; int vm = 0;
-    if (st == ST_MARCH) { p = ro + rd * t; td = t; vm = uDetail == 1 ? 1 : 2; }
-    else if (st == ST_BISECT) { t = 0.5 * (ta + tb); p = ro + rd * t; td = t; vm = uDetail == 0 ? 2 : (t < TREE_FAR ? 0 : 1); }
+    if (st == ST_MARCH) { p = ro + rd * t; td = t; vm = uDetail == 1 ? VM_TREES : 2; }
+    else if (st == ST_BISECT) { t = 0.5 * (ta + tb); p = ro + rd * t; td = t; vm = uDetail == 0 ? 2 : (t < TREE_FAR ? 0 : VM_TREES); }
     else if (st == ST_GNORM || st == ST_RNORM) { p = hp + (cnt == 0 ? vec3(e, 0., 0.) : vec3(0., 0., e)); td = st == ST_GNORM ? r.t : 1e5; }
     else if (st == ST_GWIDE) { vec2 d = normalize(cnt < 2 ? uLocU.xy : uLocV.xy) * ((cnt & 1) == 0 ? ROCK_E : -ROCK_E); p = hp + vec3(d.x, 0., d.y); td = r.t; }
-    else { p = rro + r.rd * rtt; td = 1e5; vm = 2; }
+    else { p = rro + r.rd * rtt; td = 1e5; vm = VM_REFL; }
     // ---- the single scene evaluation
     TS s = evalTop(p, td, vm);
     float dE = s.g.ed > 0. ? 1e5 : max(1. - s.g.ed, 1.);   // the local grid's edge: it bounds the step, never a hit
