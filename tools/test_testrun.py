@@ -9,6 +9,7 @@ import re
 import shutil
 import sys
 import tempfile
+import types
 import unittest
 from unittest import mock
 import uuid
@@ -341,6 +342,29 @@ class ResumeTests(unittest.TestCase):
         self.assertEqual(self.run_suite(pattern="*.A.*")[:2], (["A.test_one", "A.test_two"], "pass"))
         self.assertEqual(self.run_suite(pattern="*.C.*")[:2], (["C.test_one"], "pass"))
         self.assertEqual(self.run_suite()[0], ["B.test_one", "C.test_one", "D.test_one"])
+
+
+class BrowserTests(unittest.TestCase):
+    def test_the_shared_browser_closes_before_the_run_lets_its_gpu_go(self):
+        held, closed = set(), []
+
+        @contextlib.contextmanager
+        def gpu_work(gpu, label, say=print):
+            held.add(gpu)
+            try:
+                yield
+            finally:
+                held.discard(gpu)
+        edge = types.SimpleNamespace(close=lambda: closed.append(set(held)))
+        folder = Path(tempfile.mkdtemp())
+        self.addCleanup(shutil.rmtree, folder, ignore_errors=True)
+        with mock.patch.object(testrun.locks, "gpu_work", gpu_work), \
+                mock.patch.dict(sys.modules, {"pagetest": types.SimpleNamespace(EDGE=edge)}), \
+                mock.patch.dict(os.environ), mock.patch.object(testrun, "LOGS", folder), \
+                mock.patch.object(testrun, "load", return_value=(unittest.TestSuite(), [], [])), \
+                contextlib.redirect_stderr(io.StringIO()):
+            testrun.run("render", gpu="nvidia", pattern="none")
+        self.assertEqual(closed, [{"nvidia"}])
 
 
 if __name__ == "__main__":

@@ -206,6 +206,16 @@ float localEntry(vec3 ro, vec3 rd) {
   return tA > 0. && tA < tB ? tA : 1e9;
 }
 
+#ifdef MESH_TREES
+// Only used at samples inside the tree table. The first forward exit plane in x or z ends the tree-free ray segment.
+float treeTableExit(vec3 ro, vec3 rd) {
+  vec2 ends = (TREE_EDGE - sign(rd.xz) * ro.xz) / max(abs(rd.xz), vec2(1e-12));
+  return min(ends.x, ends.y);
+}
+#else
+#define treeTableExit(ro, rd) 1e5
+#endif
+
 float bldSd(GS g) { return mix(12.7, g.la.w * 25.5 - 12.8, step(0.01, g.lw)); }
 
 // procedural micro-relief on top of the ~30 m Copernicus DEM

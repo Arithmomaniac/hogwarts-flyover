@@ -8,18 +8,26 @@ runs. Work started inside registered work never waits for the quiet lock, which 
 holds it while waiting for the enclosing work: a process's threads share one registration, and a child process
 registers its own entry at once, so it stays counted if the enclosing work ends first.
 
+Every wait for a lock is logged once the lock is released, to lock-waits.jsonl in the state folder: the lock, the waiter
+and its worktree, the holder when the wait began, when it began, how long it waited and how long it then held the lock.
+Taking a free lock logs nothing, and a timing run's wait for heavy work to end is logged as a wait for "heavy work".
+
     python -X utf8 -m tools.locks status
+    python -X utf8 -m tools.locks waits [--since 2026-11-22T18:00]    # each lock's waits: count, total, p50, p90, max
     python -X utf8 -m tools.locks quiet -- COMMAND ...      # run a timing command alone on the machine
     python -X utf8 -m tools.locks heavy -- COMMAND ...      # run an ad-hoc heavy command, which timing runs wait for
     python -X utf8 -m tools.locks gpu amd|nvidia -- COMMAND ...    # the same on one GPU: its lock first, then heavy work,
                                                                    # with HOG_GPU set, so a browser script queues behind
                                                                    # a suite on that GPU instead of slowing it
 """
+import argparse
 import contextlib
+from datetime import datetime
 import json
 import os
 from pathlib import Path
 import secrets
+import socket
 import subprocess
 import sys
 import threading
@@ -37,6 +45,7 @@ HEAVY = "HOG_HEAVY"                  # the registration enclosing this process's
 REMOVE_ATTEMPTS = 50                 # 0.1 s apart: Windows refuses to delete a file while another process reads it
 QUIET_PATIENCE_S = 2.0               # a GPU tool lets its GPU go only if the quiet lock stays held this long: every
                                      # registration holds it for a moment, a timing run for minutes
+LOG_PATIENCE_S = 2.0                 # a wait's record waits at most this long for other processes' appends to the log
 _leftover = set()                    # this process's ended registrations that Windows has not yet let it remove
 _leftover_lock = threading.Lock()
 
@@ -110,6 +119,30 @@ def describe(holder):
     return f"{holder['label']} (pid {holder['pid']}, {holder['worktree']}, for {time.time() - holder['since']:.0f} s)"
 
 
+def waits_file():
+    return state_dir() / "lock-waits.jsonl"
+
+
+def log_wait(lock, label, holders, start, waited_s, held_s, say=print):
+    """Log `label`'s wait for `lock`: from `start` (epoch seconds) for `waited_s`, behind `holders` (the infos of the
+    processes holding it when the wait began, None for one that could not be read), and then its hold of `held_s`.
+    Every worktree appends to the one log, and Windows appends by seeking to the end and then writing, so the appends
+    take the log's own lock in turn. A record that cannot be written within LOG_PATIENCE_S is dropped with a note: the
+    log never stops work."""
+    try:
+        known = [holder for holder in holders if holder]
+        record = {"lock": lock, "host": socket.gethostname(), "label": label, "worktree": str(ROOT),
+                  "holder": "; ".join(holder["label"] for holder in known) or None,
+                  "holder_worktree": "; ".join(holder["worktree"] for holder in known) or None,
+                  "start": round(start, 3), "waited_s": round(waited_s, 3), "held_s": round(held_s, 3)}
+        with FileLock(str(waits_file()) + ".lock", timeout=LOG_PATIENCE_S):
+            with open(waits_file(), "a", encoding="utf-8", newline="\n") as f:
+                f.write(json.dumps(record, separators=(",", ":")) + "\n")
+    except Exception as e:
+        with contextlib.suppress(Exception):
+            say(f"could not log the wait for the {lock} lock: {e}")
+
+
 class Busy(Exception):
     """A lock that held() gave up on after its `patience`."""
 
@@ -117,25 +150,30 @@ class Busy(Exception):
 @contextlib.contextmanager
 def held(name, label, say=print, patience=None):
     """Hold lock `name` for the whole block, saying who holds it while waiting; with a `patience` in seconds, raises
-    Busy if the lock is not free within it."""
-    lock, info = FileLock(str(folder() / f"{name}.lock")), folder() / f"{name}.json"
+    Busy if the lock is not free within it. A wait that ends in the lock is logged once the lock is released."""
+    lock, info, wait = FileLock(str(folder() / f"{name}.lock")), folder() / f"{name}.json", None
     try:
         lock.acquire(timeout=0)
     except Timeout:
+        wait = time.time(), time.perf_counter(), read(info)
         if patience is not None:
             try:
                 lock.acquire(timeout=patience)
             except Timeout:
                 raise Busy(name) from None
         else:
-            say(f"waiting for the {name} lock, held by {describe(read(info))}")
+            say(f"waiting for the {name} lock, held by {describe(wait[2])}")
             lock.acquire()
+    acquired = time.perf_counter()
     try:
         write_atomic(info, json.dumps(me(label)).encode("utf-8"))
         yield
     finally:
         remove(info)
         lock.release()
+        if wait:
+            start, began, holder = wait
+            log_wait(name, label, [holder], start, acquired - began, time.perf_counter() - acquired, say)
 
 
 @contextlib.contextmanager
@@ -277,17 +315,28 @@ def heavy(label, say=print, patience=None):
 
 @contextlib.contextmanager
 def quiet(label, say=print, poll_s=5.0):
-    """The quiet lock: no heavy work runs on the machine during the block. Yields the token timing scripts check."""
-    with held("quiet", label, say):
-        while busy := heavy_work():
-            say("waiting for heavy work to finish: " + "; ".join(describe(h) for h in busy))
-            time.sleep(poll_s)
-        token = secrets.token_hex(16)
-        write_atomic(folder() / "quiet-token.json", json.dumps({**me(label), "token": token}).encode("utf-8"))
-        try:
-            yield token
-        finally:
-            remove(folder() / "quiet-token.json")
+    """The quiet lock: no heavy work runs on the machine during the block. Yields the token timing scripts check. A wait
+    for heavy work to end is logged as a wait for the "heavy work" lock once the quiet lock is released."""
+    drain = None
+    try:
+        with held("quiet", label, say):
+            if busy := heavy_work():
+                holders, start, began = busy, time.time(), time.perf_counter()
+                while busy:
+                    say("waiting for heavy work to finish: " + "; ".join(describe(h) for h in busy))
+                    time.sleep(poll_s)
+                    busy = heavy_work()
+                drain = holders, start, began, time.perf_counter()
+            token = secrets.token_hex(16)
+            write_atomic(folder() / "quiet-token.json", json.dumps({**me(label), "token": token}).encode("utf-8"))
+            try:
+                yield token
+            finally:
+                remove(folder() / "quiet-token.json")
+    finally:
+        if drain:
+            holders, start, began, drained = drain
+            log_wait("heavy work", label, holders, start, drained - began, time.perf_counter() - drained, say)
 
 
 def require_quiet(what):
@@ -308,10 +357,50 @@ def status():
     print(f"heavy work   {'; '.join(describe(h) for h in work) if work else 'none'}")
 
 
+def moment(text):
+    """An ISO 8601 date and time as epoch seconds; one without a zone is local time."""
+    return datetime.fromisoformat(text).timestamp()
+
+
+def waits(argv):
+    """Sum up the logged waits for each lock: how many there were, their total, median, 90th percentile and longest."""
+    import numpy as np
+    parser = argparse.ArgumentParser(prog="python -X utf8 -m tools.locks waits", description=waits.__doc__)
+    parser.add_argument("--since", type=moment, default=float("-inf"), metavar="DATETIME",
+                        help="only the waits that began at or after this ISO time, such as 2026-11-22T18:00 (local)")
+    since = parser.parse_args(argv).since
+    try:
+        lines = waits_file().read_text(encoding="utf-8").splitlines()
+    except FileNotFoundError:
+        lines = []
+    per_lock, unreadable = {}, 0
+    for line in lines:
+        try:
+            record = json.loads(line)
+            lock, start, waited = record["lock"], float(record["start"]), float(record["waited_s"])
+        except (ValueError, KeyError, TypeError):    # such as a line cut short by a killed process
+            unreadable += 1
+            continue
+        if start >= since:
+            per_lock.setdefault(lock, []).append(waited)
+    if per_lock:
+        print(f"{'lock':<12} {'waits':>6} {'total s':>10} {'p50 s':>8} {'p90 s':>8} {'max s':>8}")
+        for lock, waited in sorted(per_lock.items()):
+            p50, p90 = np.percentile(waited, [50, 90])
+            print(f"{lock:<12} {len(waited):>6} {sum(waited):>10.1f} {p50:>8.1f} {p90:>8.1f} {max(waited):>8.1f}")
+    else:
+        print("no waits logged")
+    if unreadable:
+        print(f"skipped {unreadable} unreadable line(s)")
+    return 0
+
+
 def main(argv):
     if argv[:1] == ["status"]:
         status()
         return 0
+    if argv[:1] == ["waits"]:
+        return waits(argv[1:])
     say = lambda m: print(m, file=sys.stderr)
     if argv[:1] == ["gpu"] and argv[1:2] and argv[1] in GPUS and argv[2:3] == ["--"] and argv[3:]:
         command = argv[3:]

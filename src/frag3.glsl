@@ -5,7 +5,7 @@ struct TS { GS g; float gy; float wy; float vy; float vd; float dens; float conF
 // within TREE_FAR, which their own pass draws, and mode 1 beyond it, the canopy sheet; debug bit 2097152: none within
 // TREE_EDGE, the drawn crowns reaching the table's edge)
 // vy: canopy-sheet height (folded into the terrain height); vd: distance bound to the 3D trees
-TS evalTop(vec3 p, float td, int vm) {
+TS evalTop(vec3 p, float td, int vm, float tOut) {
   TS s;
   s.g = sampleGround(p.xz);
   s.gy = s.g.bed + detailH(p.xz, s.g, td);
@@ -14,13 +14,13 @@ TS evalTop(vec3 p, float td, int vm) {
   if (vm > 0 && (uDbg & 8) == 0) {
 #ifdef MESH_TREES
     if (vm == 3) {
-      // within TREE_FAR a bound on the trees beyond the table, all the march sees; never under 1 m, as every bound that
-      // is not a tree's own distance: the march takes s.vd < eps for a tree's surface, and the edge's distance reaches
-      // 0. A ray reflected off the lake (td 1e5) measures its path from the camera mirrored in the lake, where the
+      // Inside the table the primary ray need not look for trees until it exits at tOut. A bound by the nearest edge
+      // made rays along it run out of steps in mid-air. Keep the bound above the hit epsilon: the edge isn't a tree.
+      // A ray reflected off the lake (td 1e5) measures its path from the camera mirrored in the lake, where the
       // mirror pass's crowns end. Beyond, mode 1 draws the canopy sheet, as the march draws it from TREE_FAR on
       float te = TREE_EDGE - max(abs(p.x), abs(p.z));
       float tp = td < 1e5 ? td : distance(p, vec3(uCamPos.x, 2. * LAKE - uCamPos.y, uCamPos.z));
-      if (te > 0. && (tp < TREE_FAR || (uDbg & 2097152) != 0)) { s.vd = max(te, 1.); return s; }
+      if (te > 0. && (tp < TREE_FAR || (uDbg & 2097152) != 0)) { s.vd = max(tOut - td, 1.); return s; }
       vm = 1;
     }
 #endif
@@ -160,7 +160,7 @@ Res trace(vec3 ro, vec3 rd) {
     if (u != 0u && tc > t && tc <= TMAX) { t = tc; tPrev = tc; cnt = int(u & 511u); }   // skipped steps stay charged to maxM
   }
   int nIt = maxM + CONT_N + maxR + 16, cont = (uDbg & 262144) != 0 ? 0 : CONT_N;
-  float tIn = localEntry(ro, rd);
+  float tIn = localEntry(ro, rd), tOut = treeTableExit(ro, rd);
   for (int i = ZERO; i < nIt; i++) {
     // ---- transitions that need no scene sample
     if (st == ST_SHINIT) {                           // where the shadow pass starts the sun march, or the sun term itself
@@ -192,7 +192,7 @@ Res trace(vec3 ro, vec3 rd) {
     else if (st == ST_GWIDE) { vec2 d = normalize(cnt < 2 ? uLocU.xy : uLocV.xy) * ((cnt & 1) == 0 ? ROCK_E : -ROCK_E); p = hp + vec3(d.x, 0., d.y); td = r.t; }
     else { p = rro + r.rd * rtt; td = 1e5; vm = VM_REFL; }
     // ---- the single scene evaluation
-    TS s = evalTop(p, td, vm);
+    TS s = evalTop(p, td, vm, tOut);
     // the local grid's edge bounds a step, never a hit: the march's up to where its ray enters the grid, a reflected
     // ray's by its sample's distance from the edge. Bounded by that distance at any height, a ray running just outside
     // an edge, along it, crept on in metre steps and ran out of them in mid-air

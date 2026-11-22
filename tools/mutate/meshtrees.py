@@ -62,7 +62,7 @@ MUTATIONS = [
     Mutation("the trees left out of the G-buffer pass", "template_c.html",
              "    if (trees) drawTrees(pos, rot, tanH, jit, sw, sh, sunDir);   // the same program", "    // the same program",
              SHAPES),
-    Mutation("the table's edge taken for a tree", "frag3.glsl", "{ s.vd = max(te, 1.); return s; }",
+    Mutation("the table's edge taken for a tree", "frag3.glsl", "{ s.vd = max(tOut - td, 1.); return s; }",
              "{ s.vd = te; return s; }", EDGE),
     Mutation("species meshes at their own size", "template_b.html",
              "  vec2 g = aC.xy + aC.zw * f, k = vec2(aA.z / uFit.x, aA.w / uFit.y);", "  vec2 g = aC.xy + aC.zw * f, k = vec2(1.);",
