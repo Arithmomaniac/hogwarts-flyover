@@ -581,6 +581,7 @@ layout(location = 7) in vec4 aD;       // the farther level's share where two ha
 uniform vec3 uLo, uHi, uCamPos; uniform mat3 uCamRot; uniform float uTanHalf; uniform vec2 uRes, uJitter;
 uniform vec4 uFit;                     // the variant's crown radius and height, its species, unused
 out vec3 vP; out vec3 vN; out vec2 vUV; out float vAux; out float vGy;
+out vec2 vC;                           // across a leaf card, 0 to 1 (its corners in its UVs' lowest bits)
 flat out uint vPart; flat out vec4 vA; flat out vec4 vB; flat out vec4 vI;
 void main() {
   float t = distance(uCamPos, vec3(aA.x, aB.x, aA.y)), f = 1. - smoothstep(2200., 3200., t);
@@ -596,7 +597,7 @@ void main() {
   vec3 v = transpose(uCamRot) * (p - uCamPos);
   gl_Position = vec4(v.x * uRes.y / (uRes.x * uTanHalf) - 2. * uJitter.x / uRes.x * v.z, v.y / uTanHalf - 2. * uJitter.y / uRes.y * v.z,
                      (v.z * ${fl((MESH_FAR + MESH_NEAR) / (MESH_FAR - MESH_NEAR))} - ${fl(2 * MESH_FAR * MESH_NEAR / (MESH_FAR - MESH_NEAR))}), v.z);
-  vP = p; vN = n / vec3(k.x, k.y, k.x); vUV = aUV * 64.; vAux = float(aAttr.y) / 255.; vGy = base + dot(g, xz);
+  vP = p; vN = n / vec3(k.x, k.y, k.x); vUV = aUV * 64.; vC = vec2(uvec2(aUV * 65535. + 0.5) & 1u); vAux = float(aAttr.y) / 255.; vGy = base + dot(g, xz);
   vPart = aAttr.x; vA = aA; vB = vec4(base, g, aB.w); vI = vec4(uFit.z, aD.xy, 0.);
 }`;
   // the tree layer's casters (template_c.html treeShadow): treeMeshVs's trees, into the layer's light space

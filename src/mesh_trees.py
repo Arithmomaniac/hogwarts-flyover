@@ -29,8 +29,10 @@ LEAF_TILE = 64.0           # the page multiplies a leaf card's uv by this (templ
                            # can span a part of the unit square: as many leaves as its size in metres holds
 LEAF_GRID, LEAF_CELLS = 3.5, 1.24   # the page's leaf cells per unit of uv, and a leaf's length in cells (frag5.glsl leafMask)
 CARD_FILL = 0.48           # the share of a leaf card the renderer's leaf mask keeps (lane T: frag5.glsl leafMask)
+CARD_EDGE = 0.6            # out from this fraction of a card's half-side from its centre, its leaves shrink to none at
+                           # the circle its edges touch (frag5.glsl leafEdge), so a card reads as a clump, not a square
 LOW_SLACK = 0.1            # a coarser level's crown starts within this fraction of the height of the full level's
-CARD_SIZES = np.linspace(0.9, 3.3, 17)    # the middle level's card sizes over its groups' reach, tried in turn
+CARD_SIZES = np.linspace(0.9, 5.0, 21)    # the middle level's card sizes over its groups' reach, tried in turn
 LUMP_SCALES = [(sx, sy) for sx in np.linspace(0.25, 1.1, 18) for sy in np.linspace(0.7, 1.0, 7)]   # the coarsest
                            # level's lumps (or cone) across and up the full level's span from their base, tried
 HOLD = 0.88                # a coarser level keeps at least this fraction of the full level's top
@@ -93,28 +95,49 @@ SPECIES = (
     # "the swathe of pine trees between the station and the lake": tall, with a high, flat-topped, broken crown on
     # branches that leave the stem level, their needles in flat pads
     Species("scots-pine", "mature", True, 0.55, 18.0, (0.23, 0.23), (11, 12), (0.5, 0.62), 0.55, False, 0.022, 0.0,
-            (0, 0), 20, 0.38, 0.3, 0.4, 0.8, 0.0, (0.3, 0.55), (0.0, 25.0), 0.1, 1.2),
+            (0, 0), 20, 0.38, 0.3, 0.4, 0.8, 0.0, (0.3, 0.55), (0.0, 25.0), 0.1, 2.0),
     # "an area of small pine trees": conical, branched almost to the ground
     Species("scots-pine", "young", True, 0.25, 9.0, (0.23,), (21,), (0.1, 0.16), 0.0, True, 0.02, 0.0, (0, 0), 28,
-            0.21, 0.45, 0.15, 0.55, 0.0, (0.3, 0.6), (-5.0, 15.0), 0.09, 2.4),
+            0.21, 0.45, 0.15, 0.55, 0.0, (0.3, 0.6), (-5.0, 15.0), 0.09, 3.8),
     # "two elderly yews": a short, thick, many-stemmed bole under a dense, dark crown down almost to the ground
     Species("yew", "", True, 0.2, 12.0, (0.22, 0.24), (31, 32), (0.08, 0.14), 0.4, False, 0.05, 0.1, (2, 3), 26,
-            0.38, 0.25, 0.12, 0.2, 0.8, NO_TURN, (60.0, 80.0), 0.07),
+            0.38, 0.25, 0.12, 0.2, 0.8, NO_TURN, (60.0, 80.0), 0.07, 1.4),
     # "oak trees and a carpet of fallen leaves": a low fork into spreading limbs and a broad, uneven crown
     Species("oak", "", False, 0.4, 16.0, (0.48, 0.54, 0.6), (41, 42, 43), (0.22, 0.3), 0.4, False, 0.03, 0.28, (4, 6),
-            30, 0.24, 0.45, 0.3, 0.2, 0.45, NO_TURN, (15.0, 45.0), 0.1, 1.2),
+            30, 0.24, 0.45, 0.3, 0.2, 0.45, NO_TURN, (15.0, 45.0), 0.1, 1.7),
     # "a towering beech tree": a tall, smooth bole, steep limbs, a dense dome
     Species("beech", "", False, 0.4, 20.0, (0.33, 0.39, 0.45), (51, 52, 53), (0.3, 0.38), 0.45, False, 0.025, 0.38,
-            (3, 5), 30, 0.24, 0.5, 0.2, 0.35, 0.5, NO_TURN, (45.0, 70.0), 0.08, 1.25),
+            (3, 5), 30, 0.24, 0.5, 0.2, 0.35, 0.5, NO_TURN, (45.0, 70.0), 0.08, 1.75),
     # the site's Highland birch: a slender white stem, dark at its foot, under a narrow, light, open crown
     Species("birch", "", False, 0.2, 15.0, (0.2, 0.27), (61, 62), (0.25, 0.35), 0.35, False, 0.016, 0.0, (0, 0), 34,
-            0.2, 0.3, 0.3, 0.0, 0.0, (0.05, 0.22), (35.0, 60.0), 0.05, 1.7),
+            0.2, 0.3, 0.3, 0.0, 0.0, (0.05, 0.22), (35.0, 60.0), 0.05, 2.7),
 )
 
 
 def smoothstep(x):
     x = np.clip(x, 0.0, 1.0)
     return x * x * (3 - 2 * x)
+
+
+def card_fill(s, t):
+    """The share of a leaf card the page's leaf mask keeps at the card's own coordinates (s, t) in [0, 1]: CARD_FILL
+    within CARD_EDGE of its centre, its leaves shrinking (their area as the square of their size) to none at its circle."""
+    return CARD_FILL * (1 - smoothstep((np.hypot(2 * s - 1, 2 * t - 1) - CARD_EDGE) / (1 - CARD_EDGE))) ** 2
+
+
+def rings(quads, n=8):
+    """Points round the circles that leaf cards' edges touch, all a card draws: (cards, n, 3), of (cards, 4, 3) corners
+    in the order cards() makes them."""
+    a = np.linspace(0.0, 2 * np.pi, n, endpoint=False)
+    centre, u, v = quads.mean(axis=1), (quads[:, 1] - quads[:, 0]) / 2, (quads[:, 3] - quads[:, 0]) / 2
+    return centre[:, None] + np.cos(a)[None, :, None] * u[:, None] + np.sin(a)[None, :, None] * v[:, None]
+
+
+def drawn(m, leaves_only=False):
+    """The points that bound what a level draws: its vertices, but of each leaf card the circle its leaves fill."""
+    card = m.attr[:, 0] == CARD
+    keep = ~card & (m.attr[:, 0] != BARK) if leaves_only else ~card
+    return np.concatenate([m.pos[keep], rings(m.pos[card].reshape(-1, 4, 3)).reshape(-1, 3)])
 
 
 def envelope(sp, t):
@@ -310,12 +333,13 @@ def cards(rng, sp, crown, centres, radii, counts, size=1.0, floor=None, bound=No
             quad = o + half * (corner[:, :1] * u + corner[:, 1:] * v)
             if bound is not None:
                 out = math.hypot(o[0], o[2])
-                over = float(np.hypot(quad[:, 0], quad[:, 2]).max()) - bound[0]
+                ring = rings(quad[None])[0]
+                over = float(np.hypot(ring[:, 0], ring[:, 2]).max()) - bound[0]
                 if over > 0 and out > 0:
                     quad[:, [0, 2]] -= min(over, out) * np.array([o[0], o[2]]) / out
-                quad[:, 1] -= max(float(quad[:, 1].max()) - bound[1], 0.0)
+                quad[:, 1] -= max(float(rings(quad[None])[0][:, 1].max()) - bound[1], 0.0)
             if floor is not None:
-                quad[:, 1] += max(floor - quad[:, 1].min(), 0.0)
+                quad[:, 1] += max(floor - float(rings(quad[None])[0][:, 1].min()), 0.0)
             n4 = crown.normals(quad, np.tile(d, (4, 1)), LEAN_IN[0])
             tri = [0, 1, 2, 0, 2, 3] if np.cross(quad[1] - quad[0], quad[2] - quad[0]) @ d > 0 else [0, 2, 1, 0, 3, 2]
             idx.append(np.array(tri).reshape(2, 3) + 4 * len(pos))
@@ -448,7 +472,8 @@ def coarse_level(rng, sp, wood, crown, centres, radii, height, base_y, reach, fu
 
 
 def extent(m):
-    return float(np.hypot(m.pos[:, 0], m.pos[:, 2]).max()), float(m.pos[:, 1].max())
+    p = drawn(m)
+    return float(np.hypot(p[:, 0], p[:, 2]).max()), float(p[:, 1].max())
 
 
 def scaled(m, k, ky):
@@ -473,7 +498,7 @@ def fitted(levels, ratio):
 def coverage(m, turns=(0.0, math.pi / 2), cells=256):
     """The leaves' silhouette seen from the side, in square metres, averaged over `turns` about the trunk and sampled at
     the centres of a grid `cells` rows up the tree: solid leaves cover their outline, and each leaf card (its two
-    triangles taken as one quad) CARD_FILL of its own, independently of the others."""
+    triangles taken as one quad) card_fill at each point of it, independently of the others."""
     tris = m.idx[m.attr[m.idx[:, 0], 0] != BARK]
     card = m.attr[tris[:, 0], 0] == CARD
     pieces = [[t] for t in tris[~card]]
@@ -487,7 +512,7 @@ def coverage(m, turns=(0.0, math.pi / 2), cells=256):
         v = m.pos[:, 1] * per_m
         u0, v0 = math.floor(u.min()), math.floor(v.min())
         solid = np.zeros((math.ceil(v.max()) - v0 + 1, math.ceil(u.max()) - u0 + 1), bool)
-        count = np.zeros(solid.shape, np.int16)
+        clear = np.ones(solid.shape)
         for piece, c in zip(pieces, is_card):
             corners = np.unique(np.concatenate(piece))
             i0, i1 = math.floor(u[corners].min()) - u0, math.ceil(u[corners].max()) - u0
@@ -502,11 +527,24 @@ def coverage(m, turns=(0.0, math.pi / 2), cells=256):
                 l2 = ((v[cc] - v[a]) * (pu - u[cc]) + (u[a] - u[cc]) * (pv - v[cc])) / d
                 inside |= (l1 >= 0) & (l2 >= 0) & (l1 + l2 <= 1)
             if c:
-                count[j0:j1, i0:i1] += inside
+                s, t_ = card_coords(u, v, corners[0], pu, pv)
+                clear[j0:j1, i0:i1] *= np.where(inside, 1 - card_fill(s, t_), 1.0)
             else:
                 solid[j0:j1, i0:i1] |= inside
-        out.append(np.where(solid, 1.0, 1 - (1 - CARD_FILL) ** count).sum() / per_m ** 2)
+        out.append(np.where(solid, 1.0, 1 - clear).sum() / per_m ** 2)
     return float(np.mean(out))
+
+
+def card_coords(u, v, first, pu, pv):
+    """A leaf card's own coordinates (s, t) in [0, 1] at the points (pu, pv) of its projection (u, v), its corners from
+    `first` in cards()'s order: s along its first edge, t along its last."""
+    a, b, c = first, first + 1, first + 3
+    eu, ev, fu, fv = u[b] - u[a], v[b] - v[a], u[c] - u[a], v[c] - v[a]
+    det = eu * fv - ev * fu
+    if abs(det) < 1e-12:                                   # edge on: its leaves' share as at its middle
+        return np.full(pu.shape, 0.5), np.full(pu.shape, 0.5)
+    du, dv = pu - u[a], pv - v[a]
+    return (du * fv - dv * fu) / det, (eu * dv - ev * du) / det
 
 
 def matched(build, choices, full):
@@ -528,11 +566,11 @@ def matched(build, choices, full):
 
 
 def lowest_leaf(m):
-    return float(m.pos[m.attr[:, 0] != BARK, 1].min())
+    return float(drawn(m, leaves_only=True)[:, 1].min())
 
 
 def highest_leaf(m):
-    return float(m.pos[m.attr[:, 0] != BARK, 1].max())
+    return float(drawn(m, leaves_only=True)[:, 1].max())
 
 
 def leaf_reach(m):
@@ -554,14 +592,11 @@ def variant(sp, k, seed, ratio):
     coarsest = matched(lambda scale: coarse_level(np.random.default_rng([seed, 2]), sp, wood, crown, centres, radii,
                                                   height, base_y, reach, full, scale), LUMP_SCALES, full)
     levels, s = fitted([full, middle, coarsest], ratio)
-    leaves = levels[0].pos[levels[0].attr[:, 0] != BARK]
     trunk = wood[0]
     r_ground = float(np.interp(0.0, trunk.pts[:, 1], trunk.r))
     return Variant(f"{sp.name}{'-' + sp.form if sp.form else ''}-{k + 1}", sp.name, sp.conifer,
-                   sp.share / len(sp.seeds),
-                   max(float(np.hypot(m.pos[:, 0], m.pos[:, 2]).max()) for m in levels),
-                   max(float(m.pos[:, 1].max()) for m in levels), float(leaves[:, 1].min()), r_ground * s,
-                   tuple(levels))
+                   sp.share / len(sp.seeds), max(extent(m)[0] for m in levels), max(extent(m)[1] for m in levels),
+                   lowest_leaf(levels[0]), r_ground * s, tuple(levels))
 
 
 @lru_cache(maxsize=1)

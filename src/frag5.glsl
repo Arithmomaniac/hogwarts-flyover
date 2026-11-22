@@ -605,6 +605,7 @@ void main() {
 // or 4 (bark) and its normal its own; shade() takes its species' colours. A leaf card is cut to leaves, and a tree
 // handing over between two levels, or to its drawn crown (TREE_DRAW), is dithered between them alike in both passes
 in vec3 vP; in vec3 vN; in vec2 vUV; in float vAux; in float vGy;
+in vec2 vC;          // across a leaf card, 0 to 1
 flat in uint vPart;  // 0 bark, 1 solid leaves, 2 a leaf card
 flat in vec4 vA;     // centre x, z, crown radius r, height H
 flat in vec4 vB;     // base height, the ground's slope (x, z), hue (+2: conifer)
@@ -621,10 +622,13 @@ float leafMask(vec2 uv) {                             // a leaf card's leaves: o
   }
   return m;
 }
+// how far a leaf card's leaves shrink where it is drawn: from CARD_EDGE (0.6) of its half-side out from its centre to
+// none at the circle its edges touch (mesh_trees card_fill), so a card reads as a clump of leaves, not a square
+float leafEdge() { return smoothstep(0.6, 1., length(vC * 2. - 1.)); }
 #ifdef TREE_SHADOW
 // the tree layer's depth (template_c.html treeShadow): a leaf card cut to its leaves at their own size, so that a
 // shadow keeps its leaves' cover whatever the layer's texel
-void main() { if (vPart == 2u && leafMask(vUV) < 0.) discard; }
+void main() { if (vPart == 2u && leafMask(vUV) < leafEdge()) discard; }
 #else
 // a leaf card's leaves widen as they shrink under three pixels across, to half again their size under one (debug bit
 // 8388608: never): a far card keeps its cover rather than breaking into specks between the pixels' centres
@@ -658,7 +662,8 @@ float treeExit(vec3 o, vec3 d, float r, float H, bool con, bool bark) {
 void main() {
   float grow = leafGrow(vUV);                         // before any discard: derivatives need the whole quad
   if (vI.y > 0. && (vI.z < 0.5) == (hash12(gl_FragCoord.xy + uJitter * 61.7) < vI.y)) discard;   // the other level's share
-  if (vPart == 2u && leafMask(vUV) < -grow) discard;
+  float edge = (uDbg & 16777216) != 0 ? 0. : leafEdge();   // debug bit 16777216: the cards cut square
+  if (vPart == 2u && leafMask(vUV) < edge - grow * (1. - edge)) discard;
   vec3 d = vP - uCamPos; float t = length(d);
   vec3 n = normalize(vN);
   if (vPart == 0u && dot(n, d) > 0.) n = -n;        // bark seen from behind (a limb's open end): its near side
