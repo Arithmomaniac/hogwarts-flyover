@@ -41,10 +41,11 @@ DBG_NO_CONE = 512                           # the primary march starts at the ca
 # active samplers per program, on both GPUs (limit 16): the raymarched objects' four (the castle's two distance fields,
 # the building codes and the boundary walls) left every raymarching program when the meshes replaced them, the
 # surface class moved into locB's third channel, read with texelFetch, and the mesh casters' shadow layers moved from
-# the shadow pass to the shading pass, which looks them up for each pixel. The mesh trees' four programs (the default
-# page's; none with ?trees=raymarched): the drawn crowns, the instance pass, the species meshes and the mirror's crowns
-SAMPLERS = {"p1": 10, "far": 10, "shadow": 11, "shade": 15, "cone": 9, "sun": 10, "classify": 1, "mesh": 1, "resolve": 1,
-            "trees": 1, "treeInstances": 6, "treeMeshes": 1, "treeMirror": 0}
+# the shadow pass to the shading pass, which looks them up for each pixel. The mesh trees' five programs (the default
+# page's; none with ?trees=raymarched): the drawn crowns, the instance pass, the species meshes, the species' shadow
+# layer and the mirror's crowns; and the shadow pass's table of the trees that stand apart or in a screen (tApart)
+SAMPLERS = {"p1": 10, "far": 10, "shadow": 12, "shade": 15, "cone": 9, "sun": 10, "classify": 1, "mesh": 1, "resolve": 1,
+            "trees": 1, "treeInstances": 6, "treeMeshes": 1, "treeShadow": 0, "treeMirror": 0}
 GRID = """(step) => {
     const v = __hog.probe(0, 0), [w, h] = v.res, out = [];
     for (let y = 1; y < h; y += step) for (let x = 1; x < w; x += step) { const p = __hog.probe(x, y); out.push([p.mat, p.t]); }
@@ -1783,6 +1784,28 @@ SLIVER_FAR_M = 200.0
 SLIVER_TOL_M = 1.5
 SLIVER_REACH_M = 20000.0
 SLIVER_SHARE = 0.5
+# a ray running just outside the local layer's edge, along it, marches on to the ground beyond. Each step's bound was
+# the sample's distance to the edge, at any height (frag3.glsl trace()), so such a ray crept on in metre steps and ran
+# out of them in mid-air, where a falling ray is called ground: in the inspection's view from 2 km up, a dark line out
+# from the camera across the far fields and the Forest, its "ground" up to 350 m over the terrain. The eye stands
+# EDGE_UP_M over the ground EDGE_BACK_M beyond the end of the local grid's first row of texel centres and EDGE_OUT_M
+# out from it, away from the grid (whose edge lies half a texel out), looking along the row EDGE_PITCH down: in no
+# frame of a jitter cycle may a ground, water or tree pixel's point lie over HOVER_M above the page's ground
+EDGE_BACK_M, EDGE_OUT_M, EDGE_UP_M, EDGE_PITCH = 750.0, 3.0, 1500.0, -0.52
+HOVER_M = 60.0
+# In-page, for one frame: [x, y, metres over the page's ground] of each pixel of materials `mats` whose point lies over
+# `hover` metres above the ground there
+HOVER_PROBE = """([mats, hover]) => {
+    const v = __hog.probe(0, 0), [w, h] = v.res, g = __hog.probeRect(0, 0, w, h), R = v.rot, out = [];
+    for (let y = 0; y < h; y++) for (let x = 0; x < w; x++) {
+      const p = g[y * w + x];
+      if (!mats.includes(p[0])) continue;
+      const u = (2 * (x + 0.5 + v.jit[0]) - w) / h * v.tanH, q = (2 * (y + 0.5 + v.jit[1]) - h) / h * v.tanH;
+      const d = [R[0] * u + R[3] * q + R[6], R[1] * u + R[4] * q + R[7], R[2] * u + R[5] * q + R[8]], s = p[5] / Math.hypot(...d);
+      const px = v.pos[0] + d[0] * s, pz = v.pos[2] + d[2] * s, above = v.pos[1] + d[1] * s - __hog.ground(px, pz)[1];
+      if (above > hover) out.push([x, y, Math.round(above)]);
+    }
+    return out; }"""
 # In-page, for one frame: [its view, a character for each pixel, rows running up from the frame's bottom: "s" sky, "f"
 # ground over `far` metres off, "-" anything else]
 SLIVER_PROBE = """([sky, ground, far]) => {
@@ -1861,6 +1884,20 @@ class FarTerrainTests(RenderTestCase):
                                    "too little sky over the terrain")
                 self.assertEqual([(x, min(lows), len(lows)) for x, lows in sorted(hides.items())
                                   if len(lows) >= SLIVER_SHARE * len(cycle)], [])
+
+    async def test_a_ray_along_the_local_layers_edge_marches_on_to_the_ground(self):
+        grid = Grid(await self.page.evaluate("DATA.meta.local"))
+        e, n = grid.to_world(np.array([0, 0, grid.ny - 1]), np.array([grid.nx - 1, 0, 0]))
+        near, far, across = (np.array([e[k], n[k]]) for k in range(3))     # the first row's ends, a corner off it
+        along = (far - near) / np.linalg.norm(far - near)
+        out = np.array([-along[1], along[0]]) * -np.sign(np.dot(across - near, [-along[1], along[0]]))
+        x, z = near - along * EDGE_BACK_M + out * EDGE_OUT_M
+        eye = [x, await self.ground(x, z) + EDGE_UP_M, z]
+        frames = await self.page.evaluate("([p, y, q]) => { __hog.tod(15); __hog.camera(p, y, q); return __hog.frames; }",
+                                          [eye, math.atan2(along[0], along[1]), EDGE_PITCH])
+        await self.page.wait_for_function(f"__hog.frames >= {frames + 4}", timeout=FRAME_TIMEOUT_S * 1000)
+        hovering = await self.each_frame(HOVER_PROBE, [[MAT_GROUND, MAT_WATER, MAT_TREE], HOVER_M])
+        self.assertEqual([len(f) for f in hovering], [0] * len(hovering), [f[:4] for f in hovering])
 
     async def test_the_far_canopy_reads_as_the_trees_it_stands_for(self):
         x, z = CANOPY_EYE

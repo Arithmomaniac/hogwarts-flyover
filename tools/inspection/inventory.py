@@ -744,8 +744,9 @@ def tree_objects(world):
         out.append(Obj(id=f"trees/{form}", title=TREE_TITLES.get(form, form), family="trees", kind="species",
                        at=at_point(world, *TREE_SEEDS[variants[0]["conifer"]], height / 2), size=round(1.3 * height, 1),
                        assets=("forest-trees",), decisions=decisions, elevation=10.0,
-                       sample=f"the page's {form} trees (the kit's {', '.join(v['name'] for v in variants)}): the one "
-                              "nearest its class's seed that stands apart, where its whole form shows"))
+                       sample=f"the page's {form} trees (the kit's {', '.join(v['name'] for v in variants)}): the tree "
+                              "at the centre of the close-up, the nearest its class's seed that stands apart, where "
+                              "its whole form shows"))
     return out
 
 

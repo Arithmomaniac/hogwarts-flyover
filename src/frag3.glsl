@@ -160,6 +160,7 @@ Res trace(vec3 ro, vec3 rd) {
     if (u != 0u && tc > t && tc <= TMAX) { t = tc; tPrev = tc; cnt = int(u & 511u); }   // skipped steps stay charged to maxM
   }
   int nIt = maxM + CONT_N + maxR + 16, cont = (uDbg & 262144) != 0 ? 0 : CONT_N;
+  float tIn = localEntry(ro, rd);
   for (int i = ZERO; i < nIt; i++) {
     // ---- transitions that need no scene sample
     if (st == ST_SHINIT) {                           // where the shadow pass starts the sun march, or the sun term itself
@@ -192,7 +193,11 @@ Res trace(vec3 ro, vec3 rd) {
     else { p = rro + r.rd * rtt; td = 1e5; vm = VM_REFL; }
     // ---- the single scene evaluation
     TS s = evalTop(p, td, vm);
-    float dE = s.g.ed > 0. ? 1e5 : max(1. - s.g.ed, 1.);   // the local grid's edge: it bounds the step, never a hit
+    // the local grid's edge bounds a step, never a hit: the march's up to where its ray enters the grid, a reflected
+    // ray's by its sample's distance from the edge. Bounded by that distance at any height, a ray running just outside
+    // an edge, along it, crept on in metre steps and ran out of them in mid-air
+    float dE = t < tIn ? max(tIn - t + 1., 1.) : 1e5;
+    float dR = s.g.ed > 0. ? 1e5 : max(1. - s.g.ed, 1.);
     float dy = p.y - topOf(s);
     // ---- advance
     if (st == ST_MARCH) {
@@ -245,7 +250,7 @@ Res trace(vec3 ro, vec3 rd) {
         r.rmat = s.vy > max(s.gy, s.wy) ? 3 : 1;
         hp = p; g0 = s.gy; e = 8. + rtt * 0.004; cnt = 0; st = ST_RNORM;
       } else {
-        rtt += clamp(min(0.6 * dy, dE), 0.5 + rtt * 0.015, 300.);
+        rtt += clamp(min(0.6 * dy, dR), 0.5 + rtt * 0.015, 300.);
         if (p.y > CEIL || rtt > 9000. || ++cnt >= maxR) st = ST_DONE;
       }
     }

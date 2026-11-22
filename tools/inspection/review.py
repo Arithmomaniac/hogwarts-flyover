@@ -2,7 +2,8 @@
 manifest decisions and quotations, and the defect checklist; and the collation of their verdicts into findings for
 each owning session.
 
-    python -X utf8 -m tools.inspection.review packets [--only ID,FAMILY/,PREFIX*,...] [--most N] [--out DIR]
+    python -X utf8 -m tools.inspection.review packets [--only ID,FAMILY/,PREFIX*,...] [--most N] [--with ASSET,...]
+                                                      [--out DIR]
     python -X utf8 -m tools.inspection.review collate VERDICTS ... [--partial] [--out FILE]
 
 Both take --shots DIR and --inventory FILE. A batch holds about LEAST to MOST objects, of one owner where it can, so a
@@ -16,6 +17,7 @@ a verdict it cannot route: an unknown object, severity or owner, or a defect wit
 images (cited by name, full path or review copy); unless `--partial`, every object needs a verdict.
 """
 import argparse
+import dataclasses
 import json
 import math
 import sys
@@ -43,6 +45,21 @@ CHECKLIST = (
     "tour distance: whether the object reads at the distance the tour shows it",
     "baseline: whether the object is no better than the baseline's low-detail version (the baseline image, where given)",
 )
+# what `packets --with ASSET` adds to the checklist, for a round about one asset in every view that shows it
+WITH_CHECKS = {
+    "forest-trees": "trees, wherever they show (evidence, geometry, shading, lod): each species' form and colours as "
+                    "its decisions give them; trunks meeting the ground; crowns clear of walls, roofs, roads and "
+                    "water; no seam or pop where the species meshes give way to the drawn crowns, or those to the "
+                    "canopy sheet; the trees' shadows and reflections",
+}
+
+
+def with_assets(objects, manifest, assets):
+    """The objects, each also answering for the decisions of `assets` that a picture shows (after its own), as a round
+    about those assets reviews every view of them."""
+    extra = [d for a in manifest["assets"] if a["id"] in assets for d in a.get("decisions") or ()
+             if d not in inventory.NOT_VISUAL]
+    return [dataclasses.replace(o, decisions=tuple(dict.fromkeys((*o.decisions, *extra)))) for o in objects]
 
 
 def reviewable(objects, images):
@@ -123,7 +140,7 @@ def quoted(manifest, decision):
     return d["text"], basis
 
 
-def packet(batch, manifest, images, folder=None, blank=()):
+def packet(batch, manifest, images, folder=None, blank=(), checklist=CHECKLIST):
     """The brief for one reviewer: its objects, their images (images[object id]: file names, in `folder` when given;
     those in `blank` marked so), decisions and quotations, the checklist, and the verdict format."""
     lines = [
@@ -136,7 +153,7 @@ def packet(batch, manifest, images, folder=None, blank=()):
         "",
         "## Checklist (apply every item to every object)",
         "",
-        *[f"- {c}" for c in CHECKLIST],
+        *[f"- {c}" for c in checklist],
         "",
         "## Objects",
     ]
@@ -168,8 +185,9 @@ def packet(batch, manifest, images, folder=None, blank=()):
         "",
         "Severity: blocker, wrong or broken at the tour's distance; major, plainly visible close up; minor, visible "
         "only on inspection; cosmetic, a taste call. Suggest the owner given for the object unless the fault lies "
-        "elsewhere (shadows, reflections, glass and levels of detail are integration's; terrain, trees, clearings and "
-        "ground are lane D's).",
+        "elsewhere (shadows, reflections, glass and levels of detail are integration's; the mesh trees' species, "
+        "drawn crowns and reach are lane T's, and a species' own mesh lane C's; where trees stand, terrain, "
+        "clearings and ground are lane D's).",
     ]
     return "\n".join(lines) + "\n"
 
@@ -231,6 +249,8 @@ def main(argv):
     p.add_argument("--out", type=Path, default=inventory.OUT_DIR / "packets")
     p.add_argument("--only", type=lambda s: [x for x in s.split(",") if x])
     p.add_argument("--most", type=int, default=MOST)
+    p.add_argument("--with", dest="assets", type=lambda s: [x for x in s.split(",") if x], default=[],
+                   help="assets whose decisions a picture shows every object also answers for, with their checks")
     c = sub.add_parser("collate")
     c.add_argument("verdicts", type=Path, nargs="+")
     c.add_argument("--out", type=Path, default=inventory.OUT_DIR / "findings.json")
@@ -251,10 +271,12 @@ def main(argv):
         copies = args.out / "images"
         copies.mkdir(exist_ok=True)
         blank_copies = {Path(name).stem + ".jpg" for name in blanks}
-        for k, batch in enumerate(batches(shoot.chosen(objects, args.only), most=args.most), 1):
+        checklist = CHECKLIST + tuple(WITH_CHECKS[a] for a in args.assets if a in WITH_CHECKS)
+        chosen = with_assets(shoot.chosen(objects, args.only), manifest, args.assets)
+        for k, batch in enumerate(batches(chosen, most=args.most), 1):
             given = {o.id: [review_copy(args.shots / name, copies) for name in images[o.id]] for o in batch}
-            (args.out / f"batch-{k:02d}.md").write_text(packet(batch, manifest, given, copies.resolve(), blank_copies),
-                                                        encoding="utf-8")
+            (args.out / f"batch-{k:02d}.md").write_text(packet(batch, manifest, given, copies.resolve(), blank_copies,
+                                                               checklist), encoding="utf-8")
             print(f"batch {k:02d}: {len(batch)} objects, owners {sorted({o.owner for o in batch})}")
         if blanks:
             print(f"blank baseline shots, marked in their packets: {sorted(blanks)}")

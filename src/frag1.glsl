@@ -25,10 +25,10 @@ uniform sampler2D tMeshT;  // the mesh depth pre-pass: radial distance to the ne
 #ifdef SPLIT_SH
 uniform sampler2D tG0; uniform sampler2D tG6;
 #endif
-#if defined(SPLIT_P3) || defined(SUN_PASS)
+#if defined(SPLIT_P3) || defined(SUN_PASS) || (defined(SPLIT_SH) && defined(MESH_TREES))
 uniform highp sampler2DArrayShadow tMeshSh;   // mesh casters' sun depth, one layer per footprint (finest last)
 uniform mat4 uShM[MESH_SH_LAYERS];            // world -> layer clip space
-uniform vec4 uShP[MESH_SH_LAYERS];            // texel size (uv), unused, depth bias (normalised), unused
+uniform vec4 uShP[MESH_SH_LAYERS];            // texel size (uv), the tree layer's inner square (|clip|), depth bias (normalised), unused
 uniform int uShN;                             // layers rendered: 0 without mesh casters
 #endif
 #ifdef SPLIT_P3
@@ -103,6 +103,14 @@ uniform int uTreeRefl;
 uniform vec3 uTreeKit[24];     // the kit's species colours (linear): bark, upper bark and leaves, species by species; shade()
                                // takes the bark's, the leaves taking the drawn crowns' colours
 uniform vec2 uTreeFar;         // a mesh tree's bark turns to the drawn crowns' (shade()) between these distances (m)
+// the species' own sun shadows (template_c.html treeShadow): layer uShT of tMeshSh (-1: none) holds the trees the
+// camera draws as their species, so the sun's march leaves them out (speciesShade) and the shading pass looks the layer
+// up for each pixel (frag5.glsl treeSun). uSpR: the forest's reach and a tree apart's (m, 3D, from the camera); tApart:
+// the table's cells by their tree's class (template_b.html treeClasses): 1 where it stands apart, 0.5 where it is a
+// screen's, which keeps its drawn crown and so its raymarched shadow
+uniform int uShT;
+uniform vec2 uSpR;
+uniform highp sampler2D tApart;
 #else
 #define VM_TREES 1
 #define VM_REFL 2
@@ -187,6 +195,17 @@ GS sampleGround(vec2 xz) {
   return g;
 }
 
+// how far along a ray it enters the local layer (its grid's uv square): 1e9 for a ray that starts inside it or never
+// enters. The march's steps end there (trace(), and the cone pass's replay of it), so it samples the layer from its edge
+float localEntry(vec3 ro, vec3 rd) {
+  vec2 o = vec2(dot(uLocU, vec3(ro.xz, 1.)), dot(uLocV, vec3(ro.xz, 1.)));
+  vec2 d = vec2(dot(uLocU.xy, rd.xz), dot(uLocV.xy, rd.xz));
+  vec2 inv = vec2(d.x < 0. ? -1. : 1., d.y < 0. ? -1. : 1.) / max(abs(d), vec2(1e-12));
+  vec2 a = -o * inv, b = (1. - o) * inv;
+  float tA = max(min(a.x, b.x), min(a.y, b.y)), tB = min(max(a.x, b.x), max(a.y, b.y));
+  return tA > 0. && tA < tB ? tA : 1e9;
+}
+
 float bldSd(GS g) { return mix(12.7, g.la.w * 25.5 - 12.8, step(0.01, g.lw)); }
 
 // procedural micro-relief on top of the ~30 m Copernicus DEM
@@ -249,6 +268,19 @@ float treeH(vec4 h, float dens, bool con, out float r) {
 // is the nearest thing (tp.w > 0), that tree: tc = (centre, crown radius, height), tp = (conifer, crown half-height,
 // hue, 1 crown / 2 trunk). mh: tallest tree within two cells (tab: from tTree); trees beyond are >= 10.85 m away.
 #define TREE_SAFE 3.85
+#if defined(SPLIT_SH) && defined(MESH_TREES)
+// whether the sun's march leaves out the tree in table cell cc (centre ctr, height H, the ground gy under the march's
+// sample): the camera draws it as its species, nearer than its reach (uSpR) and not a screen's, and its whole crown lies
+// within the tree layer's inner square (uShP.y), which holds every tree within reach from anywhere in the camera's cell
+bool speciesShade(vec2 cc, vec2 ctr, float gy, float H) {
+  float d = distance(vec3(ctr.x, gy, ctr.y), uCamPos);
+  if (uShT < 0 || d >= max(uSpR.x, uSpR.y)) return false;
+  float k = texelFetch(tApart, ivec2(cc + TREE_G0), 0).r;
+  if (abs(k - 0.5) < 0.25 || (d >= uSpR.x && k < 0.75)) return false;
+  vec4 c = uShM[uShT] * vec4(ctr.x, gy + 0.5 * H, ctr.y, 1.);
+  return max(abs(c.x), abs(c.y)) < uShP[uShT].y;
+}
+#endif
 float treeSD(vec3 p, float gy, float mh, bool tab, out vec4 tc, out vec4 tp) {
   vec2 c0 = floor(p.xz / 7.);
   float best = TREE_SAFE, hy = p.y - gy;
@@ -268,6 +300,9 @@ float treeSD(vec3 p, float gy, float mh, bool tab, out vec4 tc, out vec4 tp) {
     bool con = h.w < conF;
     float r, H = treeH(h, dens, con, r);
     if (rq - r > best) continue;
+#if defined(SPLIT_SH) && defined(MESH_TREES)
+    if (tab && speciesShade(cc, ctr, gy, H)) continue;   // the tree layer casts its species' shadow instead
+#endif
     float a = con ? 0. : 0.36 * H, dc;
     if (con) dc = sdCone(vec2(rq, hy - 0.12 * H), r, 0.88 * H);
     else dc = sdEll(vec3(q.x, hy - (H - a), q.y), vec3(r, a, r));

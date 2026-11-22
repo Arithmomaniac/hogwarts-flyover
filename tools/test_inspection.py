@@ -1,6 +1,7 @@
 """tools.inspection: the qualification's inventory of every distinctly rendered or defined object, the framing of each
 one's close-up and context views, and the packets its reviewers get."""
 import copy
+import dataclasses
 import json
 import math
 import unittest
@@ -8,6 +9,7 @@ import unittest
 import numpy as np
 
 from tools.inspection import contact, frame, inventory, motion, review, shoot
+from tools.paths import PAGE
 
 
 def unit(cid, family, area, k=0, asset="village-house", regular=True, hips=False, drop=0.5, x=0.0, z=0.0):
@@ -255,6 +257,20 @@ class FrameTests(unittest.TestCase):
         self.assertAlmostEqual(occluded, 0.5, delta=0.1)
         self.assertAlmostEqual(visible, 0.5, delta=0.1)
 
+    def test_a_tree_shows_a_species_subject_but_no_other(self):
+        view, box = self.view(), (-2.0, -2.0, 18.0, 2.0, 2.0, 22.0)
+        enter = lambda d: frame.ray_box(np.zeros((1, 3)), d[None], np.array(box[:3]), np.array(box[3:]))[0][0]
+
+        def hit(d):
+            t = enter(d)
+            return (t, frame.TREES) if np.isfinite(t) else (500.0, 0)
+        obj = lambda kind: inventory.Obj(id="trees/oak", title="o", family="trees", kind=kind,      # noqa: E731
+                                         at=(0.0, 0.0, 20.0), size=4.0)
+        species = frame.score(view, self.samples(view, hit), box, landscape=shoot.subject_landscape(obj("species")))
+        other = frame.score(view, self.samples(view, hit), box, landscape=shoot.subject_landscape(obj("part")))
+        self.assertGreater(species[0], 0.5)
+        self.assertEqual(other[0], 0.0)
+
     def test_the_first_candidate_that_shows_its_subject_is_chosen(self):
         self.assertEqual(frame.choose([(0.05, 0.6), (0.2, 0.05), (0.3, 0.0)]), 1)
         self.assertEqual(frame.choose([(0.05, 0.6), (0.01, 0.4)]), 1)   # none passes: the least hidden share wins
@@ -330,6 +346,23 @@ class ShootTests(unittest.TestCase):
     def test_shot_files_are_named_for_their_object_and_role(self):
         self.assertEqual(shoot.file_name("castle/astronomy-tower", "close"), "castle__astronomy-tower-close.png")
         self.assertEqual(shoot.record_name("tour/01-hogwarts-castle"), "tour__01-hogwarts-castle.json")
+
+    def test_a_species_is_shot_at_its_forms_tree_nearest_its_seed_that_stands_apart_else_its_nearest(self):
+        tree = lambda variant, x, apart: {"variant": variant, "x": x, "z": 0.0, "r": 3.0, "H": 15.0,   # noqa: E731
+                                          "apart": apart}
+        trees = [tree("oak-1", 5.0, False), tree("oak-2", 40.0, True), tree("beech-1", 1.0, True),
+                 tree("oak-3", 90.0, True), tree("scots-pine-young-1", 2.0, True),
+                 tree("scots-pine-mature-2", 60.0, True)]
+        self.assertEqual(shoot.pick_tree(trees, "oak", (0.0, 0.0))["x"], 40.0)
+        self.assertEqual(shoot.pick_tree(trees, "scots-pine-mature", (0.0, 0.0))["x"], 60.0)
+        self.assertEqual(shoot.pick_tree(trees[:1], "oak", (0.0, 0.0))["x"], 5.0)
+        self.assertIsNone(shoot.pick_tree(trees, "birch", (0.0, 0.0)))
+
+    def test_the_shot_finds_a_species_tree_by_the_pages_own_variant_rule_and_only_that(self):
+        code = shoot.tree_code(PAGE.read_text(encoding="utf-8", errors="replace"))
+        for start in ("const TREE_RATIO = ", "const treeHash = (x, z) => {", "function treeVariant(r, H, con, u) {"):
+            self.assertIn(start, code)
+        self.assertNotIn("function tileTrees", code)
 
     BASELINE = ("let free = false, fp = [0, 0, 0], fyaw = 0, fpitch = 0;\n  function lighting(hBST) { return 1; }\n"
                 "  window.__hog = {\n    pause(p) { paused = p; }, dbg(n) { dbg = n; }, path: pathAt, ground,\n  };\n")
@@ -456,6 +489,13 @@ class ReviewTests(unittest.TestCase):
     def objects(self, n, family="village"):
         return [inventory.Obj(id=f"{family}/o{k}", title=f"Object {k}", family=family, kind="part",
                               at=(0.0, 0.0, 0.0), size=5.0, decisions=("hut-plan",)) for k in range(n)]
+
+    def test_with_an_asset_every_object_also_answers_for_its_decisions_that_a_picture_shows(self):
+        manifest = {"assets": [{"id": "forest-trees", "decisions": ["trees-form", "trees-generator"]},
+                               {"id": "willow", "decisions": ["willow-crown"]}]}
+        objs = [*self.objects(1), dataclasses.replace(self.objects(1)[0], id="village/o1", decisions=("trees-form",))]
+        got = review.with_assets(objs, manifest, ["forest-trees"])
+        self.assertEqual([o.decisions for o in got], [("hut-plan", "trees-form"), ("trees-form",)])
 
     def test_batches_hold_about_eight_to_twelve_objects_each_once(self):
         for n in (8, 12, 13, 25, 31, 97):

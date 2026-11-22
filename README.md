@@ -26,7 +26,7 @@ The overlay keeps the current landmark, tour progress, playback buttons and time
 | **Up/Down arrows** | Change time of day |
 | **Q**, **L**, **H** | Cycle quality, toggle detail, hide/show HUD |
 
-URL parameters are `t` (tour seconds), `tod` (hour, BST; default `18.5`), `q` (quality `0` to `2`), `scale` (fixed render scale instead of adaptive resolution), `pause=1`, `detail=0`, `hud=0` and `trees=raymarched` (the earlier raymarched trees, for comparison). For example, [pause near the castle/tree sequence](https://arithmomaniac.github.io/hogwarts-flyover/?t=60&pause=1).
+URL parameters are `t` (tour seconds), `tod` (hour, BST; default `18.5`), `q` (quality `0` to `2`), `scale` (fixed render scale instead of adaptive resolution), `pause=1`, `detail=0`, `hud=0`, `trees=raymarched` (the earlier raymarched trees, for comparison) and `treeshadows=envelope` (every tree casting its drawn crown's solid shadow, as before the species cast their own, for comparison). For example, [pause near the castle/tree sequence](https://arithmomaniac.github.io/hogwarts-flyover/?t=60&pause=1).
 
 Click the scene to use keyboard shortcuts; inputs, buttons and dialogs keep their normal keyboard behavior. To run the overlay's browser checks with Python, Playwright and installed Microsoft Edge: `python -m unittest discover -s src -p test_ui.py`.
 
