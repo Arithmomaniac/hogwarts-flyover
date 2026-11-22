@@ -117,7 +117,7 @@ TOUR_TIME = """(step) => {
 # ZERO, min(uQual, 0), which is 0 whatever the quality, and the page sets it in none of them
 APPLIED = """(hour) => {
   const v = __hog.probe(0, 0), cv = document.getElementById("c"), gl = cv.getContext("webgl2");
-  const trees = (p) => /^#define (TINST_PASS|TREE_DRAW|TREE_MESH) 1$/m.test((p.__src || [])[1] || "");
+  const trees = (p) => /^#define (TINST_PASS|TREE_DRAW|TREE_MESH|TREE_SHADOW) 1$/m.test((p.__src || [])[1] || "");
   const quality = [...__programs.recent].filter((p) => !trees(p)).map((p) => [p, gl.getUniformLocation(p, "uQual")])
                                          .filter(([, u]) => u !== null).map(([p, u]) => gl.getUniform(p, u));
   return { sun: v.sun, want: __hog.light(hour).dir, res: v.res, canvas: [cv.width, cv.height], quality }; }"""

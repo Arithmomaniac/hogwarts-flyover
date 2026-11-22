@@ -394,6 +394,16 @@ class TreeKitTests(unittest.TestCase):
                        "autumn_share": 0.0}}
     SCENE = {"families": ["trees"], "assets": [{"id": "forest-trees", "family": "trees", "status": "planned"}]}
 
+    def test_the_page_cuts_leaves_as_the_kit_sizes_them(self):
+        # the kit sizes each card's uv span for leaves of its species' length on the page's leaf mask: the page must
+        # multiply the uv by the kit's LEAF_TILE and cut LEAF_GRID cells per unit, each leaf LEAF_CELLS cells long
+        import mesh_trees
+        vs = (ROOT / "src" / "template_b.html").read_text(encoding="utf-8")
+        mask = (ROOT / "src" / "frag5.glsl").read_text(encoding="utf-8")
+        self.assertIn(f"vUV = aUV * {mesh_trees.LEAF_TILE:g}.;", vs)
+        self.assertIn(f"vec2 g = uv * {mesh_trees.LEAF_GRID!r}", mask)
+        self.assertIn(f"/ vec2({mesh_trees.LEAF_CELLS / 2!r}, ", mask)
+
     def variants(self):
         rng = np.random.default_rng(7)
 

@@ -8,7 +8,9 @@ Frames are 1920 x 1080 at device pixel ratio 1 with the page's internal scale fi
 default quality and detail, paused and with no HUD, as the plan's qualification requires; `--detail` adds a close-up at
 internal scale 1 for the objects it names. An object with no views of its own (Obj.views) is framed: for a payload
 object, each side frame.candidates offers, sun first, is rendered and probed on the framing test's grid until one shows
-its subject clearly (frame.score, frame.choose); landscape objects take the sun's side, or their own. Its context view
+its subject clearly (frame.score, frame.choose); landscape objects take the sun's side, or their own. A tree species
+first finds its tree: of its form, the one nearest its seed that stands apart (Session.tree, by the page's own variant
+rule), then is framed as a payload object, with no baseline. Its context view
 stands further back on the close-up's side unless it gives its own. Tour stills come first, at the page's own hour,
 before any view takes the camera off the tour. `--baseline` shoots each payload object's close-up again on that page
 (baseline-x, the frozen page at site X), for the checklist's comparison with the baseline's low-detail version; its
@@ -21,7 +23,10 @@ pixel ratio, canvas and internal sizes, page hash). The run holds its GPU's lock
 """
 import argparse
 import asyncio
+import dataclasses
 import json
+import math
+import re
 import sys
 from pathlib import Path
 
@@ -38,7 +43,22 @@ CLEAR_M = 2.0                       # a framed camera stands at least this far a
 NIGHT_SUN_DEG = -12.0               # night: the sun this far down. The review sheets' "night", every lamp lit, comes with
                                     # the sun only 2.5 degrees down, in a bright twilight
 MESH_KINDS = ("asset", "part", "sample", "outlier")
+SCORED_KINDS = MESH_KINDS + ("species",)    # framed on the G-buffer's view of their box; species have no baseline
 OUT = inventory.OUT_DIR / "shots"
+# a species' tree: the page's own variant rule (template_c.html), run in the page beside the kit as uploadKit
+# (template_b.html) lists it, over the instances of each box in turn round the object's seed, until one holds its form
+TREE_CODE = (r"TREE_RATIO = [0-9.]+", r"const treeHash = \(x, z\) => \{.*?\n  \};",
+             r"function treeVariant\(r, H, con, u\) \{.*?\n  \}\n")
+TREE_SEARCH_M = (150.0, 400.0, 1000.0, 2500.0)      # the boxes' half-widths
+TREES = """([code, x0, z0, x1, z1]) => {
+    const kit = MESHES.kit.variants.map((v, index) => ({ index, name: v.name, conifer: !!v.conifer, share: v.share,
+                                                          ratio: v.crown_r / v.height }));
+    const [treeHash, treeVariant] = new Function("treeKit", code + "\\nreturn [treeHash, treeVariant];")(
+        { con: kit.filter((v) => v.conifer), dec: kit.filter((v) => !v.conifer) });
+    return __hog.treeList(x0, z0, x1, z1).map((t) => ({
+        x: t.x, z: t.z, r: t.r, H: t.H, apart: t.apart,
+        variant: kit[treeVariant(t.r, t.H, t.con, treeHash(t.x, t.z))].name }));
+}"""
 # the framing test's grid (src/test_render_tour.py), read in one pass: every 4th internal pixel's hit distance and
 # material
 GRID = """() => {
@@ -106,6 +126,27 @@ def subject_box(obj, ground):
     return (x - s, max(y - s, g - 0.5), z - s, x + s, y + s, z + s)
 
 
+def tree_code(page_text):
+    """The page's own treeHash and treeVariant, with the TREE_RATIO they read, as source for TREES to run."""
+    found = [re.search(p, page_text, re.S) for p in TREE_CODE]
+    if not all(found):
+        raise ValueError("the page's treeHash, treeVariant or TREE_RATIO is not where the shot looks for it")
+    return f"const {found[0][0]};\n{found[1][0]}\n{found[2][0]}"
+
+
+def pick_tree(trees, form, seed):
+    """Of the trees (TREES' records) of a form, the one nearest the seed (east, north) that stands apart, where its
+    whole form shows, else the nearest; None if there is none."""
+    mine = [t for t in trees if inventory.tree_form(t["variant"]) == form]
+    pool = [t for t in mine if t["apart"]] or mine
+    return min(pool, key=lambda t: math.hypot(t["x"] - seed[0], t["z"] - seed[1]), default=None)
+
+
+def subject_landscape(obj):
+    """The G-buffer materials that are no object in a view of `obj`: the landscape's, less the trees' for a species."""
+    return tuple(m for m in frame.LANDSCAPE if m != frame.TREES) if obj.kind == "species" else frame.LANDSCAPE
+
+
 class Session:
     """One page in Edge on one GPU, and what the inspection asks of it."""
 
@@ -142,11 +183,11 @@ class Session:
     async def settle(self, frames, n):
         await self.page.wait_for_function(f"__hog.frames >= {frames + n}", timeout=180000)
 
-    async def score(self, view, box):
+    async def score(self, view, box, landscape=frame.LANDSCAPE):
         _, _, frames = await self.place(view)
         await self.settle(frames, PROBE_FRAMES)
         grid = await self.page.evaluate(GRID)
-        return frame.score(grid["view"], grid["out"], box)
+        return frame.score(grid["view"], grid["out"], box, landscape=landscape)
 
     async def shot(self, view, path, scale=None):
         if scale is not None:
@@ -157,6 +198,25 @@ class Session:
         if scale is not None:
             await self.page.evaluate("(s) => __hog.scale(s)", self.scale)
         return eye, target
+
+    async def tree(self, obj, code):
+        """A species object made to look at its tree (pick_tree, in the first TREE_SEARCH_M box round its seed to
+        hold one of its form), boxed by the tree's crown and height; (object, tree)."""
+        x, _, z = obj.at
+        form = obj.id.split("/", 1)[1]
+        for half in TREE_SEARCH_M:
+            tree = pick_tree(await self.page.evaluate(TREES, [code, x - half, z - half, x + half, z + half]), form,
+                             (x, z))
+            if tree:
+                break
+        else:
+            raise RuntimeError(f"no {form} stands within {TREE_SEARCH_M[-1]:g} m of {obj.id}'s seed")
+        tx, tz, r, h = tree["x"], tree["z"], tree["r"], tree["H"]
+        await self.fetch_ground((tx, tz))
+        g = self.ground(tx, tz)
+        box = tuple(round(v, 2) for v in (tx - r, g - 0.5, tz - r, tx + r, g + h, tz + r))
+        return dataclasses.replace(obj, at=(round(tx, 2), round(h / 2, 2), round(tz, 2)),
+                                   size=round(1.3 * max(h, 2 * r), 1), box=box), tree
 
 
 async def open_page(pw, page_path, gpu, scale):
@@ -193,7 +253,7 @@ async def hours_by_name(page):
 async def frame_close(session, obj, sun_azimuth):
     """(close-up view, [(azimuth, visible, occluded)] of each candidate tried) of an object with no views of its own."""
     hour = obj.hour
-    if obj.kind not in MESH_KINDS:
+    if obj.kind not in SCORED_KINDS:
         azimuth = sun_azimuth if obj.azimuth is None else obj.azimuth
         return frame.framed(obj.title, obj.at, obj.size, azimuth, hour, elevation=obj.elevation), []
     await session.fetch_ground((obj.at[0], obj.at[2]))
@@ -202,7 +262,7 @@ async def frame_close(session, obj, sun_azimuth):
     tried, views = [], []
     for azimuth in sides:
         view = frame.framed(obj.title, obj.at, obj.size, azimuth, hour, elevation=obj.elevation)
-        visible, occluded = await session.score(view, box)
+        visible, occluded = await session.score(view, box, subject_landscape(obj))
         tried.append((round(azimuth, 1), round(visible, 3), round(occluded, 3)))
         views.append(view)
         if visible >= frame.MIN_VISIBLE and occluded <= frame.MAX_OCCLUDED:
@@ -232,9 +292,12 @@ async def shoot_page(page_path, objects, gpu, out, scale=SCALE, detail=()):
                     "observed": observed, "shots": [{"file": name, "role": "tour", "time": times[k],
                                                      "hour": "the page's own (18.5)"}]})
         sun = (await session.page.evaluate("(h) => __hog.light(h)", inventory.DAY))["az"]
+        code = tree_code(Path(page_path).read_text(encoding="utf-8", errors="replace")) \
+            if any(o.kind == "species" for o in objects) else None
         for o in objects:
             if o.kind == "tour":
                 continue
+            o, tree = await session.tree(o, code) if o.kind == "species" else (o, None)
             close, tried = (o.views[0], []) if o.views else await frame_close(session, o, sun)
             shots = []
             eye, target = await session.shot(close, out / file_name(o.id, "close"))
@@ -249,7 +312,8 @@ async def shoot_page(page_path, objects, gpu, out, scale=SCALE, detail=()):
             shots.append({"file": file_name(o.id, "context"), "role": "context", "view": context, "eye": eye,
                           "target": target})
             records[o.id] = write_record(out, {"object": o.id, "page": str(page_path), "page_hash": tag, "gpu": gpu,
-                                               "scale": scale, "observed": observed, "shots": shots})
+                                               "scale": scale, "observed": observed, "shots": shots,
+                                               **({"tree": tree} if tree else {})})
             print(f"{o.id}: {', '.join(s['file'] for s in shots)}" + (f" (tried {tried})" if tried else ""),
                   flush=True)
         await browser.close()

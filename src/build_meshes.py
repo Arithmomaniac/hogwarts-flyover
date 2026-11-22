@@ -321,11 +321,11 @@ def packed(streams):
             "idx": meshopt.encode_indices(np.frombuffer(streams["idx"], "<u2"))}
 
 
-def merge(encoded, source=None, shadow=None, towers=None, footprint=None, kit=None):
+def merge(encoded, source=None, shadow=None, towers=None, footprint=None, kit=None, screens=None):
     """The payload text from encoded assets: chunks, their level-of-detail groups and streams in sorted asset order,
     each stream packed, then zlib-compressed and base64-encoded; `footprint` is the footprint layer's entry
-    (mesh_footprint.encode) and `kit` the tree kit's (encode_kit). `levels` names the view the groups' switch distances
-    are measured for (mesh_levels.REF_ROWS output rows, FOV_DEG)."""
+    (mesh_footprint.encode), `kit` the tree kit's (encode_kit) and `screens` screen_lines'. `levels` names the view
+    the groups' switch distances are measured for (mesh_levels.REF_ROWS output rows, FOV_DEG)."""
     chunks, groups, streams = [], [], {k: [] for k in RAW}
     for asset in sorted(encoded):
         chunks += [{**c, "group": c["group"] + len(groups)} for c in encoded[asset]["chunks"]]
@@ -335,6 +335,7 @@ def merge(encoded, source=None, shadow=None, towers=None, footprint=None, kit=No
     payload = {"format": FORMAT, "version": VERSION, **({"source": source} if source else {}),
                **({"shadow": shadow} if shadow else {}), **({"towers": towers} if towers and any(towers) else {}),
                **({"footprint": footprint} if footprint else {}), **({"kit": kit} if kit else {}),
+               **({"screens": screens} if screens else {}),
                "levels": {"rows": mesh_levels.REF_ROWS, "fov": mesh_levels.FOV_DEG}, "groups": groups,
                "chunks": chunks,
                "streams": {k: base64.b64encode(zlib.compress(v, 9)).decode("ascii")
@@ -764,6 +765,28 @@ def footprint_entry(marked, local):
     return mesh_footprint.encode(mesh_footprint.layer(marked, Grid(local)))
 
 
+SCREEN_M = 80.0     # trees this near the lines the castle is screened from keep their drawn crowns (screen_lines)
+
+
+def screen_lines(scene, meta):
+    """The payload's screens entry (decisions train-screen and station-wood): the lines from which the train screen and
+    the station wood keep the castle hidden, the train's last approach from the tunnel's portal round the loop past the
+    platform, and the walk to the lake, each a polyline about 10 m a step with the reach SCREEN_M within which the page
+    keeps its trees' drawn crowns however near (template_b.html treeClasses), as the screens were designed: a species
+    mesh's open crown would show the castle through it. None for a scene without the railway."""
+    if not any(a["id"] == "track" for a in scene["assets"]):
+        return None
+    georef = load_georef()
+    al = railway.alignment(scene, meta, georef)
+    approach = np.concatenate([al.main.xz[al.main.s <= al.portal_s][::-1], al.loop.xz[1:]])
+    out = []
+    for line in (approach, railway.lake_walk(al, scene, georef)):
+        s = np.concatenate([[0.0], np.cumsum(np.hypot(*np.diff(line, axis=0).T))])
+        keep = np.unique(np.concatenate([np.searchsorted(s, np.arange(0.0, s[-1], 10.0)), [len(s) - 1]]))
+        out.append({"line": np.round(line[keep], 1).tolist(), "r": SCREEN_M})
+    return out
+
+
 def merge_parts(parts, scene=None):
     """The payload text from every family's part: the same bytes as building all families at once."""
     scene = scene or json.loads(MANIFEST.read_text(encoding="utf-8"))
@@ -795,7 +818,8 @@ def merge_parts(parts, scene=None):
         if (set(CLAIMS) & set(a) or a.get("status") in READY) and a["id"] not in encoded:
             raise ValueError(f"{a['id']} claims mapped structures but has no geometry")
     return merge(encoded, source_digests(), shadow_regions(extents, scene), towers,
-                 footprint_entry(marked, parts[0]["local"]) if parts else None, kits[0] if kits else None)
+                 footprint_entry(marked, parts[0]["local"]) if parts else None, kits[0] if kits else None,
+                 screen_lines(scene, load_data()["meta"]))
 
 
 def clearing_report(marked, data):
@@ -843,7 +867,7 @@ def main(argv):
     if len(kits) > 1:
         raise ValueError(f"{len(kits)} families carry a tree kit; the payload holds one")
     text = merge(encoded, source_digests(), shadow_regions(bounds(meshes), scene), tower_tops,
-                 footprint_entry(marked, data["meta"]["local"]), kits[0] if kits else None)
+                 footprint_entry(marked, data["meta"]["local"]), kits[0] if kits else None, screen_lines(scene, data["meta"]))
     write(out, text)
     print("skyline:", "; ".join(report))
     print("trees cleared beside the meshes:", "; ".join(clearing_report(marked, data)))

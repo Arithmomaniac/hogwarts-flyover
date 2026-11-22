@@ -30,6 +30,7 @@ MIN_VISIBLE = 0.1                   # a view shows its subject when this share o
 MAX_OCCLUDED = 0.15                 # ...and at most this share end on something in front of it
 MARGIN_M = 1.0                      # a hit this far outside the box still counts as on it
 LANDSCAPE = (0, 1, 2, 3)            # G-buffer materials that are no object: sky, ground, water, trees
+TREES = 3                           # the trees' material, a tree species' subject
 
 
 class View(NamedTuple):
@@ -113,11 +114,11 @@ def ray_box(origins, dirs, lo, hi):
     return np.where(hit, np.maximum(near, 0.0), np.inf), np.where(hit, far, np.inf)
 
 
-def score(view, samples, box, margin=MARGIN_M):
+def score(view, samples, box, margin=MARGIN_M, landscape=LANDSCAPE):
     """(visible, occluded) shares of a probed view's rays through a subject's box (x0, y0, z0, x1, y1, z1): rays that end
     on an object inside the box, and rays that end on anything in front of the box. `samples` holds rows (x, y, hit
     distance, material) on the internal pixel grid; rays that pass through the box and end beyond it count as
-    neither. A hit within `margin` of the box counts as on it."""
+    neither. A hit within `margin` of the box counts as on it; a hit on a `landscape` material is no object."""
     samples = np.asarray(samples, float)
     lo, hi = np.array(box[:3], float), np.array(box[3:], float)
     d = rays(view, samples[:, :2])
@@ -127,7 +128,7 @@ def score(view, samples, box, margin=MARGIN_M):
         return 0.0, 0.0
     t, mat = samples[:, 2], samples[:, 3].astype(int)
     front = through & (t < enter - margin)
-    on = through & (t >= enter - margin) & (t <= leave + margin) & ~np.isin(mat, LANDSCAPE)
+    on = through & (t >= enter - margin) & (t <= leave + margin) & ~np.isin(mat, landscape)
     n = float(through.sum())
     return float(on.sum()) / n, float(front.sum()) / n
 

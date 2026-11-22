@@ -9,7 +9,11 @@ dial off, its count of neighbours missing a row of cells, the lake's reflections
 the mirror drawing none. And the drawn crowns' reach: the crowns drawn past it, the march's canopy sheet left out within
 the table, or the lake's reflections marching the sheet within the crowns' reach. And the crowns' quads covering the
 whole view when a box comes within 1 m of the camera (the clip's loss), which changes no pixel, only the time:
-__hog.crownCover counts a quad's pixels.
+__hog.crownCover counts a quad's pixels. And the screens' trees (decisions train-screen and station-wood) taking their
+species meshes or the forest's band, or their shadows left out by the sun's march. And the species' own shadows (the
+tree layer): the march keeping the species' drawn crowns, leaving out a tree apart past its reach or giving it the
+forest's reach, the shading pass ignoring the layer, or the shadow dial ignored. And a far tree's leaves never
+widening, and a few broadleaves already turning (decision trees-in-leaf).
 
 They rebuild the copy's page and need a browser (set HOG_GPU):
 
@@ -28,6 +32,11 @@ MIRROR = (TREES + "test_the_mirror_draws_the_trees_the_lake_reflections_leave_ou
 EDGE = (TREES + "test_the_march_finds_no_tree_at_the_table_edge",)
 CUT = (TREES + "test_the_drawn_crowns_give_way_to_the_canopy_sheet_at_their_reach",)
 CLIP = (TREES + "test_a_tree_beside_the_camera_puts_no_fragment_in_the_crown_pass",)
+SCREEN = (TREES + "test_the_screens_keep_the_castle_out_of_sight_from_the_tunnel_portal_and_the_platform",)
+SPECIES_SHADOW = (TREES + "test_a_species_tree_casts_its_own_crowns_shadow",)
+KEPT_SHADOW = (TREES + "test_a_drawn_crown_keeps_its_own_shadow",)
+LEAF_GROW = (TREES + "test_a_far_species_trees_leaves_widen_to_keep_their_cover",)
+IN_LEAF = (TREES + "test_no_broadleaf_has_turned",)
 FLAG = '  const TREES_ON = Q.get("trees") !== "raymarched";'
 MUTATIONS = [
     Mutation("mesh trees off by default", "template_b.html", FLAG, '  const TREES_ON = Q.get("trees") === "mesh";',
@@ -63,7 +72,7 @@ MUTATIONS = [
     Mutation("the drawn crowns fade the wrong way", "template_b.html",
              "  vF = band.y > 0. ? clamp(", "  vF = band.y > 0. ? 1. - clamp(", HAND_OVER),
     Mutation("a tree apart's drawn crown keeps the forest's band", "template_b.html",
-             "  vec2 band = aS > 0.5 ? uSparseBand : uMeshBand;", "  vec2 band = uMeshBand;", APART),
+             "aS > 1.5 ? vec2(0.) : (aS > 0.5 ? uSparseBand : uMeshBand);", "aS > 1.5 ? vec2(0.) : uMeshBand;", APART),
     Mutation("a tree apart's species keep the forest's reach", "template_c.html", "L = apart[at] > 0 ? Ds : D;", "L = D;", APART),
     Mutation("the sparse dial always on", "template_c.html", "(treeSparse ? TREE_LOD_SPARSE : TREE_LOD)", "TREE_LOD_SPARSE", APART),
     Mutation("the sparse dial off as the page opens", "template_c.html",
@@ -91,4 +100,26 @@ MUTATIONS = [
              "  for (int k = 0; k < 8; k++) { near = near || c[k].z < ${fl(MESH_NEAR)}; ahead = ahead || c[k].z > 0.; }\n"
              "  lo = near ? vec2(-1.) : max(lo - j - px, -1.); hi = near ? vec2(1.) : min(hi - j + px, 1.);\n"
              "  bool off = !ahead || vF <= 0. ||", CLIP),
+    Mutation("a screen's trees take their species meshes", "template_c.html",
+             "        if (cls[at] > 1.5) continue;                 // a screen's tree: its drawn crown however near", "", SCREEN),
+    Mutation("a screen's drawn crowns take the forest's band", "template_b.html", "aS > 1.5 ? vec2(0.) : (aS > 0.5 ?", "(aS > 0.5 ?", SCREEN),
+    Mutation("the sun's march keeps the species' drawn crowns", "frag1.glsl",
+             "    if (tab && speciesShade(cc, ctr, gy, H)) continue;   // the tree layer casts its species' shadow instead",
+             "", SPECIES_SHADOW),
+    Mutation("the sun's march leaves out a tree apart past its reach", "frag1.glsl",
+             "  if (uShT < 0 || d >= max(uSpR.x, uSpR.y)) return false;", "  if (uShT < 0) return false;", KEPT_SHADOW),
+    Mutation("the sun's march gives a tree apart the forest's reach", "frag1.glsl",
+             "(d >= uSpR.x && k < 0.75)", "(d >= uSpR.x)", SPECIES_SHADOW),
+    Mutation("the sun's march leaves out a screen's trees", "frag1.glsl",
+             "  if (abs(k - 0.5) < 0.25 || (d >= uSpR.x && k < 0.75)) return false;",
+             "  if (d >= uSpR.x && k < 0.75) return false;", SCREEN),
+    Mutation("the shading pass ignores the tree layer", "frag5.glsl",
+             "  if (uShT >= 0 && o6.w >= 0.) shv.x = min(shv.x, treeSun(o6.xyz));", "", SPECIES_SHADOW),
+    Mutation("the species' shadow dial ignored", "template_c.html",
+             "treeShadows(on) { treeShadows = !!on;", "treeShadows(on) { treeShadows = true;", SPECIES_SHADOW),
+    Mutation("a far tree's leaves never widen", "frag5.glsl",
+             "return (uDbg & 8388608) != 0 ? 0. : 0.5 * smoothstep(0.2, 0.6, max(w.x, w.y));", "return 0.;", LEAF_GROW),
+    Mutation("a few broadleaves already turning", "frag5.glsl",
+             "hue);   // every broadleaf in leaf (trees-in-leaf)\n",
+             "hue);\n    dec = mix(dec, vec3(0.1, 0.075, 0.02), step(0.94, hue) * 0.7);\n", IN_LEAF),
 ]

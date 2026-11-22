@@ -63,8 +63,7 @@ vec3 shade(vec3 ro, vec3 rd, Res r) {
       hue = mix(0.5, hash12(cell + 17.3), k);
       crown = mix(1., 0.5 + hash12(cell + 41.9), k) * (0.78 + 0.36 * vnoise(p.xz * 0.025));   // the 3D trees' mean light
     }
-    vec3 dec = mix(vec3(0.034, 0.058, 0.016), vec3(0.06, 0.074, 0.02), hue);
-    dec = mix(dec, vec3(0.1, 0.075, 0.02), step(0.94, hue) * 0.7);   // a few trees already turning
+    vec3 dec = mix(vec3(0.034, 0.058, 0.016), vec3(0.06, 0.074, 0.02), hue);   // every broadleaf in leaf (trees-in-leaf)
     vec3 con = vec3(0.021, 0.037, 0.025) * (0.85 + 0.3 * hue);
     alb = s.tp.w < 0. ? mix(dec, con, s.conF) * crown : (s.tp.w > 1.5 ? vec3(0.05, 0.04, 0.03) : (s.tp.x > 0.5 ? con : dec));
     ao = s.tp.w < 0. ? 0.7 : 0.3 + 0.7 * clamp((p.y - s.gy) / max(s.tc.w, 1.), 0., 1.);
@@ -72,8 +71,8 @@ vec3 shade(vec3 ro, vec3 rd, Res r) {
 #ifdef MESH_TREES
     if (s.tp.w > 2.5) {                               // a mesh tree (tp.y its species): the kit's bark, turning to its upper
       int sp = int(s.tp.y + 0.5);                     // colour by its aux (conF) and to the drawn crowns' far off; its leaves
-      float hf = clamp((p.y - s.gy) / max(s.tc.w, 1.), 0., 1.);   // the drawn crown's colour (its hue, turning crowns and
-      vec3 bark = mix(uTreeKit[3 * sp], uTreeKit[3 * sp + 1], s.conF);   // all), darkening into the crown by its aux
+      float hf = clamp((p.y - s.gy) / max(s.tc.w, 1.), 0., 1.);   // the drawn crown's colour (its hue and all),
+      vec3 bark = mix(uTreeKit[3 * sp], uTreeKit[3 * sp + 1], s.conF);   // darkening into the crown by its aux
       alb = s.tp.w > 3.5 ? mix(bark, vec3(0.05, 0.04, 0.03), smoothstep(uTreeFar.x, uTreeFar.y, t)) : (s.tp.x > 0.5 ? con : dec);
       ao = s.tp.w > 3.5 ? 0.5 + 0.5 * hf : (0.45 + 0.55 * hf) * (1. - 0.5 * s.conF);
     }
@@ -190,17 +189,25 @@ vec3 shade(vec3 ro, vec3 rd, Res r) {
 // sun visibility of p against the mesh casters: the finest layer whose footprint holds p, four bilinear PCF taps.
 // Layers hold every caster over their footprint, so meshes outside the view still shade what the view sees. The
 // shading pass looks them up for each pixel, the sun cache for each 7 m cell.
+float layerSun(int k, vec4 c) {
+  vec3 s = c.xyz * 0.5 + 0.5;
+  float z = min(s.z, 1.) - uShP[k].z, d = 0.5 * uShP[k].x;
+  return 0.25 * (texture(tMeshSh, vec4(s.xy + vec2(-d, -d), float(k), z)) + texture(tMeshSh, vec4(s.xy + vec2(d, -d), float(k), z))
+               + texture(tMeshSh, vec4(s.xy + vec2(-d, d), float(k), z)) + texture(tMeshSh, vec4(s.xy + vec2(d, d), float(k), z)));
+}
 float meshSun(vec3 p) {
   for (int k = uShN - 1; k >= 0; k--) {
     vec4 c = uShM[k] * vec4(p, 1.);
-    if (max(abs(c.x), abs(c.y)) < 0.995) {
-      vec3 s = c.xyz * 0.5 + 0.5;
-      float z = min(s.z, 1.) - uShP[k].z, d = 0.5 * uShP[k].x;
-      return 0.25 * (texture(tMeshSh, vec4(s.xy + vec2(-d, -d), float(k), z)) + texture(tMeshSh, vec4(s.xy + vec2(d, -d), float(k), z))
-                   + texture(tMeshSh, vec4(s.xy + vec2(-d, d), float(k), z)) + texture(tMeshSh, vec4(s.xy + vec2(d, d), float(k), z)));
-    }
+    if (max(abs(c.x), abs(c.y)) < 0.995) return layerSun(k, c);
   }
   return 1.;
+}
+#endif
+#if defined(SPLIT_P3) && defined(MESH_TREES)
+// sun visibility of p against the species the camera draws (the tree layer, template_c.html treeShadow)
+float treeSun(vec3 p) {
+  vec4 c = uShM[uShT] * vec4(p, 1.);
+  return max(abs(c.x), abs(c.y)) < 0.995 ? layerSun(uShT, c) : 1.;
 }
 #endif
 
@@ -274,7 +281,7 @@ void main() {
   float t0 = 0.05;
   int ph = 0, gi = 0, cnt = 0, k = -1, kp = -1;      // ph 0 grid march, 1 baseline replay, 2 done
   if (ro.y > CEIL) { if (rd.y >= 0.) ph = 2; else t0 = (ro.y - CEIL) / -rd.y; }
-  float t = t0, L = 2., Lo = 0., tr = t0, tlim = 0., tk = 0., tkp = 0.;
+  float t = t0, L = 2., Lo = 0., tr = t0, tlim = 0., tk = 0., tkp = 0., tIn = localEntry(ro, rd);
   bool fresh = true;
   for (int i = ZERO; i < 530; i++) {                 // 160 grid steps + at most 360 replay samples
     if (ph == 0 && (t >= TMAX || gi >= 160)) { float tg = min(t, TMAX); tlim = tg - rk * tg; ph = 1; }
@@ -283,10 +290,10 @@ void main() {
     bool rep = ph == 1;
     float ts = rep ? tr : t;
     vec3 p = ro + rd * ts;
-    float dE = 1e5, dy = 1e5, vd = 1e5;
+    float dE = 1e5, dC = 1e5, dy = 1e5, vd = 1e5;
     if (rep || fresh) {                               // the single scene evaluation of this pass
       TS s = evalTop(p, ts, rep ? vmM : 0);
-      dE = s.g.ed > 0. ? 1e5 : max(1. - s.g.ed, 1.);  // the local grid's edge, as trace() bounds its step by it
+      dC = s.g.ed > 0. ? 1e5 : max(1. - s.g.ed, 1.);  // the local grid's edge: the grid march's clearance round p
       dy = p.y - topOf(s); vd = s.vd;
     }
     if (rep) {                                        // exactly trace()'s ST_MARCH advance
@@ -296,12 +303,13 @@ void main() {
       if (vd < eps || dy < 0.) { tk = tkp; k = kp; break; }   // keep the bisection bracket's start sample
       if (++cnt >= maxM) { k = -1; break; }          // baseline exhausts before tg: no skip for this block
       float km = mix(0.55, 0.85, smoothstep(900., 7000., tr));
+      dE = tr < tIn ? max(tIn - tr + 1., 1.) : 1e5;   // up to where the ray enters the local grid, as trace() bounds it
       tr += min(min(max(km * dy, 0.0016 * tr + 0.03), max(dE, eps)), max(0.8 * vd, max(eps, 0.0012 * tr)));
       continue;
     }
     gi++;
     if (fresh) {                                      // clearance round the accepted point: the local grid's edge
-      Lo = (0.75 * dE - rk * t - 1.) / (1. + rk);    // capsule within 0.75 dE - 1 m of p
+      Lo = (0.75 * dC - rk * t - 1.) / (1. + rk);    // capsule within 0.75 dC - 1 m of p
       fresh = false;
     }
     L = min(L, min(Lo, (3. * CG_FAR.z - 2. * rk * t) / (ax + 2. * rk)));   // footprint spans <= 4 far cells
@@ -418,6 +426,9 @@ void main() {
   // the mesh casters' shadow for this pixel's own shadow start: a thin caster's shadow narrower than a shadow-pass block
   // would otherwise be seen only where it crosses a block's centre, and break into dots
   if (o6.w >= 0.) shv.x = min(shv.x, meshSun(o6.xyz));
+#ifdef MESH_TREES
+  if (uShT >= 0 && o6.w >= 0.) shv.x = min(shv.x, treeSun(o6.xyz));
+#endif
   int ic = int(a0.y);
   Res r;
   r.t = a0.x; r.mat = ic & 7; r.rmat = (ic >> 3) & 7; r.it = float(ic >> 7) + shv.y;
@@ -588,7 +599,7 @@ void main() {
 #endif
   gl_FragDepth = depthOf(t / length(vec3(uv * uTanHalf, 1.)));
 }
-#elif defined(TREE_MESH)
+#elif defined(TREE_MESH) || defined(TREE_SHADOW)
 // mesh trees, stage B: the payload kit's species, a variant fitted to each tree near the camera (template_b.html
 // treeMeshVs), drawn by the depth pre-pass and the G-buffer pass with the record a 3D tree writes, its part 3 (leaves)
 // or 4 (bark) and its normal its own; shade() takes its species' colours. A leaf card is cut to leaves, and a tree
@@ -609,6 +620,17 @@ float leafMask(vec2 uv) {                             // a leaf card's leaves: o
     m = max(m, 1. - length(vec2(ca * q.x + sa * q.y, ca * q.y - sa * q.x) / vec2(0.62, 0.3)));
   }
   return m;
+}
+#ifdef TREE_SHADOW
+// the tree layer's depth (template_c.html treeShadow): a leaf card cut to its leaves at their own size, so that a
+// shadow keeps its leaves' cover whatever the layer's texel
+void main() { if (vPart == 2u && leafMask(vUV) < 0.) discard; }
+#else
+// a leaf card's leaves widen as they shrink under three pixels across, to half again their size under one (debug bit
+// 8388608: never): a far card keeps its cover rather than breaking into specks between the pixels' centres
+float leafGrow(vec2 uv) {
+  vec2 w = fwidth(uv) * 3.5;                          // leafMask's grid cells per pixel; a leaf is 0.6 of a cell across
+  return (uDbg & 8388608) != 0 ? 0. : 0.5 * smoothstep(0.2, 0.6, max(w.x, w.y));
 }
 // how far along d the ray from o (in the tree's sheared frame) is inside the tree as treeSD has it, before it leaves:
 // its crown or its trunk, or from bark its trunk only (0 if it never is)
@@ -634,8 +656,9 @@ float treeExit(vec3 o, vec3 d, float r, float H, bool con, bool bark) {
   return max(s, 0.);
 }
 void main() {
+  float grow = leafGrow(vUV);                         // before any discard: derivatives need the whole quad
   if (vI.y > 0. && (vI.z < 0.5) == (hash12(gl_FragCoord.xy + uJitter * 61.7) < vI.y)) discard;   // the other level's share
-  if (vPart == 2u && leafMask(vUV) < 0.) discard;
+  if (vPart == 2u && leafMask(vUV) < -grow) discard;
   vec3 d = vP - uCamPos; float t = length(d);
   vec3 n = normalize(vN);
   if (vPart == 0u && dot(n, d) > 0.) n = -n;        // bark seen from behind (a limb's open end): its near side
@@ -655,4 +678,5 @@ void main() {
   gOut5 = vec4(0., 1., 0., 0.);
   gOut6 = shf ? vec4(so, 0.12 + t * 0.0015) : vec4(sh, 0., 0., -1.);
 }
+#endif
 #endif

@@ -359,22 +359,32 @@
   let treeDetail = Q.has("treedetail") ? Math.min(Math.max(+Q.get("treedetail") || 0, 0), 4) : 1;
   let treeSparse = Q.get("treesparse") !== "0";
   let treeMesh = null;                             // this frame's species draws (treeMeshFrame)
+  // the species' own sun shadows (the default; ?treeshadows=envelope or __hog.treeShadows(0) gives every tree its drawn
+  // crown's shadow, as before): treeShadow's layer holds the trees the camera may draw as their species from anywhere
+  // in its TREE_SH_CELL_M cell, a tree apart within its own reach and the forest's within theirs (TREE_SH_FOREST; else
+  // none), with TREE_SH_SLACK_M more for the ground the sun's march measures them from, and TREE_SH_CROWN_M round them
+  const TREE_SH_CELL_M = 64, TREE_SH_SLACK_M = 30, TREE_SH_CROWN_M = 25, TREE_SH_BIAS_M = 0.05, TREE_SH_FOREST = true;
+  let treeShadows = Q.get("treeshadows") !== "envelope", treeShKey = "", treeShDrawn = 0, treeSh = null, treeShBuf = null;
   const treeHash = (x, z) => {                     // a tree's own uniform number in [0, 1), from its centre
     let h = Math.imul(Math.round(x * 64) | 0, 0x27d4eb2d) ^ Math.imul(Math.round(z * 64) | 0, 0x165667b1);
     h = Math.imul(h ^ (h >>> 15), 0x2c1b3c6d); h = Math.imul(h ^ (h >>> 12), 0x297a2d39);
     return ((h ^ (h >>> 15)) >>> 0) / 4294967296;
   };
   function treeVariant(r, H, con, u) {             // a tree's variant: of its class, by share among those near its r/H
-    const cls = con ? treeKit.con : treeKit.dec, ratio = r / H;
-    let total = 0, best = cls[0];
+    // and its height (within TREE_HEIGHT of the variant's own: a young pine scaled to a mature tree's 17 m would stand
+    // as a giant cone); of those near its r/H but none near its height, the nearest in height
+    const TREE_HEIGHT = Math.SQRT2, cls = con ? treeKit.con : treeKit.dec, ratio = r / H, off = (v) => Math.abs(Math.log(H / v.height));
+    let total = 0, best = cls[0], tall = null;
     for (const v of cls) {
-      if (Math.abs(v.ratio - ratio) <= TREE_RATIO) total += v.share;
+      const near = Math.abs(v.ratio - ratio) <= TREE_RATIO;
+      if (near && off(v) <= Math.log(TREE_HEIGHT)) total += v.share;
+      if (near && (!tall || off(v) < off(tall))) tall = v;
       if (Math.abs(v.ratio - ratio) < Math.abs(best.ratio - ratio)) best = v;
     }
-    if (!(total > 0)) return best.index;            // none near: the nearest
+    if (!(total > 0)) return (tall || best).index;   // none near its height: the nearest of those near its r/H
     let acc = 0, last = best.index;
     for (const v of cls) {
-      if (Math.abs(v.ratio - ratio) > TREE_RATIO) continue;
+      if (Math.abs(v.ratio - ratio) > TREE_RATIO || off(v) > Math.log(TREE_HEIGHT)) continue;
       last = v.index;
       if (u < (acc += v.share / total)) return v.index;
     }
@@ -399,7 +409,7 @@
     const k = treeDetail * cv.height / meshChunks.refRows * meshChunks.refTan / tanH, D = TREE_LOD.map((d) => d * k);
     const Ds = (treeSparse ? TREE_LOD_SPARSE : TREE_LOD).map((d) => d * k);
     const last = D[D.length - 1], far = last * (1 + TREE_BAND), reach = Math.max(far, Ds[1] * (1 + TREE_BAND));
-    const data = treeInst.data, apart = treeInst.sparse;
+    const data = treeInst.data, apart = treeInst.sparse, cls = treeInst.cls;
     const tx = tanH * sw / sh * 1.05, ty = tanH * 1.05, nx = Math.hypot(1, tx), ny = Math.hypot(1, ty);
     const share = (d, b) => Math.min(Math.max((d - b * (1 - TREE_BAND)) / (2 * b * TREE_BAND), 0), 1);
     // the picks, reused from frame to frame: (variant level, instance, the farther level's share, side, turn)
@@ -417,6 +427,7 @@
       tileTrees(c);
       for (let i = 0; i < c.count; i++) {
         const at = c.first + i, s = 12 * at, L = apart[at] > 0 ? Ds : D;   // its switches: a tree apart's reach farther
+        if (cls[at] > 1.5) continue;                 // a screen's tree: its drawn crown however near (treeClasses)
         const dx = data[s] - pos[0], dy = data[s + 4] - pos[1], dz = data[s + 1] - pos[2];
         const d = Math.sqrt(dx * dx + dy * dy + dz * dz);
         if (d >= L[1] * (1 + TREE_BAND)) continue;
@@ -467,6 +478,81 @@
       gl.drawElementsInstanced(gl.TRIANGLES, l.count, gl.UNSIGNED_SHORT, l.offset, d.count);
     }
     gl.bindVertexArray(null);
+  }
+  // the tree layer: the mesh shadows' layer `layer`, after the near layer (template_b.html nearShadow), each tree in it
+  // at its second level (as much leaf as the first, a seventh of the triangles), cut to its leaves. The sun's march
+  // leaves out the trees nearer than their switch (frag1.glsl speciesShade) and the shading pass looks the layer up
+  // (frag5.glsl treeSun). Drawn again only when the camera's cell, the sun, the payload, the trees, their reach or the
+  // layer's index changes; the layer's index, or -1 when there is none (the dial off, no species, no static layers)
+  function treeShadow(pos, layer) {
+    if (!treeShadows || !treeMesh || !shN || layer >= SH_LAYERS) { treeShKey = ""; treeSh = null; return -1; }
+    const D = treeMesh.lod, Ds = treeMesh.sparseLod, reach = [TREE_SH_FOREST ? D[D.length - 1] : 0, Ds[Ds.length - 1]];
+    const cell = [Math.round(pos[0] / TREE_SH_CELL_M), Math.round(pos[2] / TREE_SH_CELL_M)];
+    const key = `${shKey}|${cell.join()}|${reach.map((r) => r.toFixed(2)).join()}|${treeInst.gen}|${layer}`;
+    if (key === treeShKey) return treeSh ? layer : -1;
+    treeShKey = key; treeShDrawn++;
+    const t0 = performance.now(), cx = cell[0] * TREE_SH_CELL_M, cz = cell[1] * TREE_SH_CELL_M;
+    const slack = TREE_SH_CELL_M / Math.SQRT2 + TREE_SH_SLACK_M, far = Math.max(...reach) + slack;
+    const data = treeInst.data, apart = treeInst.sparse, cls = treeInst.cls, lists = treeKit.levels.map(() => []);
+    for (const c of treeInst.tiles) {                // each tree within its reach and the slack of the cell's centre
+      const dx = Math.max(c.lo[0] - cx, 0, cx - c.hi[0]), dz = Math.max(c.lo[2] - cz, 0, cz - c.hi[2]);
+      if (dx * dx + dz * dz >= far * far) continue;
+      tileTrees(c);
+      for (let i = 0; i < c.count; i++) {
+        const at = c.first + i, s = 12 * at, R = apart[at] > 0 ? reach[1] : reach[0];
+        if (cls[at] > 1.5) continue;                 // a screen's tree: its drawn crown's shadow (speciesShade)
+        const ex = data[s] - cx, ez = data[s + 1] - cz;
+        if (R > 0 && ex * ex + ez * ez < (R + slack) * (R + slack)) lists[3 * c.variant[i] + 1].push(at, c.turn[i]);
+      }
+    }
+    const count = lists.reduce((n, l) => n + l.length / 2, 0);
+    if (!count) { treeSh = null; return -1; }
+    // light space: the static layers' axes (template_b.html meshShadows), centred on the cell, the trees' own depths
+    const { xl, yl, zl } = shFrame, dot = (a, x, y, z) => a[0] * x + a[1] * y + a[2] * z;
+    const ox = dot(xl, cx, gtop(cx, cz), cz), oy = dot(yl, cx, gtop(cx, cz), cz), half = far + TREE_SH_CROWN_M;
+    let z0 = Infinity, z1 = -Infinity;
+    for (const l of lists) for (let e = 0; e < l.length; e += 2) {
+      const s = 12 * l[e], z = dot(zl, data[s], data[s + 4], data[s + 1]);
+      z0 = Math.min(z0, z); z1 = Math.max(z1, z);
+    }
+    const near = z0 - TREE_SH_CROWN_M, farZ = z1 + TREE_SH_CROWN_M, sz = 2 / (farZ - near);
+    const m = [xl[0] / half, yl[0] / half, sz * zl[0], 0, xl[1] / half, yl[1] / half, sz * zl[1], 0, xl[2] / half, yl[2] / half, sz * zl[2], 0,
+               -ox / half, -oy / half, -(farZ + near) / (farZ - near), 1];
+    shM.set(m, 16 * layer);
+    shPar.set([1 / SH_RES, 1 - TREE_SH_CROWN_M / half, (TREE_SH_BIAS_M + 3 * half / SH_RES) / (farZ - near), 0], 4 * layer);
+    // the instances, level by level, as treeMeshFrame lays them out (no share: each level whole)
+    const out = new Float32Array(16 * count), draws = [];
+    let e = 0, tris = 0;
+    lists.forEach((l, lv) => {
+      if (!l.length) return;
+      const first = e;
+      for (let k = 0; k < l.length; k += 2, e++) {
+        const s = 12 * l[k], o = 16 * e;
+        for (let c = 0; c < 12; c++) out[o + c] = data[s + c];
+        out[o + 14] = l[k + 1];
+      }
+      draws.push({ level: treeKit.levels[lv], first, count: e - first });
+      tris += (e - first) * treeKit.levels[lv].tris;
+    });
+    treeShBuf = treeShBuf || gl.createBuffer();
+    gl.bindBuffer(gl.ARRAY_BUFFER, treeShBuf); gl.bufferData(gl.ARRAY_BUFFER, out, gl.DYNAMIC_DRAW);
+    gl.bindFramebuffer(gl.FRAMEBUFFER, shFbo); gl.viewport(0, 0, SH_RES, SH_RES);
+    gl.enable(gl.DEPTH_TEST); gl.depthFunc(gl.LESS); gl.depthMask(true);
+    gl.enable(gl.POLYGON_OFFSET_FILL); gl.polygonOffset(3, 1);
+    gl.framebufferTextureLayer(gl.FRAMEBUFFER, gl.DEPTH_ATTACHMENT, shTexM, 0, layer);
+    gl.clear(gl.DEPTH_BUFFER_BIT);
+    gl.useProgram(treeShP);
+    gl.uniformMatrix4fv(UTs.uLightM, false, m); gl.uniform3fv(UTs.uCamPos, pos);
+    for (const d of draws) {
+      const l = d.level;
+      gl.uniform3fv(UTs.uLo, l.lo); gl.uniform3fv(UTs.uHi, l.hi); gl.uniform4fv(UTs.uFit, l.fit);
+      gl.bindVertexArray(l.vao);
+      for (let a = 0; a < 4; a++) gl.vertexAttribPointer(4 + a, 4, gl.FLOAT, false, 64, 64 * d.first + 16 * a);
+      gl.drawElementsInstanced(gl.TRIANGLES, l.count, gl.UNSIGNED_SHORT, l.offset, d.count);
+    }
+    gl.bindVertexArray(null); gl.disable(gl.POLYGON_OFFSET_FILL); gl.disable(gl.DEPTH_TEST); gl.bindFramebuffer(gl.FRAMEBUFFER, null);
+    treeSh = { layer, reach, trees: count, tris, ms: performance.now() - t0 };
+    return layer;
   }
   // the trees in the lake's mirror, drawn crowns all (TREE_REFL), the tiles whose mirror image the view and the lake show
   let treesMirrored = 0, treeMirrorDraws = 0;
@@ -656,6 +742,7 @@
     treesShown = trees;
     if (!trees) treeDrawn = { tiles: 0, draws: 0, instances: 0 };
     if (trees) treeMeshFrame(pos, rot, tanH, sw, sh); else treeMesh = null;
+    const treeLayer = trees ? treeShadow(pos, nSh + nearSh) : -1;   // after the species' reach is known
     // the meshes' mirror, decided before the march: where it draws the trees too (treeRefl), the march's reflections
     // in the main lake leave them out (frag1.glsl VM_REFL)
     const mirrorOn = meshOn && meshChunks.length > 0 && qual > 0 && detail === 1 && !(dbg & 2);   // as trace() marches reflections
@@ -709,6 +796,10 @@
     for (const [fb, p, Um] of [[sFbo, shP, splitU[0]], [fbo, p3P, splitU[1]]]) {
       gl.bindFramebuffer(gl.FRAMEBUFFER, fb); gl.viewport(0, 0, fb === sFbo ? Math.ceil(sw / SDIV) : sw, fb === sFbo ? Math.ceil(sh / SDIV) : sh);
       gl.useProgram(p); setFrame(Um);
+      if (TREES_ON) gl.uniform1i(Um.uShT, treeLayer);
+      if (p === shP && treeLayer >= 0) {           // the sun's march leaves out the trees in the tree layer
+        gl.uniformMatrix4fv(Um.uShM, false, shM); gl.uniform4fv(Um.uShP, shPar); gl.uniform2fv(Um.uSpR, treeSh.reach);
+      }
       if (p === p3P) {                              // the shading pass looks the mesh casters up for each pixel
         gl.uniformMatrix4fv(Um.uShM, false, shM); gl.uniform4fv(Um.uShP, shPar); gl.uniform1i(Um.uShN, nSh + nearSh);
         gl.uniform1i(Um.uMeshRefl, meshRefl ? 1 : 0);
@@ -821,12 +912,15 @@
                         drawn: treeDrawn, buildMs: TREES_ON ? treeInst.ms : 0, gen: TREES_ON ? treeInst.gen : 0,
                         kit: treeKit ? treeKit.variants.map((v) => ({ name: v.name, species: treeKit.species.indexOf(v.species), conifer: v.conifer })) : [],
                         detail: treeDetail, sparse: treeSparse, apart: TREES_ON ? treeInst.apart : 0, apartRule: { r: TREE_SPARSE_R, n: TREE_SPARSE_N },
-                        mirrored: treesMirrored, mirrorDraws: treeMirrorDraws,
+                        screened: TREES_ON ? treeInst.screened : 0,
+                        mirrored: treesMirrored, mirrorDraws: treeMirrorDraws, shadows: treeShadows,
+                        shadowLayer: treeSh ? { ...treeSh, drawn: treeShDrawn } : null,
                         meshes: treeMesh ? { draws: treeMesh.draws.length, instances: treeMesh.n, tris: treeMesh.tris, levels: treeMesh.levels,
                                              lod: treeMesh.lod, band: treeMesh.band, sparseLod: treeMesh.sparseLod,
                                              sparseBand: treeMesh.sparseBand, ms: treeMesh.ms } : null }),
     treeDetail(k) { treeDetail = k; histOk = false; },   // the species meshes' reach, as ?treedetail= (0: none); a fresh history
     treeSparse(on) { treeSparse = !!on; histOk = false; },   // the reach of trees that stand apart, as ?treesparse=0 turns it off; a fresh history
+    treeShadows(on) { treeShadows = !!on; treeShKey = ""; histOk = false; },   // the species' own shadows, as ?treeshadows=envelope turns them off
     treeList(x0, z0, x1, z1) {                      // the instances centred in a box: the tree, the ground the pass gave it, and
       const out = [], d = TREES_ON ? treeInst.data : [];   // whether it stands apart
       for (let s = 0; s < d.length; s += 12) {
@@ -834,7 +928,7 @@
         const con = d[s + 7] >= 2;
         out.push({ x: d[s], z: d[s + 1], r: d[s + 2], H: d[s + 3], con, hue: d[s + 7] - (con ? 2 : 0),
                    bed: d[s + 4], relief: d[s + 5], near: d[s + 6], slope: Array.from(d.subarray(s + 8, s + 12)),
-                   apart: treeInst.sparse[s / 12] > 0 });
+                   apart: treeInst.sparse[s / 12] > 0, screen: treeInst.cls[s / 12] > 1.5 });
       }
       return out;
     },
@@ -900,10 +994,15 @@
         return n;
       };
       const programs = { p1: prog, far: farP, shadow: shP, shade: p3P, cone: coneP, sun: sunP, classify: clsP, mesh: meshP, resolve: resP,
-                         ...(TREES_ON ? { trees: treeDrawP, treeInstances: tinstP, treeMeshes: treeMeshP, treeMirror: treeReflP } : {}) };
+                         ...(TREES_ON ? { trees: treeDrawP, treeInstances: tinstP, treeMeshes: treeMeshP, treeShadow: treeShP, treeMirror: treeReflP } : {}) };
       return { limit: gl.getParameter(gl.MAX_TEXTURE_IMAGE_UNITS), counts: Object.fromEntries(Object.entries(programs).map(([k, p]) => [k, count(p)])) };
     },
     camera(pos, yaw, pitch) { free = true; fp = pos.slice(); fyaw = yaw; fpitch = pitch; },
+    treeVariantOf(r, H, con, u) {                   // the kit's variant a tree of crown radius r and height H takes (tileTrees)
+      if (!treeKit) return null;
+      const v = treeVariant(r, H, con, u);
+      return [...treeKit.con, ...treeKit.dec].find((w) => w.index === v).name;
+    },
     probe(x, y) {                                   // the last rendered frame's G-buffer record at internal pixel (x, y)
       const px = new Float32Array(4), g = [];
       gl.bindFramebuffer(gl.READ_FRAMEBUFFER, gFbo);

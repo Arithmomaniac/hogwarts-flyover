@@ -6,6 +6,7 @@ the base at the origin; a recorded crown radius and height that no vertex exceed
 ratios; leaf cards with their own corners' UVs; and per-species colours. White Hound's Forest sets the species, its
 "well-grown and dark" trees, and the visible trunks under their crowns."""
 
+import math
 from pathlib import Path
 import sys
 import unittest
@@ -23,6 +24,9 @@ from mesh_trees import BARK, CARD, FOLIAGE  # noqa: E402
 BUDGETS = ((1500, 1100), (300, 220), (60, 45))       # (triangles, vertices) at each level: the renderer's contract
 CONIFER_RATIO = 0.23                                 # the placements' conifer crown radius over its height
 CONIFERS, BROADLEAVES = {"scots-pine", "yew"}, {"oak", "beech", "birch"}
+# a leaf's length in life, metres (a pine's or yew's: a spray of needles)
+LIFE_SIZE_M = {"oak": (0.06, 0.14), "beech": (0.05, 0.11), "birch": (0.03, 0.07), "scots-pine": (0.06, 0.16),
+               "yew": (0.04, 0.12)}
 
 
 def luminance(rgb):
@@ -123,7 +127,8 @@ class TreeKitTests(unittest.TestCase):
                     np.testing.assert_allclose(np.linalg.norm(m.nrm, axis=1), 1.0, atol=1e-6)
                     self.assertLessEqual(set(np.unique(m.attr[:, 0])), {BARK, FOLIAGE, CARD})
 
-    def test_leaf_cards_span_their_own_uv_square(self):
+    def test_leaf_cards_span_a_square_of_their_uv(self):
+        # each card's corners in order round a square of the uv's unit square, so its leaves keep their shape
         for v in self.kit:
             for level, m in enumerate(v.levels):
                 with self.subTest(variant=v.name, level=level):
@@ -131,8 +136,39 @@ class TreeKitTests(unittest.TestCase):
                     np.testing.assert_array_equal(m.uv[~card], 0)
                     if level < 2:
                         self.assertTrue(card.any())
-                    for quad in m.uv[card].reshape(-1, 4, 2):
-                        self.assertEqual({tuple(c) for c in quad}, {(0, 0), (1, 0), (1, 1), (0, 1)})
+                    for quad in m.uv[card].reshape(-1, 4, 2).astype(float):
+                        lo, span = quad.min(axis=0), np.ptp(quad, axis=0)
+                        self.assertAlmostEqual(span[0], span[1], places=5)
+                        self.assertTrue(span[0] > 0 and lo.min() >= 0 and (lo + span).max() <= 1 + 1e-6)
+                        self.assertEqual({tuple(np.round((c - lo) / span[0]).astype(int)) for c in quad},
+                                         {(0, 0), (1, 0), (1, 1), (0, 1)})
+
+    def test_near_trees_leaves_are_about_life_size(self):
+        # the page cuts LEAF_GRID leaves per unit of a card's uv (times LEAF_TILE), each LEAF_CELLS cells long: a card
+        # with the whole uv square shows leaves a third of its side, tens of centimetres on cards a metre or more across
+        for v in self.kit:
+            m = v.levels[0]
+            card = np.flatnonzero(m.attr[:, 0] == CARD).reshape(-1, 4)
+            side = np.linalg.norm(m.pos[card[:, 1]] - m.pos[card[:, 0]], axis=1)
+            span = np.ptp(m.uv[card].astype(float), axis=1)[:, 0]
+            leaf = side * mesh_trees.LEAF_CELLS / (mesh_trees.LEAF_GRID * mesh_trees.LEAF_TILE * span)
+            with self.subTest(variant=v.name):
+                lo, hi = LIFE_SIZE_M[v.species]
+                self.assertTrue(lo <= float(np.median(leaf)) <= hi, float(np.median(leaf)))
+                self.assertLess(float(np.percentile(leaf, 90)), 2 * hi)
+
+    def test_near_crowns_are_full_not_half_bare(self):
+        # cards a clump's size leave an airy crown (a birch's, a young pine's) half bare inside its outline, its limbs
+        # showing between a few clumps: from two sides, the leaves cover at least half the outline of the crown
+        for v in self.kit:
+            m = v.levels[0]
+            leaf = m.pos[leaves(m)]
+            with self.subTest(variant=v.name):
+                full = []
+                for turn in (0.0, math.pi / 2):
+                    outline = np.stack([np.cos(turn) * leaf[:, 0] + np.sin(turn) * leaf[:, 2], leaf[:, 1]], 1)
+                    full.append(leaf_cover(m, turn, mm=20) / ConvexHull(outline).volume)
+                self.assertGreater(float(np.mean(full)), 0.5)
 
     def test_every_triangle_is_wound_along_its_normals(self):
         for v in self.kit:
@@ -268,6 +304,24 @@ class TreeKitTests(unittest.TestCase):
                     self.assertGreater(float(m.attr[stem, 1].min()), 200)
                 else:
                     self.assertEqual(int(m.attr[b, 1].max()), 0)
+
+    def test_a_birchs_foot_stays_dark_between_its_rings(self):
+        # the page interpolates the bark's turn between the trunk's rings: with none between the sunk foot and a ring
+        # metres up, a birch greys from the ground. Its turn as drawn up the trunk's first 5% stays dark at the full and
+        # the middle level
+        for v in self.kit:
+            if v.species != "birch":
+                continue
+            for level in (0, 1):
+                m = v.levels[level]
+                trunk = (m.attr[:, 0] == BARK) & (np.hypot(m.pos[:, 0], m.pos[:, 2]) < 2.5 * v.trunk_r) & (
+                    m.pos[:, 1] < 0.4 * v.height)
+                ys, at = m.pos[trunk, 1], m.attr[trunk, 1].astype(float)
+                rings = np.unique(np.round(ys, 2))
+                turn = np.interp(np.linspace(0, 0.05 * v.height, 20), rings,
+                                 [at[np.round(ys, 2) == y].mean() for y in rings])
+                with self.subTest(variant=v.name, level=level):
+                    self.assertLess(float(turn.max()), 10)
 
     def test_the_kit_is_reproducible(self):
         again = [mesh_trees.variant(sp, k, seed, ratio) for sp in mesh_trees.SPECIES

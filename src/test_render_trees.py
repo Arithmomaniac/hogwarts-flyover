@@ -8,9 +8,12 @@ other arm of the within-page A/B.
 With a payload that carries a tree kit, the trees near the camera are its species meshes instead (TREE_MESH), each
 fitted to its tree and handed over to its drawn crown by a dither across a band of distance, farther for a tree that
 stands apart with the sparse dial on (as the page opens; ?treesparse=0 turns it off); and the lake's mirror draws every
-tree's crown, which the march's reflections in the main lake then leave out (TREE_REFL). The drawn crowns reach
-TREE_FAR (2.6 km), and the march draws the raymarched trees' canopy sheet beyond, as it does for those; debug bit
-2097152 takes the crowns to the table's edge.
+tree's crown, which the march's reflections in the main lake then leave out (TREE_REFL). Each species casts its own
+shadow from the tree layer, which the sun's march leaves its drawn crown out of (?treeshadows=envelope gives every tree
+its drawn crown's), and a far tree's leaves widen to keep its cover. A screen's trees (the payload's screens, decisions
+train-screen and station-wood) keep their drawn crowns however near, and their shadows. No broadleaf has turned
+(decision trees-in-leaf). The drawn crowns reach TREE_FAR (2.6 km), and the march draws the raymarched trees' canopy
+sheet beyond, as it does for those; debug bit 2097152 takes the crowns to the table's edge.
 
 The default page's programs, the mesh trees' among them, are test_render_core's
 test_the_page_compiles_the_cpu_checked_programs; the raymarched dial's page compiling none of this, with no MESH_TREES
@@ -27,8 +30,9 @@ sys.path.insert(0, str(ROOT / "src"))
 import shaders  # noqa: E402
 from mesh_source import load_data  # noqa: E402
 from pagetest import PageTestCase, smoke  # noqa: E402
-from render_testing import FRAME_TIMEOUT_S, LAWN, MAT_SKY, MAT_WATER, NEXT_FRAME, REARM, WEST, RenderTestCase, ray  # noqa: E402
+from render_testing import FRAME_TIMEOUT_S, LAWN, MAT_GROUND, MAT_SKY, MAT_WATER, NEXT_FRAME, REARM, WEST, RenderTestCase, ray  # noqa: E402
 from test_render_core import RECORD_SHADERS, first_difference  # noqa: E402
+from test_render_integrated import aim  # noqa: E402
 
 DBG_P1_RECORD = 256                 # template_c.html drawMeshes: P1's own record, no mesh or mesh-tree G-buffer draw
 DBG_RAYMARCHED_TREES = 1048576      # the raymarched trees in a mesh-tree page (frag1.glsl VM_TREES)
@@ -44,6 +48,33 @@ FOREST_CELL_M = 100.0               # the forest views look at the densest squar
 FOREST_REACH_M = 1500.0             # ... within this of the castle
 MIRROR_NEAR_M = 1500.0              # trees this near the lake, and their reflections this long, lie inside the table
 FINEST_M = 600.0                    # the species' reach (their last switch) that brings both levels over the forest view
+# decisions train-screen and station-wood, from the inventory's views from the tunnel portal and from the platform
+# (tools/inspection/inventory.py): the eye and the point looked at (east, metres over the ground, north), at
+# mid-afternoon; the castle's pixels (its meshes' material, farther than the boundary wall and the portal), of which at
+# most GLIMPSE may show through the trees (as test_site checks the screens from the train and the platform), against the
+# view with the vegetation debugged away (east and north written as whole metres, so that test_assets_datum never reads
+# them as heights)
+SCREEN_VIEWS = {"train-screen": ((150, 4.0, 285), (0, 30.0, 0)),
+                "station-wood": ((290, 2.0, 160), (0, 30.0, 0))}
+SCREEN_HOUR = 15.0
+# the species' own sun shadows (__hog.treeShadows(0), as ?treeshadows=envelope, gives every tree its drawn crown's): a
+# lone broadleaf that stands apart, with no other tree within LONE_CLEAR_M, its shadow at SHADOW_HOUR seen from
+# LONE_VIEW_M straight above where its crown's centre (CROWN_AT of its height up) casts it, over the open ground within
+# SHADE_WINDOW_M of that point plus its crown radius. Its species' shadow, net of the ground's own shade, is a
+# SPECIES_SHADE share of its drawn crown's; a drawn crown keeps its own, from within SAME_SHADE below to KEPT_SHADE above
+# (the species' rim, where the tree layer holds a tree past its reach)
+SHADOW_HOUR, LONE_CLEAR_M, LONE_VIEW_M, CROWN_AT, SHADE_WINDOW_M = 15.0, 25.0, 30.0, 0.6, 6.0
+SHADOW_REACH_M, PAST_REACH_M = 70.0, 15.0      # a tree apart's species reach: holding the tree past the forest's, and not
+SPECIES_SHADE, SAME_SHADE, KEPT_SHADE, MIN_SHADE = (0.15, 0.9), 0.1, 0.35, 20.0
+SCREEN_SHADE_M = 50.0               # a screen's shadows, on the ground this near the camera, with the forest's reach
+DBG_NO_LEAF_GROW = 8388608          # frag5.glsl leafGrow: a far leaf card's leaves keep their size
+# a far tree apart's leaves widen (leafGrow): its species' pixels in the trees-apart view, the species to LEAF_REACH_M,
+# as a share of those with DBG_NO_LEAF_GROW
+LEAF_REACH_M, LEAF_COVER = 400.0, (1.15, 1.9)
+# decision trees-in-leaf ("no broadleaf has turned"): of the crowns' and leaves' pixels in a forest view at SCREEN_HOUR,
+# at most this share redder than green
+TURNED = 0.002
+MAT_CASTLE, CASTLE_FAR_M, GLIMPSE, DBG_NO_VEGETATION = 4, 200.0, 0.05, 8
 
 # In-page JS: every `step`-th internal pixel of a rectangle as [x, y, code, t, tc (4), tp (4)] (probeTreeRect's rows)
 SAMPLE = """([x0, y0, w, h, step]) => {
@@ -58,6 +89,22 @@ REFLECTION = """([x0, y0, w, h, step]) => {
     out.push([x0 + x, y0 + y, g[i][0], c[4 * i], c[4 * i + 1], c[4 * i + 2]]);
   }
   return out; }"""
+# In-page JS: as SAMPLE, rows [x, y, mat, t, the shading pass's sun term]
+SUN = """([x0, y0, w, h, step]) => {
+  const g = __hog.probeRect(x0, y0, w, h), out = [];
+  for (let y = 0; y < h; y += step) for (let x = 0; x < w; x += step) {
+  const p = g[y * w + x];
+  out.push([x0 + x, y0 + y, p[0], p[5], __hog.probeSun(x0 + x, y0 + y)]);
+  }
+  return out; }"""
+# In-page JS: as SAMPLE, rows [x, y, code, t, tc (4), tp (4), the shading pass's colour (r, g, b)]
+TINT = """([x0, y0, w, h, step]) => {
+  const rows = __hog.probeTreeRect(x0, y0, w, h), c = __hog.probeColorRect(x0, y0, w, h), out = [];
+  for (let y = 0; y < h; y += step) for (let x = 0; x < w; x += step) {
+    const i = y * w + x;
+    out.push([x0 + x, y0 + y, ...rows[i], c[4 * i], c[4 * i + 1], c[4 * i + 2]]);
+  }
+  return out; }"""
 
 
 def is_tree(cells):
@@ -70,6 +117,15 @@ def is_species(cells):
     return ((cells[:, 2].astype(int) & 7) == MAT_TREE) & np.isin(cells[:, 11], (LEAVES, BARK))
 
 
+def world_points(view, cells):
+    """Each row's point (rows [x, y, mat, t, ...]) along the ray render_testing.ray gives its pixel in the probed frame."""
+    w, h = view["res"]
+    u = (2 * (cells[:, 0] + 0.5 + view["jit"][0]) - w) / h * view["tanH"]
+    v = (2 * (cells[:, 1] + 0.5 + view["jit"][1]) - h) / h * view["tanH"]
+    d = np.stack([u, v, np.ones_like(u)], axis=1) @ np.array(view["rot"]).reshape(3, 3)
+    return np.array(view["pos"]) + d / np.linalg.norm(d, axis=1, keepdims=True) * cells[:, 3:4]
+
+
 class MeshTreeTests(RenderTestCase):
     @classmethod
     async def _open(cls):
@@ -78,22 +134,23 @@ class MeshTreeTests(RenderTestCase):
 
     def setUp(self):
         super().setUp()
-        # the species meshes' detail and sparse dials, which tests change and the shared restore leaves alone: as the page
-        # opened
-        self.loop.run_until_complete(self.page.evaluate("([d, s]) => { __hog.treeDetail(d); __hog.treeSparse(s); }",
-                                                        [self.opened["detail"], self.opened["sparse"]]))
+        # the species meshes' detail, sparse and shadow dials, which tests change and the shared restore leaves alone: as
+        # the page opened
+        self.loop.run_until_complete(self.page.evaluate(
+            "([d, s, sh]) => { __hog.treeDetail(d); __hog.treeSparse(s); __hog.treeShadows?.(sh); }",
+            [self.opened["detail"], self.opened["sparse"], self.opened.get("shadows", True)]))
 
     async def forest(self, pitch=-0.6, height=60.0, back=150.0, kit=False, apart=False):
         """Looks north at the densest FOREST_CELL_M square of trees (of trees that stand apart, when `apart`) within
         FOREST_REACH_M of the castle, from `back` metres south of its centre and `height` metres over the ground: without
         meshes, or with the embedded payload's and the tree kit it carries when `kit` (blocked when it carries none).
-        Returns the square's centre (x, z)."""
+        A screen's trees, which keep their drawn crowns however near, count for none. Returns the square's centre (x, z)."""
         if not kit:
             await self.show([])
         key = await self.page.evaluate("""([cell, reach, apart]) => {
             const n = new Map();
             for (const t of __hog.treeList(-reach, -reach, reach, reach)) {
-              if (apart && !t.apart) continue;
+              if ((apart && !t.apart) || t.screen) continue;
               const k = `${Math.floor(t.x / cell)},${Math.floor(t.z / cell)}`;
               n.set(k, (n.get(k) || 0) + 1);
             }
@@ -139,12 +196,67 @@ class MeshTreeTests(RenderTestCase):
         self.assertIsNotNone(found, f"no frame at jitter phase {phase} with debug bits {dbg}")
         return found["view"], np.array(found["cells"], dtype=np.float64)
 
+    async def reach(self, metres, apart=True):
+        """The detail dial set so that a tree apart's species reach (the forest's, unless `apart`) is `metres`."""
+        stats = await self.page.evaluate("__hog.treeStats()")
+        if not stats["kit"]:
+            self.skipTest("blocked: the embedded payload carries no tree kit")
+        lod = stats["meshes"]["sparseLod" if apart else "lod"]
+        await self.page.evaluate(f"__hog.treeDetail({stats['detail'] * metres / lod[-1]})")
+
+    async def lone_tree(self):
+        """The broadleaf with the widest crown that stands apart within FOREST_REACH_M of the castle, no screen's, with
+        no other tree within LONE_CLEAR_M."""
+        tree = await self.page.evaluate("""([reach, clear]) => {
+            const all = __hog.treeList(-reach - clear, -reach - clear, reach + clear, reach + clear), grid = new Map();
+            const cell = (v) => Math.floor(v / clear);
+            for (const t of all) { const k = `${cell(t.x)},${cell(t.z)}`; grid.set(k, [...(grid.get(k) || []), t]); }
+            let best = null;
+            for (const t of all) {
+              if (t.con || !t.apart || t.screen || Math.max(Math.abs(t.x), Math.abs(t.z)) > reach || (best && t.r <= best.r)) continue;
+              let lone = true;
+              for (let a = -1; a <= 1 && lone; a++) for (let b = -1; b <= 1 && lone; b++)
+                for (const o of grid.get(`${cell(t.x) + a},${cell(t.z) + b}`) || []) if (o !== t && Math.hypot(o.x - t.x, o.z - t.z) < clear) lone = false;
+              if (lone) best = t;
+            }
+            return best; }""", [FOREST_REACH_M, LONE_CLEAR_M])
+        self.assertIsNotNone(tree, f"no broadleaf apart with no tree within {LONE_CLEAR_M:g} m")
+        return tree
+
+    async def tree_shade(self, tree, reach):
+        """`tree`'s shadow at SHADOW_HOUR, seen from LONE_VIEW_M above where its crown's centre casts it, with a tree
+        apart's species reach at `reach`: the darkness (the sum over the pixels of 1 - the sun term) of the open ground
+        within its crown radius stretched by the sun's slant and SHADE_WINDOW_M of that point, (with the species' own
+        shadows, with every tree its drawn crown's), each less the ground's own with no vegetation, over the pixels open
+        ground in all three, seen at one jitter phase; and the tree layer as the species' own shadows left it."""
+        sun = np.array((await self.page.evaluate("(h) => __hog.light(h)", SHADOW_HOUR))["dir"])
+        crown = np.array([tree["x"], tree["bed"] + CROWN_AT * tree["H"], tree["z"]])
+        at = crown
+        for _ in range(3):
+            at = crown - sun * (crown[1] - await self.ground(at[0], at[2])) / sun[1]
+        frames = await self.page.evaluate("([p, h]) => { __hog.dbg(0); __hog.camera(p, 0, -1.55); __hog.tod(h); return __hog.frames; }",
+                                          [[at[0], at[1] + LONE_VIEW_M, at[2]], SHADOW_HOUR])
+        await self.page.wait_for_function(f"__hog.frames >= {frames + 3}")
+        await self.reach(reach)
+        arms, view, layer = [], None, None
+        for on, dbg in ((1, 0), (0, 0), (1, DBG_NO_VEGETATION)):
+            await self.page.evaluate(f"__hog.treeShadows?.({on})")
+            view, cells = await self.sample(dbg, step=1, phase=view and view["jit"], probe=SUN)
+            arms.append(cells)
+            if len(arms) == 1:
+                layer = (await self.page.evaluate("__hog.treeStats()")).get("shadowLayer")
+        open_ground = np.logical_and.reduce([(c[:, 2].astype(int) & 7) == MAT_GROUND for c in arms])
+        p = world_points(view, arms[2])
+        window = np.hypot(p[:, 0] - at[0], p[:, 2] - at[2]) <= tree["r"] / sun[1] + SHADE_WINDOW_M
+        dark = [float((1.0 - c[open_ground & window, 4]).sum()) for c in arms]
+        return dark[0] - dark[2], dark[1] - dark[2], layer
+
     @smoke
     async def test_the_page_opens_with_the_mesh_trees_on(self):
         # the sampler audit lists the mesh trees' programs only while they are on, and test_render_core's
         # test_every_program_fits_the_sampler_limit checks every program it lists
         audit = await self.page.evaluate("__hog.samplers()")
-        self.assertLessEqual({"trees", "treeInstances", "treeMeshes", "treeMirror"}, set(audit["counts"]))
+        self.assertLessEqual({"trees", "treeInstances", "treeMeshes", "treeShadow", "treeMirror"}, set(audit["counts"]))
 
     async def test_mesh_trees_are_the_raymarched_trees(self):
         # one rule: every raymarched tree a forest view shows is an instance, its centre, size, kind and hue the same;
@@ -361,6 +473,91 @@ class MeshTreeTests(RenderTestCase):
         shown = {tuple(c) for c in cells[between, 4:6]}
         self.assertGreater(len(found & shown), 0.9 * len(found), "with the dial off, trees apart that nothing draws")
 
+    async def test_the_screens_keep_the_castle_out_of_sight_from_the_tunnel_portal_and_the_platform(self):
+        # decisions train-screen and station-wood: from the train's last approach and from the platform the castle stays
+        # out of sight but for glimpses through the trees, as test_site checks against the trees' crowns. A species
+        # mesh's crown is open (birches and pines crowned high on bare stems), so a screen's trees (the payload's
+        # screens, treeStats' screened) keep their drawn crowns however near. From each view: at most a glimpse of the
+        # castle as the page draws it, and of the screen's trees in view, none a species mesh
+        castle = lambda c: int((((c[:, 2].astype(int) & 7) == MAT_CASTLE) & (c[:, 3] > CASTLE_FAR_M)).sum())
+        for decision, ((x, up, z), (tx, tup, tz)) in SCREEN_VIEWS.items():
+            with self.subTest(decision):
+                await self.page.evaluate("([d, sh]) => { __hog.treeDetail(d); __hog.treeShadows?.(sh); }",
+                                         [self.opened["detail"], self.opened.get("shadows", True)])
+                eye, look = [x, await self.ground(x, z) + up, z], [tx, await self.ground(tx, tz) + tup, tz]
+                frames = await self.page.evaluate(
+                    "([p, y, q, h]) => { __hog.camera(p, y, q); __hog.tod(h); return __hog.frames; }",
+                    [eye, *aim(eye, look), SCREEN_HOUR])
+                await self.page.wait_for_function(f"__hog.frames >= {frames + 3}")
+                _, bare = await self.sample(DBG_NO_VEGETATION, step=1)
+                _, cells = await self.sample(0, step=1)
+                self.assertGreater(castle(bare), 100, "too little of the castle in view")
+                self.assertLessEqual(castle(cells), GLIMPSE * castle(bare),
+                                     f"{castle(cells)} of the castle's {castle(bare)} pixels in sight")
+                trees = cells[is_tree(cells) | is_species(cells)]
+                screen = np.array([bool(t.get("screen")) for t in await self.instances(trees[:, 4:6])])
+                self.assertGreater(int(screen.sum()), 1000, "too little of the screen in view")
+                self.assertEqual(int(is_species(trees)[screen].sum()), 0, "a species mesh for a screen's tree")
+                # and, the forest's species to SCREEN_SHADE_M, the screen's drawn crowns cast their own shadows on the
+                # ground near the camera, whichever the species' shadow dial
+                await self.reach(SCREEN_SHADE_M, apart=False)
+                shade, phase = [], None
+                for on in (1, 0):
+                    await self.page.evaluate(f"__hog.treeShadows?.({on})")
+                    view, sun = await self.sample(0, step=1, phase=phase, probe=SUN)
+                    phase = view["jit"]
+                    near = ((sun[:, 2].astype(int) & 7) == MAT_GROUND) & (sun[:, 3] < SCREEN_SHADE_M)
+                    shade.append(float((1.0 - sun[near, 4]).sum()))
+                self.assertGreater(shade[1], MIN_SHADE, "too little shade near the camera")
+                self.assertLessEqual(abs(shade[0] / shade[1] - 1.0), SAME_SHADE, f"the screen's shade {shade[0]:.0f}, "
+                                     f"its drawn crowns' {shade[1]:.0f}")
+
+    async def test_a_species_tree_casts_its_own_crowns_shadow(self):
+        # a species mesh's crown is open, its leaf cards cut to their leaves: the tree layer casts its own shadow
+        # (template_c.html treeShadow, frag5.glsl treeSun), and the sun's march leaves out its drawn crown's (frag1.glsl
+        # speciesShade). A lone tree apart within its reach: its shadow a SPECIES_SHADE share of its drawn crown's
+        own, crown, layer = await self.tree_shade(await self.lone_tree(), SHADOW_REACH_M)
+        self.assertGreater(crown, MIN_SHADE, "too little of its shadow in view")
+        self.assertGreaterEqual(own / crown, SPECIES_SHADE[0], f"its shadow's darkness {own:.0f}, its drawn crown's {crown:.0f}")
+        self.assertLessEqual(own / crown, SPECIES_SHADE[1], f"its shadow's darkness {own:.0f}, its drawn crown's {crown:.0f}")
+        self.assertTrue(layer and layer["trees"] > 0, "no tree layer")
+
+    async def test_a_drawn_crown_keeps_its_own_shadow(self):
+        # past its species' reach a tree is its drawn crown, and so is its shadow: the march's, with at most its
+        # species' rim on top where the tree layer, which holds every tree within reach from anywhere in the camera's
+        # cell, holds it too
+        own, crown, _ = await self.tree_shade(await self.lone_tree(), PAST_REACH_M)
+        self.assertGreater(crown, MIN_SHADE, "too little of its shadow in view")
+        self.assertGreaterEqual(own / crown, 1.0 - SAME_SHADE, f"its shadow's darkness {own:.0f}, its drawn crown's {crown:.0f}")
+        self.assertLessEqual(own / crown, 1.0 + KEPT_SHADE, f"its shadow's darkness {own:.0f}, its drawn crown's {crown:.0f}")
+
+    async def test_a_far_species_trees_leaves_widen_to_keep_their_cover(self):
+        # a far leaf card's leaves, under three pixels across, would break into specks between the pixels' centres and
+        # thin its crown: they widen as they shrink (frag5.glsl leafGrow), to half again their size under one. The trees
+        # apart's view with their species to LEAF_REACH_M: a LEAF_COVER share of the leaves' pixels with DBG_NO_LEAF_GROW
+        await self.forest(kit=True, apart=True)
+        await self.reach(LEAF_REACH_M)
+        view, grown = await self.sample(0, step=1)
+        _, kept = await self.sample(DBG_NO_LEAF_GROW, step=1, phase=view["jit"])
+        leaves = lambda c: int((((c[:, 2].astype(int) & 7) == MAT_TREE) & (c[:, 11] == LEAVES)).sum())
+        self.assertGreater(leaves(kept), 2000, "too few leaves in view")
+        share = leaves(grown) / leaves(kept)
+        self.assertGreaterEqual(share, LEAF_COVER[0], f"{leaves(grown)} leaf pixels, {leaves(kept)} with their size kept")
+        self.assertLessEqual(share, LEAF_COVER[1], f"{leaves(grown)} leaf pixels, {leaves(kept)} with their size kept")
+
+    async def test_no_broadleaf_has_turned(self):
+        # decision trees-in-leaf: every tree is in leaf, as the scene is, and no broadleaf has turned. In a forest view
+        # at mid-afternoon, the drawn crowns, the species' leaves and the far canopy sheet among them, as shade() colours
+        # them (frag5.glsl), are green: at most a TURNED share of their pixels redder than green
+        await self.forest(kit=True, height=120.0)
+        frames = await self.page.evaluate("(h) => { __hog.tod(h); return __hog.frames; }", SCREEN_HOUR)
+        await self.page.wait_for_function(f"__hog.frames >= {frames + 3}")
+        _, cells = await self.sample(0, step=1, probe=TINT)
+        crowns = cells[((cells[:, 2].astype(int) & 7) == MAT_TREE) & np.isin(cells[:, 11], (CROWN, SHEET, LEAVES))]
+        self.assertGreater(len(crowns), 20000, "too few crowns in view")
+        red = crowns[:, 12] >= crowns[:, 13]
+        self.assertLessEqual(float(red.mean()), TURNED, f"{int(red.sum())} of {len(crowns)} crown pixels redder than green")
+
     async def test_species_meshes_stand_within_their_trees(self):
         # each tree near the camera is a variant of its own kind fitted to it: every pixel of its mesh lies within the
         # upright cylinder of its crown radius about its centre, from its ground (its trunk sunk a little) to its height,
@@ -390,6 +587,19 @@ class MeshTreeTests(RenderTestCase):
         above = hits[:, 1] - ground
         self.assertTrue(np.all(above > -0.03 * H - reach), "a species mesh below its tree's ground")
         self.assertTrue(np.all(above < H + reach), "a species mesh taller than its tree")
+
+    async def test_a_tree_takes_a_variant_of_its_own_height(self):
+        # the young pine ("an area of small pine trees") and the mature share one crown ratio, so choosing by the ratio
+        # alone scales a young pine to a mature tree's height, a giant cone: a placement takes variants near its height
+        await self.forest(kit=True)
+        picks = {}
+        for H in (9.0, 17.5):
+            picks[H] = set(await self.page.evaluate(
+                "([r, H]) => Array.from({length: 100}, (_, i) => __hog.treeVariantOf(r, H, true, (i + 0.5) / 100))",
+                [0.23 * H, H]))
+        self.assertFalse({n for n in picks[17.5] if "young" in n}, picks[17.5])
+        self.assertTrue({n for n in picks[9.0] if "young" in n}, picks[9.0])
+        self.assertFalse({n for n in picks[9.0] if "mature" in n}, picks[9.0])
 
     async def test_the_mirror_draws_the_trees_the_lake_reflections_leave_out(self):
         # with mesh trees, the march's reflections in the main lake leave the table's trees out and the mirror draws

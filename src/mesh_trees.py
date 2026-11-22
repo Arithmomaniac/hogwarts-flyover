@@ -25,6 +25,9 @@ BUDGETS = ((1500, 1100), (300, 220), (60, 45))   # (triangles, vertices) at each
 SINK = 0.025               # the trunk starts this fraction of the tree's height below the origin, so it meets a slope
 FLARE, FLARE_H = 0.35, 0.04   # the trunk's foot swells by this much, decaying over this fraction of the height
 SEGMENTS = ((8, 5, 4), (5, 4), (4,))   # sides of the trunk, the limbs and the branches, at each level
+LEAF_TILE = 64.0           # the page multiplies a leaf card's uv by this (template_b.html treeMeshVs), so a card's uv
+                           # can span a part of the unit square: as many leaves as its size in metres holds
+LEAF_GRID, LEAF_CELLS = 3.5, 1.24   # the page's leaf cells per unit of uv, and a leaf's length in cells (frag5.glsl leafMask)
 CARD_FILL = 0.48           # the share of a leaf card the renderer's leaf mask keeps (lane T: frag5.glsl leafMask)
 LOW_SLACK = 0.1            # a coarser level's crown starts within this fraction of the height of the full level's
 CARD_SIZES = np.linspace(0.9, 3.3, 17)    # the middle level's card sizes over its groups' reach, tried in turn
@@ -81,6 +84,8 @@ class Species(NamedTuple):
     core: float            # solid cores, over a clump's radius, in the largest third of the clumps (0: none)
     upper: tuple           # the bark turns to its upper colour between these fractions of the height
     rise: tuple            # limbs' and branches' angle over the horizontal, (lo, hi) degrees
+    leaf: float = 0.1      # metres: a leaf's length (a pine's or yew's, a spray of needles), as the page cuts the cards
+    card: float = 1.0      # the full level's cards' size over its clumps': cut to leaves this size, they can fill the crown
 
 
 NO_TURN = (1.0, 1.0)
@@ -88,22 +93,22 @@ SPECIES = (
     # "the swathe of pine trees between the station and the lake": tall, with a high, flat-topped, broken crown on
     # branches that leave the stem level, their needles in flat pads
     Species("scots-pine", "mature", True, 0.55, 18.0, (0.23, 0.23), (11, 12), (0.5, 0.62), 0.55, False, 0.022, 0.0,
-            (0, 0), 20, 0.38, 0.3, 0.4, 0.8, 0.0, (0.3, 0.55), (0.0, 25.0)),
+            (0, 0), 20, 0.38, 0.3, 0.4, 0.8, 0.0, (0.3, 0.55), (0.0, 25.0), 0.1, 1.2),
     # "an area of small pine trees": conical, branched almost to the ground
     Species("scots-pine", "young", True, 0.25, 9.0, (0.23,), (21,), (0.1, 0.16), 0.0, True, 0.02, 0.0, (0, 0), 28,
-            0.21, 0.45, 0.15, 0.55, 0.0, (0.3, 0.6), (-5.0, 15.0)),
+            0.21, 0.45, 0.15, 0.55, 0.0, (0.3, 0.6), (-5.0, 15.0), 0.09, 2.4),
     # "two elderly yews": a short, thick, many-stemmed bole under a dense, dark crown down almost to the ground
     Species("yew", "", True, 0.2, 12.0, (0.22, 0.24), (31, 32), (0.08, 0.14), 0.4, False, 0.05, 0.1, (2, 3), 26,
-            0.38, 0.25, 0.12, 0.2, 0.8, NO_TURN, (60.0, 80.0)),
+            0.38, 0.25, 0.12, 0.2, 0.8, NO_TURN, (60.0, 80.0), 0.07),
     # "oak trees and a carpet of fallen leaves": a low fork into spreading limbs and a broad, uneven crown
     Species("oak", "", False, 0.4, 16.0, (0.48, 0.54, 0.6), (41, 42, 43), (0.22, 0.3), 0.4, False, 0.03, 0.28, (4, 6),
-            30, 0.24, 0.45, 0.3, 0.2, 0.45, NO_TURN, (15.0, 45.0)),
+            30, 0.24, 0.45, 0.3, 0.2, 0.45, NO_TURN, (15.0, 45.0), 0.1, 1.2),
     # "a towering beech tree": a tall, smooth bole, steep limbs, a dense dome
     Species("beech", "", False, 0.4, 20.0, (0.33, 0.39, 0.45), (51, 52, 53), (0.3, 0.38), 0.45, False, 0.025, 0.38,
-            (3, 5), 30, 0.24, 0.5, 0.2, 0.35, 0.5, NO_TURN, (45.0, 70.0)),
+            (3, 5), 30, 0.24, 0.5, 0.2, 0.35, 0.5, NO_TURN, (45.0, 70.0), 0.08, 1.25),
     # the site's Highland birch: a slender white stem, dark at its foot, under a narrow, light, open crown
     Species("birch", "", False, 0.2, 15.0, (0.2, 0.27), (61, 62), (0.25, 0.35), 0.35, False, 0.016, 0.0, (0, 0), 34,
-            0.2, 0.3, 0.3, 0.0, 0.0, (0.03, 0.2), (35.0, 60.0)),
+            0.2, 0.3, 0.3, 0.0, 0.0, (0.05, 0.22), (35.0, 60.0), 0.05, 1.7),
 )
 
 
@@ -165,6 +170,7 @@ def skeleton(rng, sp, height, base_y, centres, radii):
     lean = unit(Y + np.array([rng.normal(0, 0.03), 0.0, rng.normal(0, 0.03)]))
     pts, r, _, _ = grow(rng, np.array([0.0, -sink, 0.0]), lean, top + sink, r0, r0 * (0.7 if sp.fork else 0.12),
                         (height / 5, height / 3.5), (2.0, 6.0), 0.6, spacing=(top + sink) / 7)
+    pts, r = ringed(pts, r, foot(sp, height))
     r = r * (1 + FLARE * np.exp(-(pts[:, 1] + sink) / (FLARE_H * height)))
     wood = [Wood(pts, r, 0)]
     holders = [wood[0]]
@@ -203,6 +209,22 @@ def skeleton(rng, sp, height, base_y, centres, radii):
                             0.1, spacing=gap / 2)
         wood.append(Wood(bp, br, 2, c))
     return wood
+
+
+def foot(sp, height):
+    """Where the bark starts, is halfway and ends turning: trunk rings there keep the page's interpolation of the turn
+    off the foot."""
+    if sp.upper[1] > sp.upper[0]:  # rings
+        return height * np.array([sp.upper[0], sum(sp.upper) / 2, sp.upper[1]])
+    return np.zeros(0)
+
+
+def ringed(pts, r, ys):
+    """A rising polyline (and its radii) with points added at heights ys along it."""
+    s = np.concatenate([[0.0], np.cumsum(np.linalg.norm(np.diff(pts, axis=0), axis=1))])
+    ys = [y for y in ys if pts[0, 1] < y < pts[-1, 1] and np.min(np.abs(pts[:, 1] - y)) > 1e-3]
+    at = np.sort(np.concatenate([s, np.interp(ys, pts[:, 1], s)]))
+    return np.stack([np.interp(at, s, pts[:, k]) for k in range(3)], 1), np.interp(at, s, r)
 
 
 def coarse(w, every):
@@ -283,6 +305,8 @@ def cards(rng, sp, crown, centres, radii, counts, size=1.0, floor=None, bound=No
             u = rotate(perpendicular(d), d, rng.uniform(0, 2 * np.pi))
             v = np.cross(d, u)
             half = 0.75 * cr * size * rng.uniform(0.9, 1.2)
+            span = min(2 * half * LEAF_CELLS / (LEAF_GRID * LEAF_TILE * sp.leaf), 1.0)   # its leaves sp.leaf long
+            at = rng.uniform(0, 1 - span, 2) if span < 1 else np.zeros(2)
             quad = o + half * (corner[:, :1] * u + corner[:, 1:] * v)
             if bound is not None:
                 out = math.hypot(o[0], o[2])
@@ -297,7 +321,7 @@ def cards(rng, sp, crown, centres, radii, counts, size=1.0, floor=None, bound=No
             idx.append(np.array(tri).reshape(2, 3) + 4 * len(pos))
             pos.append(quad)
             nrm.append(n4)
-            uv.append((corner + 1) / 2)
+            uv.append(at + span * (corner + 1) / 2)
     if not pos:
         return None
     pos = np.concatenate(pos)
@@ -358,12 +382,13 @@ def full_level(rng, sp, wood, crown, centres, radii, height):
                   for c in big]
     used_v, used_t = sum(len(p.pos) for p in parts), sum(len(p.idx) for p in parts)
     n = min((verts - used_v) // 4, (tris - used_t) // 2)
-    return joined(parts + [cards(rng, sp, crown, centres, radii, shares(n, radii ** 2))])
+    return joined(parts + [cards(rng, sp, crown, centres, radii, shares(n, radii ** 2), size=sp.card)])
 
 
 def middle_level(rng, sp, wood, crown, centres, radii, height, size, floor, bound):
     tris, verts = BUDGETS[1]
     held = [coarse(w, 2) for w in wood if w.kind < 2]
+    held[0] = held[0]._replace(**dict(zip(("pts", "r"), ringed(held[0].pts, held[0].r, foot(sp, height)))))
     parts = bark(held, SEGMENTS[1], sp, height)
     used_v, used_t = sum(len(p.pos) for p in parts), sum(len(p.idx) for p in parts)
     k = max(1, min((verts - used_v) // 8, (tris - used_t) // 4))

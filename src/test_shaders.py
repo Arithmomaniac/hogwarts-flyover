@@ -64,7 +64,7 @@ def step_rule(block, t, k, vd):
     found = {}
     for name, pattern in (("eps", rf"float eps = (min\(0\.00045 \* {t}\b[^;]*);"),
                           ("k", rf"float {k} = (mix\([^;]*);"),
-                          ("edge", r"\bdE = (s\.g\.ed[^;]*);"),
+                          ("edge", rf"\bdE = ({t} < tIn\b[^;]*);"),
                           ("step", rf"\b{t} \+= (min\([^;]*);")):
         hits = re.findall(pattern, block)
         if len(hits) != 1:
