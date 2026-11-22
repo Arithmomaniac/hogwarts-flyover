@@ -68,6 +68,10 @@ SHADOW_REACH_M, PAST_REACH_M = 70.0, 15.0      # a tree apart's species reach: h
 SPECIES_SHADE, SAME_SHADE, KEPT_SHADE, MIN_SHADE = (0.15, 0.9), 0.1, 0.35, 20.0
 SCREEN_SHADE_M = 50.0               # a screen's shadows, on the ground this near the camera, with the forest's reach
 DBG_NO_LEAF_GROW = 8388608          # frag5.glsl leafGrow: a far leaf card's leaves keep their size
+DBG_CARDS_SQUARE = 16777216         # frag5.glsl leafEdge: leaf cards cut square, their leaves out to their edges
+# a tree apart's leaf cards from 60 m: the share of their leaves' pixels left when their leaves thin to none at the circle
+# each card's edges touch, of those with the cards cut square (mesh_trees.card_fill keeps 0.44 of a lone card's)
+CARD_ROUND = (0.45, 0.9)
 # a far tree apart's leaves widen (leafGrow): its species' pixels in the trees-apart view, the species to LEAF_REACH_M,
 # as a share of those with DBG_NO_LEAF_GROW
 LEAF_REACH_M, LEAF_COVER = 400.0, (1.15, 1.9)
@@ -544,6 +548,19 @@ class MeshTreeTests(RenderTestCase):
         share = leaves(grown) / leaves(kept)
         self.assertGreaterEqual(share, LEAF_COVER[0], f"{leaves(grown)} leaf pixels, {leaves(kept)} with their size kept")
         self.assertLessEqual(share, LEAF_COVER[1], f"{leaves(grown)} leaf pixels, {leaves(kept)} with their size kept")
+
+    async def test_a_leaf_cards_leaves_thin_to_none_at_its_edges(self):
+        # a card cut square shows its edges once its leaves are under a pixel: a crown of pale flat squares at 10-60 m.
+        # Its leaves shrink to none at the circle its edges touch, from where on the card its corners' UVs mark each
+        # fragment (frag5.glsl leafEdge): fewer leaf pixels than with the cards cut square, but most of them, not none
+        await self.forest(kit=True, apart=True, height=15.0, back=60.0)
+        view, round_ = await self.sample(0, step=1)
+        _, square = await self.sample(DBG_CARDS_SQUARE, step=1, phase=view["jit"])
+        leaves = lambda c: int((((c[:, 2].astype(int) & 7) == MAT_TREE) & (c[:, 11] == LEAVES)).sum())
+        self.assertGreater(leaves(square), 2000, "too few leaves in view")
+        share = leaves(round_) / leaves(square)
+        self.assertGreaterEqual(share, CARD_ROUND[0], f"{leaves(round_)} leaf pixels, {leaves(square)} with the cards square")
+        self.assertLessEqual(share, CARD_ROUND[1], f"{leaves(round_)} leaf pixels, {leaves(square)} with the cards square")
 
     async def test_no_broadleaf_has_turned(self):
         # decision trees-in-leaf: every tree is in leaf, as the scene is, and no broadleaf has turned. In a forest view

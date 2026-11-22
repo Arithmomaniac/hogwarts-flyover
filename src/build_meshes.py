@@ -392,6 +392,20 @@ def decode_payload(text):
     return payload
 
 
+KIT_CARD = 2   # a kit vertex's part: a leaf card's corner (mesh_trees CARD)
+
+
+def corner_bits(m):
+    """Each kit vertex's corner of its leaf card, (u, v) bits 0 or 1, for the UVs' lowest bits (template_b.html
+    treeMeshVs's vC): a card's four corners are consecutive, and its far corners have the larger UVs. 0 off the cards."""
+    bits = np.zeros((len(m.pos), 2), np.uint16)
+    card = np.flatnonzero(np.asarray(m.attr)[:, 0] == KIT_CARD)
+    if len(card):
+        uv = np.asarray(m.uv, np.float64)[card].reshape(-1, 4, 2)
+        bits[card] = (uv > uv.mean(axis=1, keepdims=True)).reshape(-1, 2)
+    return bits
+
+
 def encode_kit(variants, colours):
     """A family's tree kit (mesh_trees.kit() and kit_colours()) as the payload's `kit`, which places nothing: the page
     fits a variant to each tree its own placement rule stands. Per variant its name, species, class and share within
@@ -410,7 +424,8 @@ def encode_kit(variants, colours):
             streams["pos"].append(np.round((m.pos - lo) / (hi - lo) * 65535).astype("<u2").tobytes())
             streams["nrm"].append(oct_encode(np.asarray(m.nrm, np.float64)).tobytes())
             streams["attr"].append(np.asarray(m.attr).astype(np.uint8).tobytes())
-            streams["uv"].append(np.round(uv * 65535).astype("<u2").tobytes())
+            q = np.round(uv * 65535).astype("<u2")
+            streams["uv"].append(((q & 0xFFFE) | corner_bits(m)).astype("<u2").tobytes())
             streams["idx"].append(np.asarray(m.idx).astype("<u2").tobytes())
             levels.append({"verts": len(m.pos), "tris": len(m.idx), "box": [float(x) for x in (*lo, *hi)]})
         out.append({"name": v.name, "species": v.species, "conifer": bool(v.conifer), "share": round(float(v.share), 6),

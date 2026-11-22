@@ -392,6 +392,7 @@ class TreeKitTests(unittest.TestCase):
     Variant = collections.namedtuple("Variant", "name species conifer share crown_r height crown_base trunk_r levels")
     COLOURS = {"oak": {"bark": (0.08, 0.07, 0.06), "bark_upper": (0.1, 0.09, 0.07), "foliage": (0.04, 0.08, 0.02),
                        "autumn_share": 0.0}}
+    CARD = [(0.0, 0.0), (1.0, 0.0), (1.0, 1.0), (0.0, 1.0)]   # a leaf card's corners in mesh_trees.cards()'s order
     SCENE = {"families": ["trees"], "assets": [{"id": "forest-trees", "family": "trees", "status": "planned"}]}
 
     def test_the_page_cuts_leaves_as_the_kit_sizes_them(self):
@@ -403,6 +404,10 @@ class TreeKitTests(unittest.TestCase):
         self.assertIn(f"vUV = aUV * {mesh_trees.LEAF_TILE:g}.;", vs)
         self.assertIn(f"vec2 g = uv * {mesh_trees.LEAF_GRID!r}", mask)
         self.assertIn(f"/ vec2({mesh_trees.LEAF_CELLS / 2!r}, ", mask)
+        # and cut each card's leaves to none towards the circle its edges touch as the kit counts them (card_fill), across
+        # the card as its corners' UVs' lowest bits mark it (build_meshes.corner_bits)
+        self.assertIn("vC = vec2(uvec2(aUV * 65535. + 0.5) & 1u);", vs)
+        self.assertIn(f"smoothstep({mesh_trees.CARD_EDGE!r}, 1., length(vC * 2. - 1.))", mask)
 
     def variants(self):
         rng = np.random.default_rng(7)
@@ -410,9 +415,12 @@ class TreeKitTests(unittest.TestCase):
         def level(n, m):
             nrm = rng.normal(size=(n, 3))
             uv = rng.uniform(size=(n, 2)).astype(np.float32)
-            uv[0], uv[1] = (0.0, 0.0), (1.0, 1.0)            # a card's corners reach both ends of the UV range
+            uv[:4] = self.CARD                               # a card, its corners reaching both ends of the UV range
+            attr = rng.integers(0, 256, (n, 2)).astype(np.uint8)
+            attr[:, 0] %= 2                                 # bark or solid leaves, but for the card
+            attr[:4, 0] = 2
             return self.Level(rng.uniform((-3.0, -0.4, -3.0), (3.0, 12.0, 3.0), (n, 3)),
-                              nrm / np.linalg.norm(nrm, axis=1, keepdims=True), rng.integers(0, 256, (n, 2)).astype(np.uint8),
+                              nrm / np.linalg.norm(nrm, axis=1, keepdims=True), attr,
                               rng.integers(0, n, (m, 3)).astype(np.uint32), uv)
         return [self.Variant(f"oak-{k + 1}", "oak", False, 0.5, 3.0, 12.0, 4.0, 0.3, (level(60, 90), level(20, 24), level(8, 6)))
                 for k in range(2)]
@@ -429,8 +437,18 @@ class TreeKitTests(unittest.TestCase):
                 self.assertTrue(np.all(np.abs(lv["pos"] - m.pos) <= quantum / 2 + 1e-9))
                 np.testing.assert_array_equal(lv["idx"], m.idx)
                 np.testing.assert_array_equal(lv["attr"], m.attr)
-                np.testing.assert_allclose(lv["uv"], m.uv, atol=0.5 / 65535 + 1e-7)
+                np.testing.assert_allclose(lv["uv"], m.uv, atol=1.5 / 65535 + 1e-7)   # the lowest bit a card's corner
                 self.assertGreater((lv["nrm"] * m.nrm).sum(axis=1).min(), 0.995)
+
+    def test_each_cards_corners_mark_where_they_are_on_it_in_their_uvs_lowest_bits(self):
+        # the page fades a card's leaves towards its edge from where on the card each fragment is, which the UVs alone
+        # no longer say: each card takes its own square of them
+        v = self.variants()[0]
+        at = np.array([[0.3, 0.6]]) + 0.2 * np.array(self.CARD)
+        lv = v.levels[0]._replace(uv=np.concatenate([at, v.levels[0].uv[4:]]).astype(np.float32))
+        kit = build_meshes.decode_kit(json.loads(json.dumps(build_meshes.encode_kit([v._replace(levels=(lv,) + v.levels[1:])], self.COLOURS))))
+        bits = np.round(kit["variants"][0]["levels"][0]["uv"][:4] * 65535).astype(int) & 1
+        np.testing.assert_array_equal(bits, np.array(self.CARD, int))
 
     def test_a_familys_kit_rides_its_part_into_the_payload(self):
         variants = self.variants()

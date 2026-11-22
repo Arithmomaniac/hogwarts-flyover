@@ -56,7 +56,7 @@ def side_coverage(m, crown_r, base, height, size=96):
 def leaf_cover(m, turn, mm=5):
     """The leaves' silhouette seen from the side at `turn` (radians about the trunk), in square metres, rasterised
     independently of the builder at `mm`-millimetre pixels: solid leaves cover their outline, and each leaf card (its two
-    triangles drawn as one quad) CARD_FILL of its own, independently of the others."""
+    triangles drawn as one quad) mesh_trees.card_fill at each point of it, independently of the others."""
     per_m = 1000.0 / mm
     tri_leaf = m.attr[m.idx[:, 0], 0] != BARK
     tris = m.idx[tri_leaf]
@@ -64,7 +64,7 @@ def leaf_cover(m, turn, mm=5):
     v = m.pos[:, 1] * per_m
     u0, v0 = int(np.floor(u.min())) - 2, int(np.floor(v.min())) - 2
     w, h = int(np.ceil(u.max())) - u0 + 3, int(np.ceil(v.max())) - v0 + 3
-    solid, count = Image.new("1", (w, h), 0), np.zeros((h, w), np.uint8)
+    solid, clear = Image.new("1", (w, h), 0), np.ones((h, w))
     draw = ImageDraw.Draw(solid)
     card = m.attr[tris[:, 0], 0] == CARD
     for t in tris[~card]:
@@ -75,8 +75,17 @@ def leaf_cover(m, turn, mm=5):
         sub = Image.new("1", (int(np.ceil(u[q].max())) - u0 - x0 + 2, int(np.ceil(v[q].max())) - v0 - y0 + 2), 0)
         ImageDraw.Draw(sub).polygon([(u[i] - u0 - x0, v[i] - v0 - y0) for i in q], fill=1)
         a = np.asarray(sub)
-        count[y0:y0 + a.shape[0], x0:x0 + a.shape[1]] += a
-    cover = np.where(np.asarray(solid), 1.0, 1 - (1 - mesh_trees.CARD_FILL) ** count.astype(float))
+        # the card's own coordinates at each pixel's centre: s along its first edge, t along its last
+        pu, pv = np.meshgrid(np.arange(a.shape[1]) + x0 + u0 + 0.5, np.arange(a.shape[0]) + y0 + v0 + 0.5)
+        e, f = np.array([u[q[1]] - u[q[0]], v[q[1]] - v[q[0]]]), np.array([u[q[3]] - u[q[0]], v[q[3]] - v[q[0]]])
+        det = e[0] * f[1] - e[1] * f[0]
+        if abs(det) < 1e-9:
+            s = t_ = np.full(a.shape, 0.5)
+        else:
+            du, dv = pu - u[q[0]], pv - v[q[0]]
+            s, t_ = (du * f[1] - dv * f[0]) / det, (e[0] * dv - e[1] * du) / det
+        clear[y0:y0 + a.shape[0], x0:x0 + a.shape[1]] *= np.where(a, 1 - mesh_trees.card_fill(s, t_), 1.0)
+    cover = np.where(np.asarray(solid), 1.0, 1 - clear)
     return float(cover.sum()) / per_m ** 2
 
 
@@ -162,7 +171,7 @@ class TreeKitTests(unittest.TestCase):
         # showing between a few clumps: from two sides, the leaves cover at least half the outline of the crown
         for v in self.kit:
             m = v.levels[0]
-            leaf = m.pos[leaves(m)]
+            leaf = mesh_trees.drawn(m, leaves_only=True)          # the circles its cards' leaves fill, not their corners
             with self.subTest(variant=v.name):
                 full = []
                 for turn in (0.0, math.pi / 2):
@@ -195,13 +204,14 @@ class TreeKitTests(unittest.TestCase):
         for v in self.kit:
             with self.subTest(variant=v.name):
                 for m in v.levels:
-                    self.assertLessEqual(float(np.hypot(m.pos[:, 0], m.pos[:, 2]).max()), v.crown_r + 1e-9)
-                    self.assertLessEqual(float(m.pos[:, 1].max()), v.height + 1e-9)
+                    # what a level draws: its cards' corners, beyond the circles their leaves fill, draw nothing
+                    p = mesh_trees.drawn(m)
+                    self.assertLessEqual(float(np.hypot(p[:, 0], p[:, 2]).max()), v.crown_r + 1e-9)
+                    self.assertLessEqual(float(p[:, 1].max()), v.height + 1e-9)
                 # the leaves, not a stray twig or a lump of one level, set the full level's crown
-                full = v.levels[0]
-                lv = leaves(full)
-                self.assertGreater(float(np.hypot(full.pos[lv, 0], full.pos[lv, 2]).max()), 0.9 * v.crown_r)
-                self.assertGreater(float(full.pos[lv, 1].max()), 0.97 * v.height)
+                lv = mesh_trees.drawn(v.levels[0], leaves_only=True)
+                self.assertGreater(float(np.hypot(lv[:, 0], lv[:, 2]).max()), 0.9 * v.crown_r)
+                self.assertGreater(float(lv[:, 1].max()), 0.97 * v.height)
 
     def test_it_stands_on_the_origin(self):
         for v in self.kit:
@@ -220,7 +230,8 @@ class TreeKitTests(unittest.TestCase):
         for v in self.kit:
             with self.subTest(variant=v.name):
                 m = v.levels[0]
-                self.assertAlmostEqual(v.crown_base, float(m.pos[leaves(m), 1].min()))
+                # where its leaves start as drawn: a card's leaves fill the circle its edges touch, not its corners
+                self.assertAlmostEqual(v.crown_base, float(mesh_trees.drawn(m, leaves_only=True)[:, 1].min()))
                 self.assertGreater(v.crown_base, 0.05 * v.height)
                 if v.name.startswith("scots-pine-mature"):         # a tall, bare stem under a high crown
                     self.assertGreater(v.crown_base, 0.45 * v.height)
@@ -304,6 +315,12 @@ class TreeKitTests(unittest.TestCase):
                     self.assertGreater(float(m.attr[stem, 1].min()), 200)
                 else:
                     self.assertEqual(int(m.attr[b, 1].max()), 0)
+
+    def test_a_cards_leaves_thin_to_none_at_the_circle_its_edges_touch(self):
+        # as the page cuts them (frag5.glsl leafEdge): its corners and its edges' midpoints carry no leaves
+        self.assertAlmostEqual(float(mesh_trees.card_fill(0.5, 0.5)), mesh_trees.CARD_FILL)
+        for s, t in ((0.0, 0.0), (1.0, 1.0), (0.5, 0.0), (1.0, 0.5)):
+            self.assertEqual(float(mesh_trees.card_fill(s, t)), 0.0)
 
     def test_a_birchs_foot_stays_dark_between_its_rings(self):
         # the page interpolates the bark's turn between the trunk's rings: with none between the sunk foot and a ring
