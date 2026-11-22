@@ -281,7 +281,7 @@ void main() {
   float t0 = 0.05;
   int ph = 0, gi = 0, cnt = 0, k = -1, kp = -1;      // ph 0 grid march, 1 baseline replay, 2 done
   if (ro.y > CEIL) { if (rd.y >= 0.) ph = 2; else t0 = (ro.y - CEIL) / -rd.y; }
-  float t = t0, L = 2., Lo = 0., tr = t0, tlim = 0., tk = 0., tkp = 0., tIn = localEntry(ro, rd);
+  float t = t0, L = 2., Lo = 0., tr = t0, tlim = 0., tk = 0., tkp = 0., tIn = localEntry(ro, rd), tOut = treeTableExit(ro, rd);
   bool fresh = true;
   for (int i = ZERO; i < 530; i++) {                 // 160 grid steps + at most 360 replay samples
     if (ph == 0 && (t >= TMAX || gi >= 160)) { float tg = min(t, TMAX); tlim = tg - rk * tg; ph = 1; }
@@ -292,7 +292,7 @@ void main() {
     vec3 p = ro + rd * ts;
     float dE = 1e5, dC = 1e5, dy = 1e5, vd = 1e5;
     if (rep || fresh) {                               // the single scene evaluation of this pass
-      TS s = evalTop(p, ts, rep ? vmM : 0);
+      TS s = evalTop(p, ts, rep ? vmM : 0, tOut);
       dC = s.g.ed > 0. ? 1e5 : max(1. - s.g.ed, 1.);  // the local grid's edge: the grid march's clearance round p
       dy = p.y - topOf(s); vd = s.vd;
     }
@@ -329,7 +329,7 @@ void main() {
 #elif defined(SUN_PASS)
 void main() {                                         // alpha only: sun visibility of the far surface at each tree-cell centre
   vec2 xz = (floor(gl_FragCoord.xy) - TREE_G0 + 0.5) * 7.;
-  TS s = evalTop(vec3(xz.x, -1e4, xz.y), SUN_NEAR, 2);   // as the primary march sees it beyond SUN_NEAR (no micro-relief)
+  TS s = evalTop(vec3(xz.x, -1e4, xz.y), SUN_NEAR, 2, 0.);   // as the primary march sees it beyond SUN_NEAR (no micro-relief)
   float ty = max(s.gy, s.wy);
   int mat = (s.vy > ty && s.tp.w != 0.) ? 3 : (s.wy >= s.gy ? 2 : 1);
   vec3 hp = vec3(xz.x, topOf(s), xz.y);
@@ -340,7 +340,7 @@ void main() {                                         // alpha only: sun visibil
   int maxS = uQual == 0 ? 36 : (uQual == 1 ? 60 : 96);
   for (int i = ZERO; i < 96; i++) {
     vec3 p = so + uSunDir * stt;
-    TS q = evalTop(p, SUN_TREF, 0);
+    TS q = evalTop(p, SUN_TREF, 0, 0.);
     float dE = q.g.ed > 0. ? 1e5 : max(1. - q.g.ed, 1.);   // the local grid's edge only limits the step
     float dy = p.y - topOf(q);
     sh = min(sh, 9. * min(dy, q.tp.w > 0. ? q.vd : 1e5) / stt);   // tree bounds that aren't a crown's distance only limit the step
@@ -378,7 +378,7 @@ void main() {                                         // the soft-shadow march f
   for (int i = ZERO; i < maxS; i++) {
     it += 1.;
     vec3 p = so + uSunDir * stt; float td = rt; int vm = (rt < 900. && uDetail == 1) ? 1 : 0;
-    TS s = evalTop(p, td, vm);
+    TS s = evalTop(p, td, vm, 0.);
     float dE = s.g.ed > 0. ? 1e5 : max(1. - s.g.ed, 1.);   // the local grid's edge only limits the step
     float dy = p.y - topOf(s);
     sh = min(sh, 9. * min(dy, s.tp.w > 0. ? s.vd : 1e5) / stt);   // tree bounds that aren't a crown's distance only limit the step

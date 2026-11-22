@@ -1,11 +1,13 @@
 """tools.locks: a second run on one GPU waits for the first, the two GPUs do not wait for each other, a timing run
-waits for heavy work to end, and a timing script refuses to run without the quiet lock's token."""
+waits for heavy work to end, a timing script refuses to run without the quiet lock's token, and every wait is logged."""
 import contextlib
+from datetime import datetime
 import io
 import json
 import os
 from pathlib import Path
 import queue
+import socket
 import subprocess
 import sys
 import tempfile
@@ -23,9 +25,11 @@ from tools.paths import ROOT, SRC
 
 HOLD = """
 import sys, threading
+from filelock import FileLock
 from tools import locks
 kind, seconds = sys.argv[1], float(sys.argv[2])
-holds = {"heavy": lambda: locks.heavy("a build"), "quiet": lambda: locks.held("quiet", "a timing run")}
+holds = {"heavy": lambda: locks.heavy("a build"), "quiet": lambda: locks.held("quiet", "a timing run"),
+         "log": lambda: FileLock(str(locks.waits_file()) + ".lock")}
 released = threading.Event()
 threading.Thread(target=lambda: (sys.stdin.read(), released.set()), daemon=True).start()
 with holds.get(kind, lambda: locks.gpu(kind, "the first run"))():
@@ -352,6 +356,102 @@ class LockTests(unittest.TestCase):
         for reader in readers:
             reader.close()
         self.assertTrue(gone(*entries))
+
+    def test_a_wait_is_logged_once_the_lock_is_released(self):
+        # the log measures how long work queues for each lock. A timing run's wait for heavy work to end is its longest,
+        # so it is logged as a wait for "heavy work"
+        hush = lambda message: None
+        for kind, lock, holder, take in (
+                ("nvidia", "gpu-nvidia", "the first run", lambda: locks.gpu("nvidia", "a second run", hush)),
+                ("heavy", "heavy work", "a build", lambda: locks.quiet("a second run", hush, poll_s=0.2))):
+            with self.subTest(lock=lock):
+                locks.waits_file().unlink(missing_ok=True)
+                self.hold(kind, 2.0)
+                began = time.time()
+                with take():
+                    time.sleep(0.5)
+                ended = time.time()
+                records = [json.loads(line) for line in locks.waits_file().read_text(encoding="utf-8").splitlines()]
+                self.assertEqual(len(records), 1, records)
+                times = {key: records[0].pop(key) for key in ("start", "waited_s", "held_s")}
+                self.assertEqual(records[0], {"lock": lock, "host": socket.gethostname(), "label": "a second run",
+                                              "worktree": str(ROOT), "holder": holder, "holder_worktree": str(ROOT)})
+                self.assertGreater(times["waited_s"], 1.0)
+                self.assertGreaterEqual(times["held_s"], 0.5)
+                self.assertLessEqual(began, times["start"] + 0.001)
+                self.assertLessEqual(sum(times.values()), ended + 0.01)    # it began, waited and held within the block
+
+    def test_a_lock_taken_at_once_logs_nothing(self):
+        with locks.gpu_work("amd", "a tool", say=self.fail):
+            pass
+        with locks.quiet("timing", say=self.fail, poll_s=0):
+            pass
+        self.assertFalse(locks.waits_file().exists())
+
+    def test_a_wait_that_cannot_be_logged_still_takes_and_frees_the_lock(self):
+        # every worktree shares the log: neither a broken log nor another process appending to it may hold a lock up
+        def wait_for_nvidia():
+            self.hold("nvidia", 1.0)
+            said = []
+            with locks.gpu("nvidia", "a second run", say=said.append):
+                left = time.monotonic()
+            self.assertLess(time.monotonic() - left, 5.0)
+            self.assertIn("could not log the wait for the gpu-nvidia lock", said[-1])
+            with locks.gpu("nvidia", "a third run", say=self.fail):
+                pass
+        with mock.patch.object(locks, "LOG_PATIENCE_S", 0.5):
+            with self.subTest(case="a folder in the log's place"):
+                locks.waits_file().mkdir()
+                wait_for_nvidia()
+                locks.waits_file().rmdir()
+            with self.subTest(case="another process appending to the log"):
+                self.hold("log", 30.0)
+                wait_for_nvidia()
+
+    def test_appends_from_many_processes_at_once_stay_whole_lines(self):
+        # every worktree appends to the one log, and Windows appends by seeking to the end and then writing, so two
+        # appends at once could overwrite each other. Each writer's records have a length of their own
+        writers, records = 8, 200
+        append = ("import sys\nfrom tools import locks\nlocks.LOG_PATIENCE_S = 60.0\nn = int(sys.argv[1])\n"
+                  "print('ready', flush=True)\nsys.stdin.read()\n"
+                  f"for i in range({records}):\n"
+                  "    locks.log_wait('gpu-amd', str(n) * (500 + 300 * n), [], 0.0, float(i), 0.0,\n"
+                  "                   say=lambda message: print(message, file=sys.stderr))\n")
+        processes = []
+        for n in range(writers):
+            process = subprocess.Popen([sys.executable, "-c", append, str(n)], env=self.env, stdin=subprocess.PIPE,
+                                       stdout=subprocess.PIPE, text=True)
+            self.addCleanup(lambda process=process: process.poll() is None and process.kill())
+            processes.append(process)
+        for process in processes:
+            self.assertEqual(process.stdout.readline().strip(), "ready")
+            process.stdout.close()
+        for process in processes:
+            process.stdin.close()                                 # they all start appending at once
+        self.assertEqual([process.wait(timeout=180) for process in processes], [0] * writers)
+        lines, whole = locks.waits_file().read_text(encoding="utf-8").splitlines(), []
+        for line in lines:
+            with contextlib.suppress(ValueError):
+                whole.append(json.loads(line))
+        self.assertEqual(len(whole), len(lines), "some lines are not whole records")
+        self.assertCountEqual([(len(record["label"]), record["waited_s"]) for record in whole],
+                              [(500 + 300 * n, float(i)) for n in range(writers) for i in range(records)])
+
+    def test_the_waits_command_sums_up_each_locks_waits(self):
+        now = time.time()
+        logged = [*({"lock": "gpu-amd", "start": now - 60, "waited_s": waited} for waited in (4, 1, 10, 3, 2)),
+                  {"lock": "gpu-amd", "start": now - 7200, "waited_s": 1000.0},             # before --since
+                  {"lock": "heavy work", "start": now - 60, "waited_s": 30.0}]
+        locks.waits_file().write_text("".join(json.dumps(record) + "\n" for record in logged) + '{"lock": "gpu-am\n',
+                                      encoding="utf-8")
+        since = datetime.fromtimestamp(now - 3600).isoformat(timespec="seconds")
+        run = subprocess.run([sys.executable, "-X", "utf8", "-m", "tools.locks", "waits", "--since", since], cwd=ROOT,
+                             env=self.env, capture_output=True, text=True)
+        self.assertEqual(run.returncode, 0, run.stderr)
+        rows = {row[0]: row[1:] for row in (line.rsplit(None, 5) for line in run.stdout.splitlines()) if len(row) == 6}
+        self.assertEqual(rows["gpu-amd"], ["5", "20.0", "3.0", "7.6", "10.0"])     # waits, total, p50, p90, max
+        self.assertEqual(rows["heavy work"], ["1", "30.0", "30.0", "30.0", "30.0"])
+        self.assertIn("skipped 1 unreadable line", run.stdout)
 
 
 class GpuOrderTests(unittest.TestCase):

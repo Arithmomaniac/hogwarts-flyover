@@ -1,14 +1,20 @@
-"""One browser and one page per test class, for the browser suites.
+"""One browser per test process and one page per test class, for the browser suites.
 
-Launching Edge, loading the 9.6 MB page and compiling its programs dominates a browser test, so a PageTestCase class does
-that once, in setUpClass. Before each test it restores, through the page's __hog hooks, what tests change: the viewport,
-the time of day, the debug bits, meshes on with the embedded payload, and the opening view. A page that has died, or
-whose frame loop has stopped, is reopened. Test methods are coroutines, run on the class's event loop.
+Opening the page dominates a browser test: on NVIDIA, Edge takes about 90 s to compile its programs, and only a running
+browser keeps them (a second context in it opens the page in about 5 s, while a fresh browser on a profile kept on disk
+still took 75-83 s). So the PageTestCase classes of a process share one Edge (EDGE), launched by the first class that
+needs it and closed at exit, or by tools.testrun before it lets the GPU go. Each class opens its own context and page in
+it, in setUpClass, and closes them in tearDownClass; a class whose setup or teardown fails closes the browser too, so
+the next class launches a fresh one. Before each test a class restores, through the page's __hog hooks, what tests
+change: the viewport, the time of day, the debug bits, meshes on with the embedded payload, and the opening view. A page
+that has died, or whose frame loop has stopped, is reopened. Test methods are coroutines, run on the browser's event
+loop.
 
 HOG_GPU=amd|nvidia pins Edge to that adapter, as the dual-GPU timing harness does; when the page reports another adapter
 every test of the class is skipped as "blocked:", which tools.testrun reports as blocked, never as a pass.
 """
 import asyncio
+import atexit
 import contextlib
 import functools
 import inspect
@@ -48,6 +54,52 @@ def smoke(test):
     return test
 
 
+class SharedEdge:
+    """The test process's Edge: launched when a class first needs it, again when it has gone, and closed at exit."""
+
+    def __init__(self):
+        self.loop = self.playwright = self.browser = None
+
+    def event_loop(self):
+        """The loop the classes run on: Playwright's objects work only on the loop that made them."""
+        if self.loop is None or self.loop.is_closed():
+            self.loop = asyncio.new_event_loop()
+        return self.loop
+
+    async def launched(self):
+        """The browser, launched afresh unless it is running."""
+        if self.browser is None or not self.browser.is_connected():
+            await self.stop()
+            self.playwright = await async_playwright().start()
+            self.browser = await self.playwright.chromium.launch(channel="msedge", headless=True,
+                                                                 chromium_sandbox=True, args=gpu_args())
+        return self.browser
+
+    async def stop(self):
+        """Close the browser and stop Playwright, whatever state they are in."""
+        browser, playwright = self.browser, self.playwright
+        self.browser = self.playwright = None
+        if browser:
+            with contextlib.suppress(Exception):
+                await browser.close()
+        if playwright:
+            with contextlib.suppress(Exception):
+                await playwright.stop()
+
+    def close(self):
+        """Stop the browser and close the loop, if they are open."""
+        if self.loop is None or self.loop.is_closed():
+            return
+        try:
+            self.loop.run_until_complete(self.stop())
+        finally:
+            self.loop.close()
+
+
+EDGE = SharedEdge()
+atexit.register(EDGE.close)
+
+
 def _on_class_loop(test):
     @functools.wraps(test)
     def run(self):
@@ -60,6 +112,7 @@ class PageTestCase(unittest.TestCase):
     OPENING_T, TOD, DBG = 60, 18.5, 0           # what the page opens with for QUERY (template_c.html's defaults)
     VIEWPORT = {"width": 1100, "height": 720}
     INIT_SCRIPTS = ()                           # scripts the page runs before its own
+    edge = EDGE                                 # the browser the class opens its context in
 
     def __init_subclass__(cls, **kwargs):
         super().__init_subclass__(**kwargs)
@@ -69,36 +122,29 @@ class PageTestCase(unittest.TestCase):
 
     @classmethod
     def setUpClass(cls):
-        cls.loop = asyncio.new_event_loop()
-        cls.playwright = cls.browser = None
+        cls.loop = cls.edge.event_loop()
         started = time.perf_counter()
-        try:
-            cls.loop.run_until_complete(cls._launch())
-        except BaseException:
-            cls._shut()
-            raise
+        cls._fixture(cls._launch())
         cls.load_s = time.perf_counter() - started
 
     @classmethod
     def tearDownClass(cls):
-        cls._shut()
+        cls._fixture(cls.context.close())
 
     @classmethod
-    def _shut(cls):
+    def _fixture(cls, work):
+        """Run class fixture `work`; if it fails, close the browser too, so the next class launches a fresh one rather
+        than inherit what broke."""
         try:
-            if cls.browser:
-                cls.loop.run_until_complete(cls.browser.close())
-            if cls.playwright:
-                cls.loop.run_until_complete(cls.playwright.stop())
-        finally:
-            cls.loop.close()
+            cls.loop.run_until_complete(work)
+        except BaseException:
+            cls.loop.run_until_complete(cls.edge.stop())
+            raise
 
     @classmethod
     async def _launch(cls):
-        cls.playwright = await async_playwright().start()
-        cls.browser = await cls.playwright.chromium.launch(channel="msedge", headless=True, chromium_sandbox=True,
-                                                           args=gpu_args())
-        cls.context = await cls.browser.new_context(viewport=cls.VIEWPORT, offline=True)
+        browser = await cls.edge.launched()
+        cls.context = await browser.new_context(viewport=cls.VIEWPORT, offline=True)
         for script in cls.INIT_SCRIPTS:
             await cls.context.add_init_script(script=script)
         await cls._open()

@@ -1792,6 +1792,9 @@ SLIVER_SHARE = 0.5
 # out from it, away from the grid (whose edge lies half a texel out), looking along the row EDGE_PITCH down: in no
 # frame of a jitter cycle may a ground, water or tree pixel's point lie over HOVER_M above the page's ground
 EDGE_BACK_M, EDGE_OUT_M, EDGE_UP_M, EDGE_PITCH = 750.0, 3.0, 1500.0, -0.52
+# Looking north from 2 m inside the tree table's east edge (TREE_EDGE in frag1.glsl), with mesh trees on.
+TREE_EDGE_EYE = (5034.0, 0.0)
+TREE_EDGE_UP_M, TREE_EDGE_PITCH = 600.0, -0.70
 HOVER_M = 60.0
 # In-page, for one frame: [x, y, metres over the page's ground] of each pixel of materials `mats` whose point lies over
 # `hover` metres above the ground there
@@ -1898,6 +1901,14 @@ class FarTerrainTests(RenderTestCase):
         await self.page.wait_for_function(f"__hog.frames >= {frames + 4}", timeout=FRAME_TIMEOUT_S * 1000)
         hovering = await self.each_frame(HOVER_PROBE, [[MAT_GROUND, MAT_WATER, MAT_TREE], HOVER_M])
         self.assertEqual([len(f) for f in hovering], [0] * len(hovering), [f[:4] for f in hovering])
+
+    async def test_a_ray_along_the_tree_tables_edge_marches_on_to_the_ground(self):
+        x, z = TREE_EDGE_EYE
+        eye = [x, await self.ground(x, z) + TREE_EDGE_UP_M, z]
+        await self.page.evaluate("([p, q]) => { __hog.tod(15); __hog.camera(p, 0, q); }", [eye, TREE_EDGE_PITCH])
+        hovering = await self.each_frame(HOVER_PROBE, [[MAT_GROUND, MAT_WATER, MAT_TREE], HOVER_M])
+        self.assertEqual([len(f) for f in hovering], [0] * len(hovering),
+                         [max((p[2] for p in f), default=0) for f in hovering])
 
     async def test_the_far_canopy_reads_as_the_trees_it_stands_for(self):
         x, z = CANOPY_EYE

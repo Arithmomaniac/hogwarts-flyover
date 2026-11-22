@@ -311,9 +311,8 @@ class MeshTreeTests(RenderTestCase):
         self.assertGreater((p1_mat == MAT_SKY).mean(), 0.95)
 
     async def test_the_march_finds_no_tree_at_the_table_edge(self):
-        # with the drawn crowns to the table's edge (by default the march draws the canopy sheet from TREE_FAR on and
-        # never reaches this bound), inside the tree table the march's bound on the trees is the distance to the table's
-        # edge, which only bounds its steps: a ray crossing the edge (the horizon's band, seen from anywhere near the
+        # With the drawn crowns to the table's edge (by default this view reaches TREE_FAR first), the distance along
+        # the ray to the edge only bounds its steps: a ray crossing it (the horizon's band, seen from anywhere near the
         # castle) passes it. Were the bound a hit as it reaches 0, a sample within the march's epsilon of the edge would
         # end the ray as a tree with no tree in its record. From 80 m over the lawn, looking west, the nearest edge 4.8 km
         # off under the ceiling

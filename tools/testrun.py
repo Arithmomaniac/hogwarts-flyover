@@ -4,7 +4,8 @@
 
 Suites: assets, checks, site and tools (the tests under tools/) run on the CPU; render, smoke (the render tests tagged
 @smoke), ui and probe drive Edge and need --gpu. A browser suite holds that GPU's machine-wide lock, and every suite registers as heavy work, so it waits
-while a timing run holds the quiet lock (tools.locks). --shift raises the world by that many metres
+while a timing run holds the quiet lock (tools.locks); a suite's page classes share one Edge (pagetest), which the run
+closes before it lets the GPU go. --shift raises the world by that many metres
 (HOG_DATUM_SHIFT_M, assets only). Each run writes build/logs/<suite>[+<shift>m][~<filter>]-<gpu or cpu>-<page tag>.log,
 the unittest transcript followed by a table of every test, and a .json of the same.
 
@@ -335,6 +336,14 @@ def set_environment(gpu, shift):
         os.environ.pop("HOG_DATUM_SHIFT_M", None)
 
 
+def shut_browser():
+    """Close the Edge that the run's classes shared (pagetest.EDGE), so it ends before the run lets its GPU go rather
+    than when the process exits."""
+    pagetest = sys.modules.get("pagetest")
+    if pagetest:
+        pagetest.EDGE.close()
+
+
 def run(name, gpu=None, shift=None, pattern=None):
     """Run suite `name`, resuming an earlier run under the same key (Store) unless `pattern` filters it; (verdict, path
     of the JSON report)."""
@@ -398,8 +407,11 @@ def run(name, gpu=None, shift=None, pattern=None):
             if not any(f["scope"] == module for f in result.fixtures):
                 for cls, record in waiting:
                     store.save(cls, record)
-        result = unittest.TextTestRunner(stream=stream, verbosity=2, resultclass=Recorder).run(
-            ByClass(todo, ended, module_ended))
+        try:
+            result = unittest.TextTestRunner(stream=stream, verbosity=2, resultclass=Recorder).run(
+                ByClass(todo, ended, module_ended))
+        finally:
+            shut_browser()
         records = {i: r for record in reused.values() for i, r in record["tests"].items()} | result.records
         final, problems, verdict = gate(ids, records, result.fixtures, expected, {t.id() for t in everything})
         if broken:

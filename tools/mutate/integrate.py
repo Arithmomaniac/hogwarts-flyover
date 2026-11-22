@@ -12,7 +12,7 @@ from the shadow layers, nearer than their guards allow or from the simplifier wh
 glasshouse's floor in its lawn or its dwarf wall short of the ground, glazing without its sheen or tint, small lights
 missing, shown through walls, over near panes, too dim or with a lantern's faces merged, the lake mirroring none or
 mirroring their display values, a skimming ray called ground
-in mid-air or stepping over ridges, a ray along the local grid's edge out of steps in mid-air,
+in mid-air or stepping over ridges, a ray along the local grid's or tree table's edge out of steps in mid-air,
 the far canopy a lawn, the burns painted beds, the cliff's rock banded, lit by its short steps' normals, bumped on one lattice or shaded by its own steps, and stars in a civil-dusk sky.
 
 The page mutations rebuild the copy's page and need a browser (set HOG_GPU):
@@ -401,6 +401,9 @@ MUTATIONS = [
     Mutation("a ray's step bounded by its distance from the local grid's edge at any height", "frag3.glsl",
              "float dE = t < tIn ? max(tIn - t + 1., 1.) : 1e5;", "float dE = s.g.ed > 0. ? 1e5 : max(1. - s.g.ed, 1.);",
              (FAR + "test_a_ray_along_the_local_layers_edge_marches_on_to_the_ground",)),
+    Mutation("a ray's step bounded by the nearest edge of the tree table", "frag3.glsl",
+             "s.vd = max(tOut - td, 1.);", "s.vd = max(te, 1.);",
+             (FAR + "test_a_ray_along_the_tree_tables_edge_marches_on_to_the_ground",)),
     Mutation("the far canopy a smooth sheet", "frag5.glsl",
              "    if (s.tp.w < 0. && (uDbg & 524288) == 0) {", "    if (false) {",
              (FAR + "test_the_far_canopy_reads_as_the_trees_it_stands_for",)),
