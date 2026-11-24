@@ -1,6 +1,6 @@
 """Mutations that the integration tests must catch: the raymarched objects back in a pass, the meshes' shadows or
-reflections dropped, the meshes off by default, the cone pre-pass's copy of the step rule drifting from the march's,
-a raymarched object left without its mesh, a retired raymarched-only code registered again, the footprint layer
+reflections dropped, the meshes off by default, the cone pre-pass's copy of the step rule drifting from the march's
+or blind to where its ray leaves the tree table, a raymarched object left without its mesh, a retired raymarched-only code registered again, the footprint layer
 leaving out a standing asset, reading its distances at texel centres or not reaching the page's trees, the beach and
 its bank back on the texel grid or creased where the water's reach ends, metering judged under the clouds' shadows, thin set pieces left sub-pixel, widened
 too little, unevenly between passes or close up, or measured wrongly, thin casters' shadows broken into dots (looked
@@ -125,6 +125,9 @@ MUTATIONS = [
              (SCENE + "test_every_program_uses_its_pinned_samplers",)),
     Mutation("the cone pass's step rule drifts from the march's", "frag5.glsl",
              "max(0.8 * vd, max(eps, 0.0012 * tr))", "max(0.8 * vd, max(eps, 0.002 * tr))",
+             (STEP + "test_the_cone_pass_replays_the_marchs_own_step_rule",), rebuild=False),
+    Mutation("the cone pass's replay blind to where its ray leaves the tree table", "frag5.glsl",
+             "TS s = evalTop(p, ts, rep ? vmM : 0, tOut);", "TS s = evalTop(p, ts, rep ? vmM : 0, 0.);",
              (STEP + "test_the_cone_pass_replays_the_marchs_own_step_rule",), rebuild=False),
     Mutation("half the hedges left without their mesh", "mesh_grounds.py",
              '"field-boundaries": hedges(scene, kept, paths),', '"field-boundaries": hedges(scene, kept[::2], paths),',

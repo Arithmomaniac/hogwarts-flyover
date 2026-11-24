@@ -1,14 +1,15 @@
-"""One browser per test process and one page per test class, for the browser suites.
+"""One browser per test process, for the browser suites, and one page per PageTestCase class or per test_ui test.
 
 Opening the page dominates a browser test: on NVIDIA, Edge takes about 90 s to compile its programs, and only a running
 browser keeps them (a second context in it opens the page in about 5 s, while a fresh browser on a profile kept on disk
-still took 75-83 s). So the PageTestCase classes of a process share one Edge (EDGE), launched by the first class that
-needs it and closed at exit, or by tools.testrun before it lets the GPU go. Each class opens its own context and page in
-it, in setUpClass, and closes them in tearDownClass; a class whose setup or teardown fails closes the browser too, so
-the next class launches a fresh one. Before each test a class restores, through the page's __hog hooks, what tests
-change: the viewport, the time of day, the debug bits, meshes on with the embedded payload, and the opening view. A page
-that has died, or whose frame loop has stopped, is reopened. Test methods are coroutines, run on the browser's event
-loop.
+still took 75-83 s). So the EdgeTestCase classes of a process share one Edge (EDGE), launched by the first that needs it
+and closed at exit, or by tools.testrun before it lets the GPU go. A PageTestCase class opens its own context and page
+in it, in setUpClass, and closes them in tearDownClass; test_ui's tests, which change more of the page than the hooks
+below restore, each open a context and page of their own, in setUp, and close them in tearDown. A fixture that fails
+closes the browser too, so the next one launches a fresh browser. Before each test a PageTestCase class restores,
+through the page's __hog hooks, what tests change: the viewport, the time of day, the debug bits, meshes on with the
+embedded payload, and the opening view. A page that has died, or whose frame loop has stopped, is reopened. Test
+methods are coroutines, run on the browser's event loop.
 
 HOG_GPU=amd|nvidia pins Edge to that adapter, as the dual-GPU timing harness does; when the page reports another adapter
 every test of the class is skipped as "blocked:", which tools.testrun reports as blocked, never as a pass.
@@ -107,12 +108,9 @@ def _on_class_loop(test):
     return run
 
 
-class PageTestCase(unittest.TestCase):
-    QUERY = "?t=60&pause=1&scale=0.35&hud=0"
-    OPENING_T, TOD, DBG = 60, 18.5, 0           # what the page opens with for QUERY (template_c.html's defaults)
-    VIEWPORT = {"width": 1100, "height": 720}
-    INIT_SCRIPTS = ()                           # scripts the page runs before its own
-    edge = EDGE                                 # the browser the class opens its context in
+class EdgeTestCase(unittest.TestCase):
+    """Tests whose coroutines run on the event loop of the browser they open their contexts in."""
+    edge = EDGE
 
     def __init_subclass__(cls, **kwargs):
         super().__init_subclass__(**kwargs)
@@ -123,6 +121,27 @@ class PageTestCase(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
         cls.loop = cls.edge.event_loop()
+
+    @classmethod
+    def _fixture(cls, work):
+        """Run fixture `work`; if it fails, close the browser too, so the next fixture launches a fresh one rather than
+        inherit what broke."""
+        try:
+            cls.loop.run_until_complete(work)
+        except BaseException:
+            cls.loop.run_until_complete(cls.edge.stop())
+            raise
+
+
+class PageTestCase(EdgeTestCase):
+    QUERY = "?t=60&pause=1&scale=0.35&hud=0"
+    OPENING_T, TOD, DBG = 60, 18.5, 0           # what the page opens with for QUERY (template_c.html's defaults)
+    VIEWPORT = {"width": 1100, "height": 720}
+    INIT_SCRIPTS = ()                           # scripts the page runs before its own
+
+    @classmethod
+    def setUpClass(cls):
+        super().setUpClass()
         started = time.perf_counter()
         cls._fixture(cls._launch())
         cls.load_s = time.perf_counter() - started
@@ -130,16 +149,6 @@ class PageTestCase(unittest.TestCase):
     @classmethod
     def tearDownClass(cls):
         cls._fixture(cls.context.close())
-
-    @classmethod
-    def _fixture(cls, work):
-        """Run class fixture `work`; if it fails, close the browser too, so the next class launches a fresh one rather
-        than inherit what broke."""
-        try:
-            cls.loop.run_until_complete(work)
-        except BaseException:
-            cls.loop.run_until_complete(cls.edge.stop())
-            raise
 
     @classmethod
     async def _launch(cls):

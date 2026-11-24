@@ -5,11 +5,11 @@ import sys
 import unittest
 from pathlib import Path
 
-from playwright.async_api import async_playwright, expect
+from playwright.async_api import expect
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
-from pagetest import START_TIMEOUT_MS, check_adapter, gpu_args  # noqa: E402
+from pagetest import START_TIMEOUT_MS, EdgeTestCase, SharedEdge, check_adapter  # noqa: E402
 
 INSTALL_STEPPED_CLOCK = """async () => {
   const native = window.requestAnimationFrame.bind(window);
@@ -31,15 +31,18 @@ RESTORE_NATIVE_CLOCK = """() => {
 }"""
 
 
-class OverlayTests(unittest.IsolatedAsyncioTestCase):
-    async def asyncSetUp(self):
-        self.playwright = await async_playwright().start()
-        self.browser = await self.playwright.chromium.launch(
-            channel="msedge", headless=True, chromium_sandbox=True, args=gpu_args(),
-        )
-        self.context = await self.browser.new_context(
-            viewport={"width": 1100, "height": 720}, offline=True,
-        )
+class OverlayTests(EdgeTestCase):
+    """Each test opens the page in a browser context of its own, in the Edge the test process shares (pagetest.EDGE)."""
+
+    def setUp(self):
+        self._fixture(self._launch())
+
+    async def _launch(self):
+        browser = await self.edge.launched()
+        self.context = await browser.new_context(viewport={"width": 1100, "height": 720}, offline=True)
+        await self._open()
+
+    async def _open(self):
         self.page = await self.context.new_page()
         self.errors = []
         self.page.on("pageerror", lambda error: self.errors.append(str(error)))
@@ -47,12 +50,7 @@ class OverlayTests(unittest.IsolatedAsyncioTestCase):
         url = (Path(__file__).resolve().parents[1] / "hogwarts-flyover.html").as_uri()
         await self.page.goto(url + "?t=60&pause=1&scale=0.35")
         await self.wait_until_interactive()
-        try:
-            await check_adapter(self.page)
-        except unittest.SkipTest:
-            await self.browser.close()
-            await self.playwright.stop()
-            raise
+        await check_adapter(self.page)
 
     async def wait_until_interactive(self):
         # the first draws after "ready" can stall for several seconds while the driver compiles shader variants
@@ -62,9 +60,8 @@ class OverlayTests(unittest.IsolatedAsyncioTestCase):
             timeout=START_TIMEOUT_MS,
         )
 
-    async def asyncTearDown(self):
-        await self.browser.close()
-        await self.playwright.stop()
+    def tearDown(self):
+        self._fixture(self.context.close())
         self.assertEqual(self.errors, [])
 
     @contextlib.asynccontextmanager
@@ -279,6 +276,44 @@ class OverlayTests(unittest.IsolatedAsyncioTestCase):
             "c => { const g=c.getContext('webgl2'), e=g.getExtension('WEBGL_debug_renderer_info');"
             "return e && !/swiftshader|llvmpipe|software|warp/i.test(g.getParameter(e.UNMASKED_RENDERER_WEBGL)); }"
         ))
+
+
+class SharedBrowserTests(unittest.TestCase):
+    """OverlayTests' harness, on a blank page rather than the flyover."""
+
+    def test_tests_share_one_browser_each_in_a_context_of_its_own(self):
+        class Blank(OverlayTests):
+            async def _open(self):
+                self.page = await self.context.new_page()
+                self.errors = []
+
+            async def test_page(self):
+                self.assertEqual(await self.page.evaluate("6 * 7"), 42)
+                self.open_contexts = list(self.context.browser.contexts)
+        first, second = Blank("test_page"), Blank("test_page")
+        result = unittest.TestSuite([first, second]).run(unittest.TestResult())
+        self.assertEqual(result.errors + result.failures, [])
+        browser = first.context.browser
+        self.assertIs(second.context.browser, browser)
+        self.assertIsNot(second.context, first.context)
+        self.assertNotIn(first.context, second.open_contexts)      # closed before the second test opened its own
+        self.assertNotIn(second.context, browser.contexts)
+        self.assertTrue(browser.is_connected())                     # still running for the next test
+
+    def test_a_test_that_fails_to_start_takes_the_browser_with_it(self):
+        class Failing(OverlayTests):
+            async def _open(self):
+                raise RuntimeError("the page failed to start")
+
+            async def test_nothing(self):
+                pass
+        Failing.edge = SharedEdge()
+        self.addCleanup(Failing.edge.close)
+        test = Failing("test_nothing")
+        result = unittest.TestSuite([test]).run(unittest.TestResult())
+        self.assertEqual([trace.splitlines()[-1] for _, trace in result.errors],
+                         ["RuntimeError: the page failed to start"])
+        self.assertFalse(test.context.browser.is_connected())
 
 
 if __name__ == "__main__":
