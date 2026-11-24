@@ -69,6 +69,28 @@ float splineShare(ivec2 i, vec2 w, ivec2 n, float c) {
   return s;
 }
 
+// the colours of the four texels' classes c (8 and up: the overgrown garden), each texel weighed by k. surfCol is called
+// once for each class, on a constant, which the HLSL compiler folds to that class's colour alone; a call on a texel's
+// class inlines every branch of classCol, and three of them made Edge's compile of the shading pass take a minute and a
+// half (REBUILD.md). Written out class by class: ANGLE asks the compiler to keep loops, so a loop's call is not folded
+vec3 classTerm(vec3 sum, vec4 c, vec4 k, float j, vec2 xz, float pix) {
+  float w = dot(k, vec4(equal(c, vec4(j))));
+  if (w > 0.) sum += w * surfCol(j, xz, pix);
+  return sum;
+}
+vec3 classesCol(vec4 c, vec4 k, vec2 xz, float pix) {
+  c = min(c, vec4(8.));
+  vec3 s = classTerm(vec3(0.), c, k, 0., xz, pix);
+  s = classTerm(s, c, k, 1., xz, pix);
+  s = classTerm(s, c, k, 2., xz, pix);
+  s = classTerm(s, c, k, 3., xz, pix);
+  s = classTerm(s, c, k, 4., xz, pix);
+  s = classTerm(s, c, k, 5., xz, pix);
+  s = classTerm(s, c, k, 6., xz, pix);
+  s = classTerm(s, c, k, 7., xz, pix);
+  return classTerm(s, c, k, 8., xz, pix);
+}
+
 // the ground's colour from the surface classes of the four texels round luv (the local layer's uv), as bilinear
 // filtering weighs them from their centres: soft classes blend across the texel between them, while a hard class keeps a
 // sharp edge, taking the point wherever its weight is a half or more (the beds and the pitch: their B-spline share)
@@ -77,21 +99,25 @@ vec3 classMix(vec2 luv, vec2 xz, float pix) {
   vec2 f = luv * vec2(n) - 0.5, w = fract(f);
   ivec2 i = ivec2(floor(f));
   vec4 c = vec4(classAt(i, n), classAt(i + ivec2(1, 0), n), classAt(i + ivec2(0, 1), n), classAt(i + ivec2(1, 1), n));
-  if (all(equal(c, c.xxxx))) return surfCol(c.x, xz, pix);
-  vec4 wt = vec4((1. - w.x) * (1. - w.y), w.x * (1. - w.y), (1. - w.x) * w.y, w.x * w.y);
-  float hard = -1., most = 0., soft = 0.;
-  for (int k = 0; k < 4; k++) {
-    float own = dot(wt, vec4(equal(c, vec4(c[k]))));
-    if (hardClass(c[k])) { if (own > most) { most = own; hard = c[k]; } }
-    else soft += wt[k];
+  vec4 k = vec4(1., 0., 0., 0.);                   // the texels' weights in the colour, over soft
+  float soft = 1.;
+  if (!all(equal(c, c.xxxx))) {
+    vec4 wt = vec4((1. - w.x) * (1. - w.y), w.x * (1. - w.y), (1. - w.x) * w.y, w.x * w.y);
+    vec4 hk = vec4(hardClass(c.x), hardClass(c.y), hardClass(c.z), hardClass(c.w));
+    float hard = -1., most = 0.;
+    for (int j = 0; j < 4; j++) {
+      float own = dot(wt, vec4(equal(c, vec4(c[j]))));
+      if (hardClass(c[j]) && own > most) { most = own; hard = c[j]; }
+    }
+    k = wt * (1. - hk);
+    soft = k.x + k.y + k.z + k.w;
+    if (soft <= 0. || (hard >= 0. && (hard < 3.5 ? most : splineShare(i, w, n, hard)) >= 0.5)) {
+      c = vec4(hard);
+      k = vec4(1., 0., 0., 0.);
+      soft = 1.;
+    }
   }
-  if (soft <= 0. || (hard >= 0. && (hard < 3.5 ? most : splineShare(i, w, n, hard)) >= 0.5)) return surfCol(hard, xz, pix);
-  vec3 sum = vec3(0.);
-  for (int k = 0; k < 4; k++) {
-    bool first = k == 0 || (c[k] != c[0] && (k < 2 || c[k] != c[1]) && (k < 3 || c[k] != c[2]));
-    if (!hardClass(c[k]) && first) sum += dot(wt, vec4(equal(c, vec4(c[k])))) * surfCol(c[k], xz, pix);
-  }
-  return sum / soft;
+  return classesCol(c, k, xz, pix) / soft;
 }
 
 // rock on an upright plane, (along it, up): weathering over tens of metres, beds dipping along it and joints leaning up
@@ -111,7 +137,8 @@ float rockTex(vec2 q) {
 vec3 rockAlb(vec3 p, vec3 n) {
   vec2 w = pow(abs(n.xz) + 1e-3, vec2(4.));
   float k = w.x / (w.x + w.y);
-  float r = k > 0.97 ? rockTex(p.zy) : (k < 0.03 ? rockTex(p.xy + 31.) : mix(rockTex(p.xy + 31.), rockTex(p.zy), k));
+  float a = k > 0.97 ? 0. : rockTex(p.xy + 31.), b = k < 0.03 ? 0. : rockTex(p.zy);  // a call site each (see classesCol)
+  float r = k > 0.97 ? b : (k < 0.03 ? a : mix(a, b, k));
   return mix(vec3(0.088, 0.082, 0.073) * r, vec3(0.05, 0.065, 0.03), smoothstep(0.55, 0.8, vnoise(p.xz * 0.3 + p.y * 0.2)) * 0.6);
 }
 // the rock's bumps on faces steeper than the ground's (shared with set piece 34, so the two shade alike), fading out

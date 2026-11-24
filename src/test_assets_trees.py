@@ -153,18 +153,22 @@ class TreeKitTests(unittest.TestCase):
                                          {(0, 0), (1, 0), (1, 1), (0, 1)})
 
     def test_near_trees_leaves_are_about_life_size(self):
-        # the page cuts LEAF_GRID leaves per unit of a card's uv (times LEAF_TILE), each LEAF_CELLS cells long: a card
-        # with the whole uv square shows leaves a third of its side, tens of centimetres on cards a metre or more across
-        for v in self.kit:
+        # the page cuts LEAF_GRID leaves per unit of a card's uv times LEAF_TILE, each LEAF_CELLS cells long, and each
+        # card spans as much of the uv square as holds leaves of its species' length; the full level reaches past its
+        # crown radius, so the fit squeezes it across the trunk: it shortens leaves, and lengthens none
+        forms = [sp for sp in mesh_trees.SPECIES for _ in zip(sp.seeds, sp.ratios)]
+        for v, sp in zip(self.kit, forms):
             m = v.levels[0]
             card = np.flatnonzero(m.attr[:, 0] == CARD).reshape(-1, 4)
             side = np.linalg.norm(m.pos[card[:, 1]] - m.pos[card[:, 0]], axis=1)
             span = np.ptp(m.uv[card].astype(float), axis=1)[:, 0]
             leaf = side * mesh_trees.LEAF_CELLS / (mesh_trees.LEAF_GRID * mesh_trees.LEAF_TILE * span)
             with self.subTest(variant=v.name):
+                self.assertEqual(v.species, sp.name)
                 lo, hi = LIFE_SIZE_M[v.species]
                 self.assertTrue(lo <= float(np.median(leaf)) <= hi, float(np.median(leaf)))
                 self.assertLess(float(np.percentile(leaf, 90)), 2 * hi)
+                self.assertLessEqual(float(leaf.max()), sp.leaf * (1 + 1e-5))
 
     def test_near_crowns_are_full_not_half_bare(self):
         # cards a clump's size leave an airy crown (a birch's, a young pine's) half bare inside its outline, its limbs
