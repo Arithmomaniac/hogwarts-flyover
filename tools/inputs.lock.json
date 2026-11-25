@@ -10,9 +10,9 @@
   "baseline-x": {
     "kind": "file",
     "file": "baseline-x.html",
-    "size": 4461535,
-    "sha256": "02ff4fda0246aeb23a45ba6d89d1cf5d0832faf210e712a2af21d869b320c77a",
-    "about": "the frozen baseline page re-frozen at site X: baseline-s4-idle's renderer with its castle's window band, shading ramp and fog made relative to the lake, the page's colours for the surface classes X's data adds, X's build/data.js (sha256 350e79b7e41cae0a...) in place of Scardroy's, and the trunk page's tour (its waypoints and path, about 573 s) in place of its own; the parity and frame-time reference at X",
+    "size": 4461951,
+    "sha256": "98accc96615669a2f85be22a489552f6217a13935b8049296ba7424004b08720",
+    "about": "the frozen baseline page re-frozen at site X: baseline-s4-idle's renderer with its castle's window band, shading ramp and fog made relative to the lake, the page's colours for the surface classes X's data adds, X's build/data.js (sha256 dafe0500e8fec5b1...) in place of Scardroy's, and the trunk page's tour (its waypoints and path, about 573 s) in place of its own; the parity and frame-time reference at X",
     "obtain": "Run python -X utf8 -m tools.site.baseline in a worktree whose build/data.js has that sha256 and whose hogwarts-flyover.html flies that tour: it writes build/inputs/baseline-x.html, where tools.inputs finds it, and checks it against this pin."
   },
   "data-before-railway": {
