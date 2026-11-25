@@ -21,6 +21,7 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "src"))
 
 import build_meshes  # noqa: E402
+import mesh_source  # noqa: E402
 from datum_shift import shifted  # noqa: E402
 from mesh_source import Grid, decode, load_data  # noqa: E402
 
@@ -49,6 +50,14 @@ def data():
     """The registered world, shifted by HOG_DATUM_SHIFT_M when it is set; each call gets its own copy to change."""
     world = _world()
     return {"tex": {name: dict(layer) for name, layer in world["tex"].items()}, "meta": copy.deepcopy(world["meta"])}
+
+
+@functools.lru_cache(maxsize=None)
+def page_ground():
+    """The ground the page draws on the registered world (mesh_source.page_ground): (bed, water depth, local weight) at
+    world (east, north). Within mesh_source.BLEND_M of the local layer's edge it mixes in the regional level, so there
+    the local bed is not the ground a thing stands on."""
+    return mesh_source.page_ground(_world())
 
 
 @functools.lru_cache(maxsize=None)

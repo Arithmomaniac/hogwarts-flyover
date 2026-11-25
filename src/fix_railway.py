@@ -4,8 +4,11 @@ The essay map's railway does not fit the terrain: the station's levelled corrido
 the hillside 68 m away and the foot of the loop 25 m below it. The user chose to regrade the line (railway-regrade):
 this clamps the local bed between railway.envelope's cut and fill surfaces, so the running lines lie on their level or
 gently climbing formation, cuttings and embankments meet the ground at their side slopes, the station terrace is level
-and nothing outside the earthworks changes. Trees on the earthworks are cleared, but for the pine bank the first-years'
-path down to the lake cuts through, where the works only raise the ground (PS 6: "so dark either side of them that Harry
+and nothing outside the earthworks changes. Within BLEND_M of the local layer's edge the page mixes the 10 m regional
+level into the ground it draws, so there the regional level is clamped too (fix_regional): the loop's far side runs
+there, and the hill the regional level kept stood up to 13 m over its formation. Trees on the earthworks are cleared,
+but for the pine bank the first-years' path down to the lake cuts through, where the works only raise the ground (PS 6:
+"so dark either side of them that Harry
 thought there must be thick trees there"); so is every tree within LINE_CLEAR_M of the open line, whatever ground it
 stands on, so that no crown reaches the train. Forest floor left on a running line's formation, a cut face, an
 embankment or the cleared lineside becomes meadow or scrub, as does the floor of a wood they cut down narrower than
@@ -27,7 +30,7 @@ from scipy import ndimage as ndi
 import clearings
 import common
 import railway
-from mesh_source import CHANNELS, DATA_JS, Grid, decode, encode_height, encode_u8, load_georef
+from mesh_source import BLEND_M, CHANNELS, DATA_JS, Grid, decode, encode_height, encode_u8, inside_m, load_georef
 from mesh_transport import COACH_W
 
 MANIFEST = Path(__file__).resolve().parent / "mesh_scene.json"
@@ -40,6 +43,8 @@ PATH_BANK_M = 8.0                   # the pines the first-years' path cuts down 
 LINE_CLEAR_M = COACH_W / 2 + 1.0 + common.TREE_CROWN_M + common.TEXEL_REACH_M   # ... and no nearer a running line
                                     # than this, so no crown the renderer grows, its density read bilinearly a texel
                                     # diagonal into the cleared ground, comes within a metre of a coach's side
+REGIONAL_ORIGIN_M, REGIONAL_STEP_M = -5000.0, 10.0   # the 10 m regional level's first texel centre and spacing (pack.py),
+                                                     # the level the page reads round the castle (frag1.glsl regionalH)
 
 
 def window(grid, al):
@@ -149,6 +154,68 @@ def fix_railway(scene, meta, georef, bed, wd, trees, surface, stream, quantum=0.
     return (*out, int((changed | refloored).sum()))
 
 
+def regional_texels(meta, al):
+    """(rows, columns, shown): slices of the 10 m regional level round the texels the page shows within the earthworks'
+    reach, and which texels in them those are. The page mixes the regional level into the ground it draws within BLEND_M
+    of the local layer's edge and beyond it, and elsewhere draws the local layer alone; a bilinear read takes a texel in
+    within a texel of its centre each way; and the earthworks reach REACH_M from their features."""
+    import shapely
+    from scipy.spatial import cKDTree
+
+    pts = np.concatenate([al.loop.xz, al.main.xz, al.path.xz, np.asarray(al.terrace.exterior.coords)])
+    h = REGIONAL_STEP_M
+    lo, hi = (pts.min(axis=0) - railway.REACH_M - h - REGIONAL_ORIGIN_M) / h, \
+        (pts.max(axis=0) + railway.REACH_M + h - REGIONAL_ORIGIN_M) / h
+    j, i = (np.arange(np.ceil(a), np.floor(b) + 1).astype(int) for a, b in zip(lo, hi))
+    x, z = np.meshgrid(REGIONAL_ORIGIN_M + h * j, REGIONAL_ORIGIN_M + h * i)
+    local = Grid(meta["local"])
+    shown = np.min([inside_m(local, x + dx, z + dz) for dx in (-h, h) for dz in (-h, h)], axis=0) < BLEND_M
+    q = np.column_stack([x.ravel(), z.ravel()])
+    near = np.zeros(len(q), bool)
+    for f in railway.features(al):
+        d = shapely.distance(shapely.points(q), f.polygon) if f.polygon is not None else cKDTree(f.xz).query(q)[0]
+        near |= d <= railway.REACH_M + h * np.sqrt(2)
+    shown &= near.reshape(x.shape)
+    r, c = np.nonzero(shown)
+    if not len(r):
+        return slice(0, 0), slice(0, 0), shown[:0, :0]
+    return (slice(int(i[r.min()]), int(i[r.max()]) + 1), slice(int(j[c.min()]), int(j[c.max()]) + 1),
+            shown[r.min():r.max() + 1, c.min():c.max() + 1])
+
+
+def regional_envelope(al, rows, cols):
+    """(cut, fill) of the 10 m regional texels in (rows, columns): the lowest cut and the highest fill the earthworks allow
+    anywhere a bilinear read takes a texel in, within a texel of its centre each way, so the ground read between texels
+    keeps between the cut and fill surfaces, and level on a formation, as the 2 m layer's texel by texel does.
+    railway.envelope is sampled every railway.STEP_M."""
+    h, k = REGIONAL_STEP_M, int(round(REGIONAL_STEP_M / railway.STEP_M))
+    x, z = (REGIONAL_ORIGIN_M + h * (s.start - 1) + railway.STEP_M * np.arange((s.stop - s.start + 1) * k + 1)
+            for s in (cols, rows))
+    cut, fill, _ = railway.envelope(al, *np.meshgrid(x, z))
+    return (ndi.minimum_filter(cut, size=2 * k + 1)[k:-k:k, k:-k:k],
+            ndi.maximum_filter(fill, size=2 * k + 1)[k:-k:k, k:-k:k])
+
+
+def fix_regional(scene, meta, georef, bed, wd, quantum=0.1):
+    """(bed, texels changed): the 10 m regional level's ground `bed` (MBed, its water depth `wd` MW) clamped on its
+    height quantum between the earthworks' cut and fill surfaces wherever the page shows it (regional_texels), so the
+    ground the page draws holds the earthworks there as well as the local layer does. The earthworks may not reach its
+    water."""
+    al = railway.alignment(scene, meta, georef)
+    rows, cols, shown = regional_texels(meta, al)
+    out = bed.copy()
+    if not shown.any():
+        return out, 0
+    cut, fill = regional_envelope(al, rows, cols)
+    old = bed[rows, cols]
+    new = np.round(railway.regrade(old, cut, fill) / quantum) * quantum
+    moved = shown & (np.abs(new - old) > quantum / 2)
+    if (moved & (wd[rows, cols] > DRY)).any():
+        raise ValueError("the railway's earthworks reach the regional level's water")
+    out[rows, cols] = np.where(moved, new, old)
+    return out, int(moved.sum())
+
+
 def main(path=DATA_JS):
     with open(path, encoding="ascii") as f:
         text = f.read()
@@ -156,20 +223,24 @@ def main(path=DATA_JS):
     write = lambda d: "const DATA=" + json.dumps(d, separators=(",", ":")) + ";\n"
     if write(data) != text:
         raise ValueError(f"{path} is not in pack.py's serialisation; refusing to rewrite it")
-    tex, scene = data["tex"], json.loads(MANIFEST.read_text(encoding="utf-8"))
+    tex, scene, georef = data["tex"], json.loads(MANIFEST.read_text(encoding="utf-8")), load_georef()
     la, lb, ln = decode(tex["locA"]), decode(tex["locB"]), decode(tex["locN"])
     trees_at, stream_at = CHANNELS["locA"].index("trees"), CHANNELS["locB"].index("stream")
     bed, wd, trees, surface, stream, changed = fix_railway(
-        scene, data["meta"], load_georef(), decode(tex["locBed"]), decode(tex["locW"]), la[..., trees_at], ln[..., 0],
+        scene, data["meta"], georef, decode(tex["locBed"]), decode(tex["locW"]), la[..., trees_at], ln[..., 0],
         lb[..., stream_at], tex["locBed"]["q"])
+    regional, moved = fix_regional(scene, data["meta"], georef, decode(tex["MBed"]), decode(tex["MW"]), tex["MBed"]["q"])
     if changed:
         la[..., trees_at], lb[..., stream_at], ln[..., 0] = trees, stream, surface
         tex["locBed"], tex["locW"] = encode_height(bed, tex["locBed"]["q"]), encode_height(wd, tex["locW"]["q"])
         tex["locA"], tex["locB"] = encode_u8(la, tex["locA"]["delta"]), encode_u8(lb, tex["locB"]["delta"])
         tex["locN"] = encode_u8(ln, tex["locN"]["delta"])
+    if moved:
+        tex["MBed"] = encode_height(regional, tex["MBed"]["q"])
+    if changed or moved:
         with open(path, "w", encoding="ascii", newline="\n") as f:
             f.write(write(data))
-    print(f"railway earthworks: {changed} texels changed in {path}")
+    print(f"railway earthworks: {changed} texels changed in {path}, and {moved} of the 10 m regional level's")
 
 
 if __name__ == "__main__":

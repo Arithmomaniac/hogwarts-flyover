@@ -62,10 +62,13 @@ class RailwayTests(unittest.TestCase):
         cls.trees = decode(data["tex"]["locA"])[..., CHANNELS["locA"].index("trees")]
         cls.stream = decode(data["tex"]["locB"])[..., CHANNELS["locB"].index("stream")]
         cls.surface = decode(data["tex"]["locN"])[..., 0]
+        cls.regional = decode(data["tex"]["MBed"]), decode(data["tex"]["MW"]), data["tex"]["MBed"]["q"]
 
     def ground(self, xz):
+        """The ground the page draws: the loop's far side runs within mesh_source.BLEND_M of the local layer's edge, where
+        the page mixes in the regional level, so a graded local bed there could leave the line buried."""
         xz = np.asarray(xz, np.float64)
-        return sample(self.bed, self.grid, xz[..., 0], xz[..., 1])
+        return world.page_ground()(xz[..., 0], xz[..., 1])[0]
 
     def test_the_loop_runs_through_the_registered_train(self):
         loop = self.al.loop.xz
@@ -111,16 +114,18 @@ class RailwayTests(unittest.TestCase):
 
     def test_the_ground_is_graded_under_every_running_line(self):
         level = self.meta["train"]["level"]
-        self.assertTrue(np.allclose(self.ground(self.al.loop.xz), level, atol=0.05))
         upto = self.al.main.s < self.al.portal_s - 4.0
-        ground = self.ground(self.al.main.xz[upto])
         rise = railway.GRADE * np.maximum(self.al.main.s[upto] - railway.TURNOUT_M, 0.0)
-        self.assertTrue(np.allclose(ground, level + rise, atol=0.05))
-        across = self.al.loop.xz[::40]
-        normal = np.gradient(self.al.loop.xz, axis=0)[::40][:, ::-1] * [1.0, -1.0]
-        normal /= np.linalg.norm(normal, axis=1, keepdims=True)
-        for offset in (-2.5, 2.5):                                                 # level under the ballast too
-            self.assertTrue(np.allclose(self.ground(across + offset * normal), level, atol=0.05))
+        half = mesh_transport.BALLAST_M[0][0]
+        for name, xz, s, formation in (("round the loop", self.al.loop.xz, self.al.loop.s, level),
+                                       ("up the main line", self.al.main.xz[upto], self.al.main.s[upto], level + rise)):
+            normal = np.gradient(xz, axis=0)[:, ::-1] * [1.0, -1.0]
+            normal /= np.linalg.norm(normal, axis=1, keepdims=True)
+            for offset in (0.0, -half, half):                                      # level out to the ballast's foot
+                off = self.ground(xz + offset * normal) - formation
+                worst = int(np.argmax(np.abs(off)))
+                self.assertTrue(np.allclose(off, 0.0, atol=0.05),
+                                f"{off[worst]:+.2f} m at {s[worst]:.0f} m {name}, {offset:+.1f} m across")
 
     def test_the_station_terrace_is_level_to_the_boundary_wall(self):
         import shapely
@@ -143,6 +148,7 @@ class RailwayTests(unittest.TestCase):
         *_, changed = fix_railway.fix_railway(self.scene, self.meta, self.georef, self.bed, self.wd, self.trees,
                                               self.surface, self.stream)
         self.assertEqual(changed, 0)
+        self.assertEqual(fix_railway.fix_regional(self.scene, self.meta, self.georef, *self.regional)[1], 0)
         works = fix_railway.footprint(self.scene, self.meta, self.georef, self.bed)
         self.assertGreater(works.sum(), 5000)
         self.assertEqual(int(self.trees[works].max()), 0)

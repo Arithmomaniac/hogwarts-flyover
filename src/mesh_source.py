@@ -139,6 +139,61 @@ def sample(field, grid, x, z):
                                mode="nearest").reshape(np.shape(i))
 
 
+BLEND_M = 80.0      # the page mixes the local layer into the regional levels over this far inside its edge
+# the regional levels as frag1.glsl's regionalH reads them: (name, half the side of the square round the castle it
+# covers, and the reach from the castle over which it gives way to the next level)
+REGIONAL_LEVELS = (("M", 5005.0, 4700.0, 4990.0), ("A", 12015.0, 11600.0, 11990.0), ("B", 36060.0, None, None))
+
+
+def inside_m(grid, x, z):
+    """Metres inside a map-aligned grid's edge at world (east, north), negative outside (frag1.glsl sampleGround's ed)."""
+    x, z = np.asarray(x, np.float64), np.asarray(z, np.float64)
+    u = grid.aff[0, 0] * x + grid.aff[0, 1] * z + grid.aff[0, 2]
+    v = grid.aff[1, 0] * x + grid.aff[1, 1] * z + grid.aff[1, 2]
+    return np.minimum(np.minimum(u, 1.0 - u) / np.hypot(*grid.aff[0, :2]),
+                      np.minimum(v, 1.0 - v) / np.hypot(*grid.aff[1, :2]))
+
+
+def page_ground(data):
+    """The ground the page draws, as frag1.glsl's sampleGround and template.html's ground() read it: a function of world
+    (east, north) giving (bed, water depth, local weight). The regional levels are read as regionalH reads them, each
+    giving way to the next over a smoothstep; the 2 m local layer is mixed in by smoothstep(0, BLEND_M, metres inside
+    its edge), so near that edge the ground is neither layer's alone. Reads are bilinear, clamped at each layer's edge."""
+    from scipy import ndimage as ndi
+
+    tex, local = data["tex"], Grid(data["meta"]["local"])
+    levels = [(half, start, end, decode(tex[f"{name}Bed"]), decode(tex[f"{name}W"]))
+              for name, half, start, end in REGIONAL_LEVELS]
+    loc_bed, loc_wd = decode(tex["locBed"]), decode(tex["locW"])
+
+    def smoothstep(a, b, t):
+        t = np.clip((t - a) / (b - a), 0.0, 1.0)
+        return t * t * (3.0 - 2.0 * t)
+
+    def read(layer, half, x, z):
+        rows, cols = layer.shape
+        return ndi.map_coordinates(layer, [np.ravel((z + half) / (2 * half) * rows - 0.5),
+                                           np.ravel((x + half) / (2 * half) * cols - 0.5)],
+                                   order=1, mode="nearest").reshape(np.shape(x))
+
+    def ground(x, z):
+        x, z = np.asarray(x, np.float64), np.asarray(z, np.float64)
+        reach = np.maximum(np.abs(x), np.abs(z))
+        bed = wd = None
+        for half, start, end, b, w in reversed(levels):      # from the outermost level in
+            hb, hw = read(b, half, x, z), read(w, half, x, z)
+            if bed is None:
+                bed, wd = hb, hw
+            else:
+                t = smoothstep(start, end, reach)
+                bed, wd = hb * (1.0 - t) + bed * t, hw * (1.0 - t) + wd * t
+        ed = inside_m(local, x, z)
+        lw = np.where(ed > 0.0, smoothstep(0.0, BLEND_M, ed), 0.0)
+        return (bed * (1.0 - lw) + sample(loc_bed, local, x, z) * lw,
+                wd * (1.0 - lw) + sample(loc_wd, local, x, z) * lw, lw)
+    return ground
+
+
 # texels outside `keep` sit at least this far above the contour level, so a neighbour touching diagonally
 # cannot join the polygon across the shared corner
 KEEP_MARGIN = 0.5
