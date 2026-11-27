@@ -380,6 +380,19 @@ The essay itself describes its castle plan as one working possibility. Its [loca
 
 Map assets used in preparation include `FF_map_unlabelled.gif`, `Hogwarts_map_unlabelled.gif`, `Hogsmeade_map_unlabelled.gif`, their labelled counterparts, and `castle_plan.gif`. They are source-site assets, **not files bundled in this repository**. Labels help identify landmarks; unlabelled maps reduce text contamination during mask extraction. Some remaining decorative areas were explicitly excluded in the scripts.
 
+### The book register (`canon.json`)
+
+`canon.json` at the repository root records what the books and White Hound's essay say Hogwarts and its grounds should look like, so a scene can be checked against it. Each of its 432 rows has an assertion in our words, locators (page, closing citation, lines, word span and a hash) into the book passages and the prose White Hound prints, a reading with its alternatives, the object it concerns, a camera or measurement check, and whether the scene holds it (`holds`, and for a miss whether it `shows` or `omits` the thing). The `rulings` section records one-off decisions; `accounted` lists every statement on White Hound's pages (about 3,000 items) with its locator and the row or exclusion that answers it. It holds locators only and no book text; the checker fails on any six consecutive words that also occur in a cached White Hound page. It is in no stage's inputs (a register edit reruns nothing), and `tools/test_canon.py` runs in the tools suite.
+
+```
+python -X utf8 -m tools.canon check                 # re-hash every locator against the pinned cache; ids, accounting and no-text scan
+python -X utf8 -m tools.canon show ROW              # a row's passages from the cache, each with a Wayback text-fragment link
+python -X utf8 -m tools.canon show-item ITEM        # an accounted item's words, context and disposition
+python -X utf8 -m tools.canon reanchor              # after the pinned extracts change, find each span again by its hash
+```
+
+Like the manifest checker, they read the pages through `tools.whcache`, so they need the cache or the `whitehound-mirror` input (exit status 3 without them). `show` and `show-item` only print.
+
 ## Location and coordinate systems
 
 ### A chosen anchor, not a discovered castle site
